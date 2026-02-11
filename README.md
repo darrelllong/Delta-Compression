@@ -160,3 +160,54 @@ pubs/
 README.md
 HOWTO.md
 ```
+
+## References
+
+### BibTeX
+
+```bibtex
+@article{ajtai2002differential,
+  author    = {Ajtai, Mikl\'{o}s and Burns, Randal and Fagin, Ronald
+               and Long, Darrell D. E. and Stockmeyer, Larry},
+  title     = {Compactly Encoding Unstructured Inputs with
+               Differential Compression},
+  journal   = {Journal of the ACM},
+  volume    = {49},
+  number    = {3},
+  pages     = {318--367},
+  year      = {2002},
+  month     = may,
+  publisher = {ACM},
+  doi       = {10.1145/567112.567114},
+}
+
+@article{burns2003inplace,
+  author    = {Burns, Randal C. and Long, Darrell D. E.
+               and Stockmeyer, Larry},
+  title     = {In-Place Reconstruction of Version Differences},
+  journal   = {IEEE Transactions on Knowledge and Data Engineering},
+  volume    = {15},
+  number    = {4},
+  pages     = {973--984},
+  year      = {2003},
+  month     = {jul/aug},
+  publisher = {IEEE},
+  doi       = {10.1109/TKDE.2003.1209013},
+}
+
+@article{karp1987efficient,
+  author    = {Karp, Richard M. and Rabin, Michael O.},
+  title     = {Efficient Randomized Pattern-Matching Algorithms},
+  journal   = {IBM Journal of Research and Development},
+  volume    = {31},
+  number    = {2},
+  pages     = {249--260},
+  year      = {1987},
+  month     = mar,
+  publisher = {IBM},
+  doi       = {10.1147/rd.312.0249},
+}
+```
+
+The Karp-Rabin paper describes the rolling hash / fingerprinting
+technique used by all three differencing algorithms.
