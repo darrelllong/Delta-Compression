@@ -10,15 +10,13 @@ import unittest
 from delta import (
     ALGORITHMS, TABLE_SIZE,
     CopyCmd, AddCmd,
-    InPlaceCopyCmd, InPlaceAddCmd,
+    PlacedCopy, PlacedAdd,
     diff_greedy, diff_onepass, diff_correcting,
-    encode_delta, decode_delta,
-    apply_delta, apply_delta_binary,
-    delta_summary,
-    make_inplace, apply_delta_inplace,
-    encode_inplace_delta, decode_inplace_delta,
-    is_inplace_delta, apply_inplace_binary,
-    inplace_summary,
+    place_commands, encode_delta, decode_delta,
+    apply_delta, apply_placed, apply_placed_inplace,
+    is_inplace_delta,
+    delta_summary, placed_summary,
+    make_inplace,
 )
 
 
@@ -27,25 +25,30 @@ from delta import (
 def roundtrip(algo_fn, R, V, p=2, q=TABLE_SIZE):
     """Standard encode → binary → decode → apply, return recovered bytes."""
     cmds = algo_fn(R, V, p=p, q=q)
-    delta = encode_delta(cmds)
-    cmds2 = decode_delta(delta)
-    return apply_delta(R, cmds2)
+    placed = place_commands(cmds)
+    delta = encode_delta(placed, inplace=False, version_size=len(V))
+    placed2, is_ip, vs = decode_delta(delta)
+    assert not is_ip
+    assert vs == len(V)
+    return apply_placed(R, placed2)
 
 
 def inplace_roundtrip(algo_fn, R, V, policy='localmin', p=4):
     """Encode → make_inplace → apply_inplace, return recovered bytes."""
     cmds = algo_fn(R, V, p=p)
     ip = make_inplace(R, cmds, policy=policy)
-    return apply_delta_inplace(R, ip, len(V))
+    return apply_placed_inplace(R, ip, len(V))
 
 
 def inplace_binary_roundtrip(algo_fn, R, V, policy='localmin', p=4):
     """Encode → make_inplace → binary → decode → apply, return recovered."""
     cmds = algo_fn(R, V, p=p)
     ip = make_inplace(R, cmds, policy=policy)
-    delta = encode_inplace_delta(ip, len(V))
-    ip2, vs = decode_inplace_delta(delta)
-    return apply_delta_inplace(R, ip2, vs)
+    delta = encode_delta(ip, inplace=True, version_size=len(V))
+    ip2, is_ip, vs = decode_delta(delta)
+    assert is_ip
+    assert vs == len(V)
+    return apply_placed_inplace(R, ip2, vs)
 
 
 # ── standard differencing ────────────────────────────────────────────────
@@ -132,39 +135,55 @@ class TestBinaryRoundTrip(unittest.TestCase):
 
 
 class TestBinaryEncoding(unittest.TestCase):
-    """Paper appendix binary encoding example."""
+    """Unified binary format encode/decode roundtrip."""
 
-    def test_decode(self):
-        delta_bytes = bytes([3, 100, 101, 102, 250, 3, 120, 1, 232, 0])
-        cmds = decode_delta(delta_bytes)
-        self.assertEqual(len(cmds), 2)
-        self.assertIsInstance(cmds[0], AddCmd)
-        self.assertEqual(cmds[0].data, bytes([100, 101, 102]))
-        self.assertIsInstance(cmds[1], CopyCmd)
-        self.assertEqual(cmds[1].offset, 888)
-        self.assertEqual(cmds[1].length, 488)
+    def test_placed_roundtrip(self):
+        placed = [
+            PlacedCopy(src=100, dst=0, length=50),
+            PlacedAdd(dst=50, data=b"hello"),
+            PlacedCopy(src=200, dst=55, length=30),
+        ]
+        delta = encode_delta(placed, inplace=False, version_size=85)
+        placed2, is_ip, vs = decode_delta(delta)
+        self.assertFalse(is_ip)
+        self.assertEqual(vs, 85)
+        self.assertEqual(len(placed2), 3)
+        self.assertIsInstance(placed2[0], PlacedCopy)
+        self.assertEqual(placed2[0].src, 100)
+        self.assertEqual(placed2[0].dst, 0)
+        self.assertEqual(placed2[0].length, 50)
+        self.assertIsInstance(placed2[1], PlacedAdd)
+        self.assertEqual(placed2[1].dst, 50)
+        self.assertEqual(placed2[1].data, b"hello")
+        self.assertIsInstance(placed2[2], PlacedCopy)
 
-    def test_reencode(self):
-        delta_bytes = bytes([3, 100, 101, 102, 250, 3, 120, 1, 232, 0])
-        self.assertEqual(encode_delta(decode_delta(delta_bytes)), delta_bytes)
+    def test_inplace_flag(self):
+        placed = [PlacedCopy(src=0, dst=10, length=5)]
+        delta = encode_delta(placed, inplace=True, version_size=15)
+        _, is_ip, _ = decode_delta(delta)
+        self.assertTrue(is_ip)
 
 
 class TestLargeCopy(unittest.TestCase):
 
     def test_roundtrip(self):
-        cmds = [CopyCmd(offset=100000, length=50000)]
-        cmds2 = decode_delta(encode_delta(cmds))
-        self.assertEqual(len(cmds2), 1)
-        self.assertEqual(cmds2[0].offset, 100000)
-        self.assertEqual(cmds2[0].length, 50000)
+        placed = [PlacedCopy(src=100000, dst=0, length=50000)]
+        delta = encode_delta(placed, inplace=False, version_size=50000)
+        placed2, _, _ = decode_delta(delta)
+        self.assertEqual(len(placed2), 1)
+        self.assertEqual(placed2[0].src, 100000)
+        self.assertEqual(placed2[0].dst, 0)
+        self.assertEqual(placed2[0].length, 50000)
 
 
 class TestLargeAdd(unittest.TestCase):
 
     def test_roundtrip(self):
         big_data = bytes(range(256)) * 4
-        cmds2 = decode_delta(encode_delta([AddCmd(data=big_data)]))
-        total = b''.join(c.data for c in cmds2 if isinstance(c, AddCmd))
+        placed = [PlacedAdd(dst=0, data=big_data)]
+        delta = encode_delta(placed, inplace=False, version_size=len(big_data))
+        placed2, _, _ = decode_delta(delta)
+        total = b''.join(c.data for c in placed2 if isinstance(c, PlacedAdd))
         self.assertEqual(total, big_data)
 
 
@@ -320,7 +339,7 @@ class TestInPlaceEmptyVersion(unittest.TestCase):
     def _run(self, fn):
         cmds = fn(b"hello", b"", p=2)
         ip = make_inplace(b"hello", cmds, policy='localmin')
-        self.assertEqual(apply_delta_inplace(b"hello", ip, 0), b"")
+        self.assertEqual(apply_placed_inplace(b"hello", ip, 0), b"")
 
     def test_greedy(self):   self._run(diff_greedy)
     def test_onepass(self):  self._run(diff_onepass)
@@ -354,7 +373,8 @@ class TestInPlaceFormatDetection(unittest.TestCase):
     def test_standard_not_detected(self):
         R = b"ABCDEFGH" * 10
         V = b"EFGHABCD" * 10
-        delta = encode_delta(diff_greedy(R, V, p=2))
+        placed = place_commands(diff_greedy(R, V, p=2))
+        delta = encode_delta(placed, inplace=False, version_size=len(V))
         self.assertFalse(is_inplace_delta(delta))
 
     def test_inplace_detected(self):
@@ -362,7 +382,7 @@ class TestInPlaceFormatDetection(unittest.TestCase):
         V = b"EFGHABCD" * 10
         cmds = diff_greedy(R, V, p=2)
         ip = make_inplace(R, cmds, policy='localmin')
-        delta = encode_inplace_delta(ip, len(V))
+        delta = encode_delta(ip, inplace=True, version_size=len(V))
         self.assertTrue(is_inplace_delta(delta))
 
 
@@ -469,7 +489,7 @@ class TestInPlaceVarlenDropDup(unittest.TestCase):
 
 
 class TestInPlaceVarlenDoubleSized(unittest.TestCase):
-    """Version is 2× the reference — all blocks appear twice in shuffled order."""
+    """Version is 2x the reference — all blocks appear twice in shuffled order."""
 
     @classmethod
     def setUpClass(cls):
@@ -595,8 +615,8 @@ class TestLocalminPicksSmallest(unittest.TestCase):
         cmds = diff_greedy(self.R, self.V, p=4)
         ip_const = make_inplace(self.R, cmds, policy='constant')
         ip_lmin  = make_inplace(self.R, cmds, policy='localmin')
-        add_const = sum(len(c.data) for c in ip_const if isinstance(c, InPlaceAddCmd))
-        add_lmin  = sum(len(c.data) for c in ip_lmin  if isinstance(c, InPlaceAddCmd))
+        add_const = sum(len(c.data) for c in ip_const if isinstance(c, PlacedAdd))
+        add_lmin  = sum(len(c.data) for c in ip_lmin  if isinstance(c, PlacedAdd))
         self.assertLessEqual(add_lmin, add_const)
 
 

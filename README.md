@@ -5,6 +5,10 @@ reconstructed from the old file plus the (small) delta.  Supports
 in-place reconstruction — the new version can be rebuilt directly in
 the buffer holding the old version, with no scratch space.
 
+Two implementations — Python and Rust — producing identical binary
+deltas.  The Rust version is ~20x faster thanks to O(1) rolling hash
+updates and zero-copy mmap I/O.
+
 Implements the algorithms from two papers:
 
 1. M. Ajtai, R. Burns, R. Fagin, D.D.E. Long, L. Stockmeyer.
@@ -19,18 +23,33 @@ Both papers are in [`pubs/`](pubs/).
 
 ## Quick start
 
+### Python
+
 ```bash
 cd src/python
 
-# Encode: compute delta between reference and new version
+# Encode
 python3 delta.py encode onepass old.bin new.bin delta.bin
 
-# Decode: reconstruct new version from reference + delta
+# Decode
 python3 delta.py decode old.bin delta.bin recovered.bin
-
-# Verify
-diff new.bin recovered.bin   # should be empty (identical)
 ```
+
+### Rust
+
+```bash
+cd src/rust/delta
+cargo build --release
+
+# Encode
+cargo run --release -- encode onepass old.bin new.bin delta.bin
+
+# Decode
+cargo run --release -- decode old.bin delta.bin recovered.bin
+```
+
+The two implementations produce byte-identical delta files.
+Encode with one, decode with the other.
 
 ## Algorithms
 
@@ -43,136 +62,101 @@ diff new.bin recovered.bin   # should be empty (identical)
 All three use Karp-Rabin rolling hashes with a Mersenne prime (2^61-1)
 for fingerprinting and a polynomial base of 263 for good bit mixing.
 
-## Commands
-
-### encode
-
-```
-python3 delta.py encode <algorithm> <reference> <version> <delta> [options]
-```
-
-Options:
-
-```
---seed-len N      Seed length in bytes (default 16)
---table-size N    Hash table entries (default 65521)
---inplace         Produce in-place reconstructible delta
---policy P        Cycle-breaking policy: localmin (default) or constant
-```
-
-For `correcting` on large files, set `--table-size` to roughly 2x
-the reference file size:
-
-```bash
-python3 delta.py encode correcting old.bin new.bin delta.bin \
-    --table-size 2000003
-```
-
-### decode
-
-```
-python3 delta.py decode <reference> <delta> <output>
-```
-
-Auto-detects standard vs in-place delta format.
-
-### info
-
-```
-python3 delta.py info <delta>
-```
-
-Shows command counts, copy/add byte totals, and format type.
-
 ## In-place mode
 
 Standard deltas require a separate output buffer.  In-place mode
 produces a delta that reconstructs the new version directly in the
-buffer holding the reference, with no scratch space.  This is useful
-for space-constrained devices (embedded systems, IoT) where you want
+buffer holding the reference, with no scratch space.  Useful for
+space-constrained devices (embedded systems, IoT) where you want
 to apply a software update without needing 2x the file size in memory.
 
 ```bash
 # Produce an in-place delta
-python3 delta.py encode onepass old.bin new.bin patch.ipd --inplace
+delta encode onepass old.bin new.bin patch.delta --inplace
 
 # Decode works the same (auto-detects format)
-python3 delta.py decode old.bin patch.ipd recovered.bin
+delta decode old.bin patch.delta recovered.bin
 ```
 
-### How it works
+The in-place converter builds a CRWI (Conflicting Read-Write Interval)
+digraph where an edge from command i to j means "i must execute before j"
+(because i reads from a region j will overwrite).  A topological sort
+gives a safe execution order.  Cycles are broken by converting copy
+commands to literal add commands.
 
-The in-place converter takes a standard delta and reorders its commands
-so they can safely be applied in a shared buffer.  It builds a CRWI
-(Conflicting Read-Write Interval) digraph where an edge from command i
-to j means "i must execute before j" (because i reads from a region j
-will overwrite).  A topological sort gives a safe execution order.
-Cycles are broken by converting copy commands to literal add commands.
+Cycle-breaking policies:
 
-### Cycle-breaking policies
-
-- **`localmin`** (default) — when a cycle is found, converts the
-  smallest copy in the cycle to an add.  Minimizes compression loss.
+- **`localmin`** (default) — converts the smallest copy in each cycle.
+  Minimizes compression loss.
 - **`constant`** — converts any vertex in the cycle.  Slightly faster,
   marginally worse compression.
 
-In practice the overhead is small — the paper reports ~0.5% larger
-with `localmin` and ~3.6% larger with `constant` on real-world data.
+## Binary delta format
+
+Unified format used by both implementations:
+
+```
+Header (9 bytes):
+  DLT\x01        4-byte magic
+  flags           1 byte (bit 0 = in-place)
+  version_size    uint32 big-endian
+
+Commands (repeated):
+  type 0          END (1 byte)
+  type 1          COPY: src(u32) dst(u32) len(u32)  — 13 bytes
+  type 2          ADD:  dst(u32) len(u32) data       — 9 + len bytes
+```
+
+All multi-byte integers are big-endian.  Commands carry explicit
+source and destination offsets.  The `flags` byte distinguishes
+standard deltas (flag 0x00) from in-place deltas (flag 0x01).
 
 ## Testing
 
 ```bash
+# Python — 133 tests
 cd src/python
 python3 -m unittest test_delta -v
+
+# Rust — 54 tests (4 unit + 50 integration)
+cd src/rust/delta
+cargo test
 ```
 
-133 tests covering:
-
-- All three differencing algorithms
-- Binary delta encoding/decoding round-trips
-- Paper examples (Section 2.1.1 and Appendix)
-- Edge cases (empty files, identical files, completely different files)
-- In-place reconstruction with both cycle-breaking policies
-- Variable-length block transpositions (8 blocks, 200-5000 bytes each,
-  permuted, reversed, interleaved with junk, duplicated, halved and
-  scrambled, plus 20 random subset trials)
-- Verification that `localmin` never produces more add bytes than `constant`
+Tests cover all three algorithms, binary round-trips, paper examples,
+edge cases (empty/identical/completely different files), in-place
+reconstruction with both cycle-breaking policies, variable-length block
+transpositions (8 blocks, 200-5000 bytes each, permuted, reversed,
+interleaved with junk, duplicated, halved and scrambled, plus 20
+random subset trials), and cross-language compatibility.
 
 ## Project layout
 
 ```
-src/python/
-    delta.py          Library + CLI
-    test_delta.py     Test suite (unittest)
+src/
+  python/
+    delta.py              Library + CLI
+    test_delta.py         Test suite (133 tests)
+  rust/delta/
+    src/
+      lib.rs              Re-exports
+      main.rs             CLI (clap)
+      types.rs            Command, PlacedCommand, constants
+      hash.rs             Karp-Rabin rolling hash
+      encoding.rs         Unified binary format
+      apply.rs            place_commands, apply_placed_to, apply_placed_inplace_to
+      inplace.rs          CRWI digraph, topological sort, cycle breaking
+      algorithm/
+        mod.rs            Dispatch
+        greedy.rs         O(n^2) optimal
+        onepass.rs        O(n) linear
+        correcting.rs     1.5-pass with tail correction
+    tests/
+      integration.rs      50 integration tests
+    Cargo.toml
 pubs/
-    ajtai-et-al-jacm-2002-differential-compression.pdf
-    burns-et-al-tkde-2003-inplace-reconstruction.pdf
+  ajtai-et-al-jacm-2002-differential-compression.pdf
+  burns-et-al-tkde-2003-inplace-reconstruction.pdf
 README.md
+HOWTO.md
 ```
-
-## Binary delta format
-
-### Standard format
-
-VCDIFF-style codewords (first byte `k`):
-
-| k | Meaning |
-|---|---|
-| 0 | END |
-| 1-246 | ADD next `k` literal bytes |
-| 247 | ADD with uint16 length |
-| 248 | ADD with uint32 length |
-| 249-255 | COPY with varying offset/length widths |
-
-All multi-byte integers are big-endian.
-
-### In-place format
-
-Starts with magic bytes `IPD\x01`, then uint32 version size, then
-commands in safe execution order:
-
-| Type byte | Meaning |
-|---|---|
-| 0 | END |
-| 1 | COPY: src(u32), dst(u32), len(u32) |
-| 2 | ADD: dst(u32), len(u32), data |

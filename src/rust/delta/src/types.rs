@@ -1,0 +1,184 @@
+use std::fmt;
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+pub const SEED_LEN: usize = 16;
+pub const TABLE_SIZE: usize = 65521; // largest prime < 2^16
+pub const HASH_BASE: u64 = 263;
+pub const HASH_MOD: u64 = (1 << 61) - 1; // Mersenne prime 2^61-1
+pub const DELTA_MAGIC: &[u8; 4] = b"DLT\x01";
+pub const DELTA_FLAG_INPLACE: u8 = 0x01;
+
+// ============================================================================
+// Delta Commands (Section 2.1.1)
+// ============================================================================
+
+/// Algorithm output: copy from reference or add literal bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Command {
+    Copy { offset: usize, length: usize },
+    Add { data: Vec<u8> },
+}
+
+impl fmt::Display for Command {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Command::Copy { offset, length } => write!(f, "COPY(off={}, len={})", offset, length),
+            Command::Add { data } => {
+                if data.len() <= 20 {
+                    write!(f, "ADD({:?})", data)
+                } else {
+                    write!(f, "ADD(len={})", data.len())
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Placed Commands — ready for encoding and application
+// ============================================================================
+
+/// A command with explicit source and destination offsets.
+///
+/// For standard deltas, `Copy::src` is an offset into the reference and
+/// `Copy::dst` is the write position in the output.  For in-place deltas,
+/// both refer to positions in the shared working buffer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlacedCommand {
+    Copy { src: usize, dst: usize, length: usize },
+    Add { dst: usize, data: Vec<u8> },
+}
+
+impl fmt::Display for PlacedCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PlacedCommand::Copy { src, dst, length } => {
+                write!(f, "COPY(src={}, dst={}, len={})", src, dst, length)
+            }
+            PlacedCommand::Add { dst, data } => {
+                if data.len() <= 20 {
+                    write!(f, "ADD(dst={}, {:?})", dst, data)
+                } else {
+                    write!(f, "ADD(dst={}, len={})", dst, data.len())
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Algorithm and Policy enums
+// ============================================================================
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Algorithm {
+    Greedy,
+    Onepass,
+    Correcting,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CyclePolicy {
+    Localmin,
+    Constant,
+}
+
+// ============================================================================
+// Error type
+// ============================================================================
+
+#[derive(Debug)]
+pub enum DeltaError {
+    InvalidFormat(String),
+    UnexpectedEof,
+    IoError(std::io::Error),
+}
+
+impl fmt::Display for DeltaError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DeltaError::InvalidFormat(msg) => write!(f, "invalid delta format: {}", msg),
+            DeltaError::UnexpectedEof => write!(f, "unexpected end of delta data"),
+            DeltaError::IoError(e) => write!(f, "I/O error: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for DeltaError {}
+
+impl From<std::io::Error> for DeltaError {
+    fn from(e: std::io::Error) -> Self {
+        DeltaError::IoError(e)
+    }
+}
+
+// ============================================================================
+// Summary statistics
+// ============================================================================
+
+#[derive(Debug)]
+pub struct DeltaSummary {
+    pub num_commands: usize,
+    pub num_copies: usize,
+    pub num_adds: usize,
+    pub copy_bytes: usize,
+    pub add_bytes: usize,
+    pub total_output_bytes: usize,
+}
+
+pub fn delta_summary(commands: &[Command]) -> DeltaSummary {
+    let mut num_copies = 0;
+    let mut num_adds = 0;
+    let mut copy_bytes = 0;
+    let mut add_bytes = 0;
+    for cmd in commands {
+        match cmd {
+            Command::Copy { length, .. } => {
+                num_copies += 1;
+                copy_bytes += length;
+            }
+            Command::Add { data } => {
+                num_adds += 1;
+                add_bytes += data.len();
+            }
+        }
+    }
+    DeltaSummary {
+        num_commands: commands.len(),
+        num_copies,
+        num_adds,
+        copy_bytes,
+        add_bytes,
+        total_output_bytes: copy_bytes + add_bytes,
+    }
+}
+
+pub fn placed_summary(commands: &[PlacedCommand]) -> DeltaSummary {
+    let mut num_copies = 0;
+    let mut num_adds = 0;
+    let mut copy_bytes = 0;
+    let mut add_bytes = 0;
+    for cmd in commands {
+        match cmd {
+            PlacedCommand::Copy { length, .. } => {
+                num_copies += 1;
+                copy_bytes += length;
+            }
+            PlacedCommand::Add { data, .. } => {
+                num_adds += 1;
+                add_bytes += data.len();
+            }
+        }
+    }
+    DeltaSummary {
+        num_commands: commands.len(),
+        num_copies,
+        num_adds,
+        copy_bytes,
+        add_bytes,
+        total_output_bytes: copy_bytes + add_bytes,
+    }
+}

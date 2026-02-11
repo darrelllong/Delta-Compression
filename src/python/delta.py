@@ -13,21 +13,24 @@ Algorithms implemented:
   - Correcting 1.5-Pass (Section 7, Figure 8): Near-optimal, linear time in practice
 
 Also implements:
-  - VCDIFF-style binary delta encoding (Appendix, Figure 12)
+  - Unified binary delta format with explicit command placement
+  - In-place reconstruction (Burns, Long, Stockmeyer, IEEE TKDE 2003)
   - Delta reconstruction (apply delta to reference to recover version)
 
 Usage:
   python delta.py encode  <algorithm> <reference> <version> <delta>
   python delta.py decode  <reference> <delta> <output>
   python delta.py info    <delta>
-  python delta.py test
 """
 
 import argparse
+import mmap
+import os
 import struct
 import sys
 import time
 from collections import defaultdict, deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import List, Union
 
@@ -60,30 +63,34 @@ class AddCmd:
 Command = Union[CopyCmd, AddCmd]
 
 
+# ============================================================================
+# Placed Commands — ready for encoding and application
+# ============================================================================
+
 @dataclass
-class InPlaceCopyCmd:
-    """In-place: copy buf[src:src+length] to buf[dst:dst+length]."""
+class PlacedCopy:
+    """Copy with explicit source and destination offsets."""
     src: int
     dst: int
     length: int
 
     def __repr__(self):
-        return f"IPCOPY(src={self.src}, dst={self.dst}, len={self.length})"
+        return f"COPY(src={self.src}, dst={self.dst}, len={self.length})"
 
 
 @dataclass
-class InPlaceAddCmd:
-    """In-place: write literal bytes to buf[dst:dst+len(data)]."""
+class PlacedAdd:
+    """Add literal bytes at an explicit destination offset."""
     dst: int
     data: bytes
 
     def __repr__(self):
         if len(self.data) <= 20:
-            return f"IPADD(dst={self.dst}, {self.data!r})"
-        return f"IPADD(dst={self.dst}, len={len(self.data)})"
+            return f"ADD(dst={self.dst}, {self.data!r})"
+        return f"ADD(dst={self.dst}, len={len(self.data)})"
 
 
-InPlaceCommand = Union[InPlaceCopyCmd, InPlaceAddCmd]
+PlacedCommand = Union[PlacedCopy, PlacedAdd]
 
 
 # ============================================================================
@@ -468,184 +475,189 @@ def diff_correcting(R: bytes, V: bytes,
 
 
 # ============================================================================
-# Binary Delta Encoding (Appendix, Figure 12)
-#
-# Codeword types (first byte k):
-#   k = 0             END   — no more input
-#   k in [1, 246]     ADD   — next k bytes are literal data
-#   k = 247           ADD   — next 2 bytes = uint16 length, then data
-#   k = 248           ADD   — next 4 bytes = uint32 length, then data
-#   k = 249           COPY  — offset: uint16, length: uint8
-#   k = 250           COPY  — offset: uint16, length: uint16
-#   k = 251           COPY  — offset: uint16, length: uint32
-#   k = 252           COPY  — offset: uint32, length: uint8
-#   k = 253           COPY  — offset: uint32, length: uint16
-#   k = 254           COPY  — offset: uint32, length: uint32
-#   k = 255           COPY  — offset: uint64, length: uint32
-#
-# All multi-byte integers are big-endian.
+# Placement — convert algorithm output to placed commands
 # ============================================================================
 
-def _encode_add(data: bytes) -> bytes:
-    """Encode an ADD command (may emit multiple codewords for long data)."""
-    out = bytearray()
-    pos = 0
-    while pos < len(data):
-        remaining = len(data) - pos
-        if remaining <= 246:
-            out.append(remaining)
-            out.extend(data[pos:pos + remaining])
-            pos += remaining
-        elif remaining <= 0xFFFF:
-            out.append(247)
-            out.extend(struct.pack('>H', remaining))
-            out.extend(data[pos:pos + remaining])
-            pos += remaining
-        elif remaining <= 0xFFFFFFFF:
-            chunk = min(remaining, 0xFFFFFFFF)
-            out.append(248)
-            out.extend(struct.pack('>I', chunk))
-            out.extend(data[pos:pos + chunk])
-            pos += chunk
-        else:
-            # Split into 4 GB chunks
-            chunk = 0xFFFFFFFF
-            out.append(248)
-            out.extend(struct.pack('>I', chunk))
-            out.extend(data[pos:pos + chunk])
-            pos += chunk
-    return bytes(out)
+def output_size(commands: List[Command]) -> int:
+    """Compute the total output size of a delta encoding."""
+    return sum(cmd.length if isinstance(cmd, CopyCmd) else len(cmd.data)
+               for cmd in commands)
 
 
-def _encode_copy(offset: int, length: int) -> bytes:
-    """Encode a COPY command, choosing the most compact representation."""
-    out = bytearray()
-
-    if offset <= 0xFFFF:
-        if length <= 0xFF:
-            out.append(249)
-            out.extend(struct.pack('>H', offset))
-            out.append(length)
-        elif length <= 0xFFFF:
-            out.append(250)
-            out.extend(struct.pack('>HH', offset, length))
-        else:
-            out.append(251)
-            out.extend(struct.pack('>HI', offset, length))
-    elif offset <= 0xFFFFFFFF:
-        if length <= 0xFF:
-            out.append(252)
-            out.extend(struct.pack('>I', offset))
-            out.append(length)
-        elif length <= 0xFFFF:
-            out.append(253)
-            out.extend(struct.pack('>IH', offset, length))
-        else:
-            out.append(254)
-            out.extend(struct.pack('>II', offset, length))
-    else:
-        out.append(255)
-        out.extend(struct.pack('>QI', offset, length))
-
-    return bytes(out)
-
-
-def encode_delta(commands: List[Command]) -> bytes:
-    """Encode a list of commands into the binary delta format."""
-    out = bytearray()
+def place_commands(commands: List[Command]) -> List[PlacedCommand]:
+    """Convert algorithm output to placed commands with sequential destinations."""
+    placed = []
+    dst = 0
     for cmd in commands:
-        if isinstance(cmd, AddCmd):
-            out.extend(_encode_add(cmd.data))
-        elif isinstance(cmd, CopyCmd):
-            out.extend(_encode_copy(cmd.offset, cmd.length))
-    out.append(0)  # END codeword
+        if isinstance(cmd, CopyCmd):
+            placed.append(PlacedCopy(src=cmd.offset, dst=dst, length=cmd.length))
+            dst += cmd.length
+        elif isinstance(cmd, AddCmd):
+            placed.append(PlacedAdd(dst=dst, data=cmd.data))
+            dst += len(cmd.data)
+    return placed
+
+
+# ============================================================================
+# Unified Binary Delta Format
+#
+# Header:
+#   Magic:        4 bytes  b'DLT\x01'
+#   Flags:        1 byte   (0x00 = standard, 0x01 = in-place)
+#   Version size: 4 bytes  uint32 BE
+#
+# Commands (in execution order):
+#   END:  type=0                                     (1 byte)
+#   COPY: type=1, src:u32, dst:u32, len:u32         (13 bytes)
+#   ADD:  type=2, dst:u32, len:u32, data             (9 + len bytes)
+# ============================================================================
+
+DELTA_MAGIC = b'DLT\x01'
+DELTA_FLAG_INPLACE = 0x01
+
+
+def encode_delta(commands: List[PlacedCommand], *,
+                 inplace: bool = False, version_size: int) -> bytes:
+    """Encode placed commands to the unified binary delta format."""
+    out = bytearray()
+    out.extend(DELTA_MAGIC)
+    out.append(DELTA_FLAG_INPLACE if inplace else 0)
+    out.extend(struct.pack('>I', version_size))
+
+    for cmd in commands:
+        if isinstance(cmd, PlacedCopy):
+            out.append(1)
+            out.extend(struct.pack('>III', cmd.src, cmd.dst, cmd.length))
+        elif isinstance(cmd, PlacedAdd):
+            out.append(2)
+            out.extend(struct.pack('>II', cmd.dst, len(cmd.data)))
+            out.extend(cmd.data)
+
+    out.append(0)  # END
     return bytes(out)
 
 
-def decode_delta(data: bytes) -> List[Command]:
-    """Decode binary delta format into a list of commands."""
-    commands: List[Command] = []
-    pos = 0
+def decode_delta(data: bytes):
+    """Decode the unified binary delta format.
+
+    Returns (commands, inplace, version_size).
+    """
+    if len(data) < 9 or data[:4] != DELTA_MAGIC:
+        raise ValueError("Not a delta file")
+
+    inplace = bool(data[4] & DELTA_FLAG_INPLACE)
+    version_size = struct.unpack_from('>I', data, 5)[0]
+    pos = 9
+    commands: List[PlacedCommand] = []
 
     while pos < len(data):
-        k = data[pos]
+        t = data[pos]
         pos += 1
-
-        if k == 0:
-            break  # END
-
-        elif 1 <= k <= 246:
-            commands.append(AddCmd(data=data[pos:pos + k]))
-            pos += k
-
-        elif k == 247:
-            length = struct.unpack_from('>H', data, pos)[0]
-            pos += 2
-            commands.append(AddCmd(data=data[pos:pos + length]))
-            pos += length
-
-        elif k == 248:
-            length = struct.unpack_from('>I', data, pos)[0]
-            pos += 4
-            commands.append(AddCmd(data=data[pos:pos + length]))
-            pos += length
-
-        elif k == 249:
-            offset = struct.unpack_from('>H', data, pos)[0]; pos += 2
-            length = data[pos]; pos += 1
-            commands.append(CopyCmd(offset=offset, length=length))
-
-        elif k == 250:
-            offset, length = struct.unpack_from('>HH', data, pos)
-            pos += 4
-            commands.append(CopyCmd(offset=offset, length=length))
-
-        elif k == 251:
-            offset = struct.unpack_from('>H', data, pos)[0]; pos += 2
-            length = struct.unpack_from('>I', data, pos)[0]; pos += 4
-            commands.append(CopyCmd(offset=offset, length=length))
-
-        elif k == 252:
-            offset = struct.unpack_from('>I', data, pos)[0]; pos += 4
-            length = data[pos]; pos += 1
-            commands.append(CopyCmd(offset=offset, length=length))
-
-        elif k == 253:
-            offset = struct.unpack_from('>I', data, pos)[0]; pos += 4
-            length = struct.unpack_from('>H', data, pos)[0]; pos += 2
-            commands.append(CopyCmd(offset=offset, length=length))
-
-        elif k == 254:
-            offset, length = struct.unpack_from('>II', data, pos)
+        if t == 0:
+            break
+        elif t == 1:  # COPY
+            src, dst, length = struct.unpack_from('>III', data, pos)
+            pos += 12
+            commands.append(PlacedCopy(src=src, dst=dst, length=length))
+        elif t == 2:  # ADD
+            dst, length = struct.unpack_from('>II', data, pos)
             pos += 8
-            commands.append(CopyCmd(offset=offset, length=length))
+            commands.append(PlacedAdd(dst=dst, data=data[pos:pos + length]))
+            pos += length
 
-        elif k == 255:
-            offset = struct.unpack_from('>Q', data, pos)[0]; pos += 8
-            length = struct.unpack_from('>I', data, pos)[0]; pos += 4
-            commands.append(CopyCmd(offset=offset, length=length))
+    return commands, inplace, version_size
 
-    return commands
+
+def is_inplace_delta(data: bytes) -> bool:
+    """Check if binary data is an in-place delta."""
+    return len(data) >= 5 and data[:4] == DELTA_MAGIC and bool(data[4] & DELTA_FLAG_INPLACE)
 
 
 # ============================================================================
 # Reconstruction — apply delta to reference to recover version
 # ============================================================================
 
-def apply_delta(R: bytes, commands: List[Command]) -> bytes:
-    """Reconstruct the version string from reference + delta commands."""
-    out = bytearray()
+def apply_placed_to(R, commands: List[PlacedCommand], buf) -> int:
+    """Apply placed commands in standard mode: read from R, write to buf.
+
+    Returns bytes written.
+    """
+    max_written = 0
+    for cmd in commands:
+        if isinstance(cmd, PlacedCopy):
+            buf[cmd.dst:cmd.dst + cmd.length] = R[cmd.src:cmd.src + cmd.length]
+            end = cmd.dst + cmd.length
+            if end > max_written:
+                max_written = end
+        elif isinstance(cmd, PlacedAdd):
+            buf[cmd.dst:cmd.dst + len(cmd.data)] = cmd.data
+            end = cmd.dst + len(cmd.data)
+            if end > max_written:
+                max_written = end
+    return max_written
+
+
+def apply_placed_inplace_to(commands: List[PlacedCommand], buf) -> None:
+    """Apply placed commands in-place within a single buffer.
+
+    Slice assignment creates a temporary copy of the RHS, so overlapping
+    src/dst within a single copy is handled correctly.
+    """
+    for cmd in commands:
+        if isinstance(cmd, PlacedCopy):
+            buf[cmd.dst:cmd.dst + cmd.length] = buf[cmd.src:cmd.src + cmd.length]
+        elif isinstance(cmd, PlacedAdd):
+            buf[cmd.dst:cmd.dst + len(cmd.data)] = cmd.data
+
+
+def apply_placed(R, commands: List[PlacedCommand]) -> bytes:
+    """Reconstruct version from reference + placed commands (standard mode)."""
+    total = sum(cmd.length if isinstance(cmd, PlacedCopy) else len(cmd.data)
+                for cmd in commands)
+    buf = bytearray(total)
+    apply_placed_to(R, commands, buf)
+    return bytes(buf)
+
+
+def apply_placed_inplace(R, commands: List[PlacedCommand],
+                         version_size: int) -> bytes:
+    """Reconstruct version by applying placed in-place commands."""
+    buf = bytearray(max(len(R), version_size))
+    buf[:len(R)] = R
+    apply_placed_inplace_to(commands, buf)
+    return bytes(buf[:version_size])
+
+
+# ── convenience wrappers (Command → output) ──────────────────────────────
+
+def apply_delta_to(R, commands: List[Command], buf) -> int:
+    """Apply algorithm commands, writing into a pre-allocated buffer."""
+    pos = 0
     for cmd in commands:
         if isinstance(cmd, AddCmd):
-            out.extend(cmd.data)
+            n = len(cmd.data)
+            buf[pos:pos + n] = cmd.data
+            pos += n
         elif isinstance(cmd, CopyCmd):
-            out.extend(R[cmd.offset:cmd.offset + cmd.length])
-    return bytes(out)
+            buf[pos:pos + cmd.length] = R[cmd.offset:cmd.offset + cmd.length]
+            pos += cmd.length
+    return pos
 
 
-def apply_delta_binary(R: bytes, delta: bytes) -> bytes:
-    """Reconstruct from reference + binary delta."""
-    return apply_delta(R, decode_delta(delta))
+def apply_delta(R, commands: List[Command]) -> bytes:
+    """Reconstruct the version string from reference + algorithm commands."""
+    buf = bytearray(output_size(commands))
+    apply_delta_to(R, commands, buf)
+    return bytes(buf)
+
+
+def apply_binary(R: bytes, delta: bytes) -> bytes:
+    """Reconstruct version from reference + binary delta (auto-detects format)."""
+    commands, inplace, version_size = decode_delta(delta)
+    if inplace:
+        return apply_placed_inplace(R, commands, version_size)
+    else:
+        return apply_placed(R, commands)
 
 
 # ============================================================================
@@ -666,9 +678,6 @@ def apply_delta_binary(R: bytes, delta: bytes) -> bytes:
 #   - constant: pick any vertex when a cycle is detected (O(1) per break)
 #   - localmin: pick the minimum-length vertex in the cycle (less compression loss)
 # ============================================================================
-
-INPLACE_MAGIC = b'IPD\x01'
-
 
 def _find_cycle(adj, removed, n):
     """Find a cycle in the subgraph of non-removed vertices.
@@ -701,7 +710,7 @@ def _find_cycle(adj, removed, n):
 
 
 def make_inplace(R: bytes, commands: List[Command],
-                 policy: str = 'localmin') -> List[InPlaceCommand]:
+                 policy: str = 'localmin') -> List[PlacedCommand]:
     """Convert standard delta commands to in-place executable commands.
 
     The returned commands can be applied to a buffer initialized with R
@@ -714,7 +723,7 @@ def make_inplace(R: bytes, commands: List[Command],
         policy: 'localmin' (default, better compression) or 'constant'.
 
     Returns:
-        List of InPlaceCopyCmd / InPlaceAddCmd in safe execution order.
+        List of PlacedCopy / PlacedAdd in safe execution order.
     """
     if not commands:
         return []
@@ -734,7 +743,7 @@ def make_inplace(R: bytes, commands: List[Command],
 
     n = len(copy_info)
     if n == 0:
-        return [InPlaceAddCmd(dst=d, data=dat) for d, dat in add_info]
+        return [PlacedAdd(dst=d, data=dat) for d, dat in add_info]
 
     # Step 2: build CRWI digraph
     # Edge i -> j means i's read interval [src_i, src_i+len_i) overlaps
@@ -801,127 +810,20 @@ def make_inplace(R: bytes, commands: List[Command],
                     queue.append(w)
 
     # Step 4: assemble result — copies in topo order, then all adds
-    result: List[InPlaceCommand] = []
+    result: List[PlacedCommand] = []
 
     for i in topo_order:
         _, src, dst, length = copy_info[i]
-        result.append(InPlaceCopyCmd(src=src, dst=dst, length=length))
+        result.append(PlacedCopy(src=src, dst=dst, length=length))
 
     for dst, data in add_info:
-        result.append(InPlaceAddCmd(dst=dst, data=data))
+        result.append(PlacedAdd(dst=dst, data=data))
 
     return result
 
 
-def apply_delta_inplace(R: bytes, ip_commands: List[InPlaceCommand],
-                        version_size: int) -> bytes:
-    """Reconstruct version by applying in-place delta commands.
-
-    Initializes a mutable buffer with R, then executes commands in order.
-    Python's slice assignment creates a temporary copy of the RHS, so
-    overlapping src/dst within a single copy is handled correctly.
-    """
-    buf = bytearray(max(len(R), version_size))
-    buf[:len(R)] = R
-
-    for cmd in ip_commands:
-        if isinstance(cmd, InPlaceCopyCmd):
-            buf[cmd.dst:cmd.dst + cmd.length] = buf[cmd.src:cmd.src + cmd.length]
-        elif isinstance(cmd, InPlaceAddCmd):
-            buf[cmd.dst:cmd.dst + len(cmd.data)] = cmd.data
-
-    return bytes(buf[:version_size])
-
-
-# ---- In-place binary format ----
-#
-# Header:
-#   Magic:        4 bytes  b'IPD\x01'
-#   Version size: 4 bytes  uint32 BE
-#
-# Commands (in execution order):
-#   END:  type=0                                     (1 byte)
-#   COPY: type=1, src:u32, dst:u32, len:u32         (13 bytes)
-#   ADD:  type=2, dst:u32, len:u32, data             (9 + len bytes)
-
-def encode_inplace_delta(ip_commands: List[InPlaceCommand],
-                         version_size: int) -> bytes:
-    """Encode in-place delta commands to binary format."""
-    out = bytearray()
-    out.extend(INPLACE_MAGIC)
-    out.extend(struct.pack('>I', version_size))
-
-    for cmd in ip_commands:
-        if isinstance(cmd, InPlaceCopyCmd):
-            out.append(1)
-            out.extend(struct.pack('>III', cmd.src, cmd.dst, cmd.length))
-        elif isinstance(cmd, InPlaceAddCmd):
-            out.append(2)
-            out.extend(struct.pack('>II', cmd.dst, len(cmd.data)))
-            out.extend(cmd.data)
-
-    out.append(0)  # END
-    return bytes(out)
-
-
-def decode_inplace_delta(data: bytes):
-    """Decode binary in-place delta format.
-
-    Returns (ip_commands, version_size).
-    """
-    if len(data) < 8 or data[:4] != INPLACE_MAGIC:
-        raise ValueError("Not an in-place delta file")
-    version_size = struct.unpack_from('>I', data, 4)[0]
-    pos = 8
-    commands: List[InPlaceCommand] = []
-
-    while pos < len(data):
-        t = data[pos]
-        pos += 1
-        if t == 0:
-            break
-        elif t == 1:  # COPY
-            src, dst, length = struct.unpack_from('>III', data, pos)
-            pos += 12
-            commands.append(InPlaceCopyCmd(src=src, dst=dst, length=length))
-        elif t == 2:  # ADD
-            dst, length = struct.unpack_from('>II', data, pos)
-            pos += 8
-            commands.append(InPlaceAddCmd(dst=dst, data=data[pos:pos + length]))
-            pos += length
-
-    return commands, version_size
-
-
-def is_inplace_delta(data: bytes) -> bool:
-    """Check if binary data is an in-place delta (vs standard)."""
-    return len(data) >= 4 and data[:4] == INPLACE_MAGIC
-
-
-def apply_inplace_binary(R: bytes, delta: bytes) -> bytes:
-    """Reconstruct version from reference + binary in-place delta."""
-    commands, version_size = decode_inplace_delta(delta)
-    return apply_delta_inplace(R, commands, version_size)
-
-
-def inplace_summary(ip_commands: List[InPlaceCommand]) -> dict:
-    """Return summary statistics for an in-place delta encoding."""
-    copies = [c for c in ip_commands if isinstance(c, InPlaceCopyCmd)]
-    adds = [c for c in ip_commands if isinstance(c, InPlaceAddCmd)]
-    copy_bytes = sum(c.length for c in copies)
-    add_bytes = sum(len(c.data) for c in adds)
-    return {
-        'num_commands': len(ip_commands),
-        'num_copies': len(copies),
-        'num_adds': len(adds),
-        'copy_bytes': copy_bytes,
-        'add_bytes': add_bytes,
-        'total_output_bytes': copy_bytes + add_bytes,
-    }
-
-
 # ============================================================================
-# Helpers
+# Summaries
 # ============================================================================
 
 ALGORITHMS = {
@@ -932,7 +834,7 @@ ALGORITHMS = {
 
 
 def delta_summary(commands: List[Command]) -> dict:
-    """Return summary statistics for a delta encoding."""
+    """Return summary statistics for algorithm output."""
     copies = [c for c in commands if isinstance(c, CopyCmd)]
     adds = [c for c in commands if isinstance(c, AddCmd)]
     copy_bytes = sum(c.length for c in copies)
@@ -947,41 +849,88 @@ def delta_summary(commands: List[Command]) -> dict:
     }
 
 
+def placed_summary(commands: List[PlacedCommand]) -> dict:
+    """Return summary statistics for placed commands."""
+    copies = [c for c in commands if isinstance(c, PlacedCopy)]
+    adds = [c for c in commands if isinstance(c, PlacedAdd)]
+    copy_bytes = sum(c.length for c in copies)
+    add_bytes = sum(len(c.data) for c in adds)
+    return {
+        'num_commands': len(commands),
+        'num_copies': len(copies),
+        'num_adds': len(adds),
+        'copy_bytes': copy_bytes,
+        'add_bytes': add_bytes,
+        'total_output_bytes': copy_bytes + add_bytes,
+    }
+
+
+# ============================================================================
+# Memory-mapped file I/O for large files
+# ============================================================================
+
+@contextmanager
+def mmap_open(path):
+    """Memory-map a file for reading.  Yields b'' for empty files."""
+    size = os.path.getsize(path)
+    if size == 0:
+        yield b""
+    else:
+        with open(path, 'rb') as f:
+            mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            try:
+                yield mm
+            finally:
+                mm.close()
+
+
+@contextmanager
+def mmap_create(path, size):
+    """Create a file of `size` bytes and memory-map it for read-write.
+
+    Yields a writable mmap object (or empty bytearray for size=0).
+    """
+    if size == 0:
+        open(path, 'wb').close()
+        yield bytearray()
+    else:
+        with open(path, 'wb') as f:
+            f.truncate(size)
+        with open(path, 'r+b') as f:
+            mm = mmap.mmap(f.fileno(), size)
+            try:
+                yield mm
+            finally:
+                mm.flush()
+                mm.close()
+
+
 # ============================================================================
 # CLI
 # ============================================================================
 
 def cmd_encode(args):
     algo = ALGORITHMS[args.algorithm]
-    R = open(args.reference, 'rb').read()
-    V = open(args.version, 'rb').read()
+    with mmap_open(args.reference) as R, mmap_open(args.version) as V:
+        t0 = time.time()
+        commands = algo(R, V, p=args.seed_len, q=args.table_size)
 
-    t0 = time.time()
-    commands = algo(R, V, p=args.seed_len, q=args.table_size)
+        if args.inplace:
+            placed = make_inplace(R, commands, policy=args.policy)
+        else:
+            placed = place_commands(commands)
+        elapsed = time.time() - t0
 
-    if args.inplace:
-        ip_commands = make_inplace(R, commands, policy=args.policy)
-        elapsed = time.time() - t0
-        delta = encode_inplace_delta(ip_commands, len(V))
+        delta = encode_delta(placed, inplace=args.inplace,
+                             version_size=len(V))
         open(args.delta, 'wb').write(delta)
-        stats = inplace_summary(ip_commands)
+
+        stats = placed_summary(placed)
         ratio = len(delta) / len(V) if V else 0
-        print(f"Algorithm:    {args.algorithm} + in-place ({args.policy})")
-        print(f"Reference:    {args.reference} ({len(R):,} bytes)")
-        print(f"Version:      {args.version} ({len(V):,} bytes)")
-        print(f"Delta:        {args.delta} ({len(delta):,} bytes)")
-        print(f"Compression:  {ratio:.4f} (delta/version)")
-        print(f"Commands:     {stats['num_copies']} copies, {stats['num_adds']} adds")
-        print(f"Copy bytes:   {stats['copy_bytes']:,}")
-        print(f"Add bytes:    {stats['add_bytes']:,}")
-        print(f"Time:         {elapsed:.3f}s")
-    else:
-        elapsed = time.time() - t0
-        delta = encode_delta(commands)
-        open(args.delta, 'wb').write(delta)
-        stats = delta_summary(commands)
-        ratio = len(delta) / len(V) if V else 0
-        print(f"Algorithm:    {args.algorithm}")
+        if args.inplace:
+            print(f"Algorithm:    {args.algorithm} + in-place ({args.policy})")
+        else:
+            print(f"Algorithm:    {args.algorithm}")
         print(f"Reference:    {args.reference} ({len(R):,} bytes)")
         print(f"Version:      {args.version} ({len(V):,} bytes)")
         print(f"Delta:        {args.delta} ({len(delta):,} bytes)")
@@ -993,42 +942,42 @@ def cmd_encode(args):
 
 
 def cmd_decode(args):
-    R = open(args.reference, 'rb').read()
-    delta = open(args.delta, 'rb').read()
+    with mmap_open(args.reference) as R:
+        delta_bytes = open(args.delta, 'rb').read()
 
-    t0 = time.time()
-    inplace = is_inplace_delta(delta)
-    if inplace:
-        V = apply_inplace_binary(R, delta)
-    else:
-        V = apply_delta_binary(R, delta)
-    elapsed = time.time() - t0
+        t0 = time.time()
+        placed, is_ip, version_size = decode_delta(delta_bytes)
 
-    open(args.output, 'wb').write(V)
-    fmt = "in-place" if inplace else "standard"
-    print(f"Format:       {fmt}")
-    print(f"Reference:    {args.reference} ({len(R):,} bytes)")
-    print(f"Delta:        {args.delta} ({len(delta):,} bytes)")
-    print(f"Output:       {args.output} ({len(V):,} bytes)")
-    print(f"Time:         {elapsed:.3f}s")
+        if is_ip:
+            buf_size = max(len(R), version_size)
+            with mmap_create(args.output, buf_size) as buf:
+                buf[:len(R)] = R[:len(R)]
+                apply_placed_inplace_to(placed, buf)
+            if version_size < buf_size:
+                os.truncate(args.output, version_size)
+        else:
+            with mmap_create(args.output, version_size) as buf:
+                apply_placed_to(R, placed, buf)
+        elapsed = time.time() - t0
+
+        fmt = "in-place" if is_ip else "standard"
+        print(f"Format:       {fmt}")
+        print(f"Reference:    {args.reference} ({len(R):,} bytes)")
+        print(f"Delta:        {args.delta} ({len(delta_bytes):,} bytes)")
+        print(f"Output:       {args.output} ({version_size:,} bytes)")
+        print(f"Time:         {elapsed:.3f}s")
 
 
 def cmd_info(args):
     delta_bytes = open(args.delta, 'rb').read()
-    inplace = is_inplace_delta(delta_bytes)
 
-    if inplace:
-        commands, version_size = decode_inplace_delta(delta_bytes)
-        stats = inplace_summary(commands)
-        print(f"Delta file:   {args.delta} ({len(delta_bytes):,} bytes)")
-        print(f"Format:       in-place")
-        print(f"Version size: {version_size:,} bytes")
-    else:
-        commands = decode_delta(delta_bytes)
-        stats = delta_summary(commands)
-        print(f"Delta file:   {args.delta} ({len(delta_bytes):,} bytes)")
-        print(f"Format:       standard")
+    placed, is_ip, version_size = decode_delta(delta_bytes)
+    stats = placed_summary(placed)
+    fmt = "in-place" if is_ip else "standard"
 
+    print(f"Delta file:   {args.delta} ({len(delta_bytes):,} bytes)")
+    print(f"Format:       {fmt}")
+    print(f"Version size: {version_size:,} bytes")
     print(f"Commands:     {stats['num_commands']}")
     print(f"  Copies:     {stats['num_copies']} ({stats['copy_bytes']:,} bytes)")
     print(f"  Adds:       {stats['num_adds']} ({stats['add_bytes']:,} bytes)")

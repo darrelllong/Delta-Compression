@@ -1,0 +1,11 @@
+[package]
+name = "delta"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+memmap2 = "0.9"
+
+[dev-dependencies]
+rand = "0.8"
