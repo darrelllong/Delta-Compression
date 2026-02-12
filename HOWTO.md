@@ -73,18 +73,21 @@ delta encode greedy old.bin new.bin delta.bin
 
 ## Differential compression vs. Levenshtein distance
 
-Levenshtein (edit) distance operates on individual symbols: it counts the
-minimum number of single-character insertions, deletions, and substitutions
-to transform one string into another, computed by an O(mn) dynamic
-programming algorithm.  Differential compression works at the block level:
-it finds long common substrings via fingerprinting and encodes the
-difference as a sequence of copy and add commands in O(n) time.
+Both Levenshtein distance and differential compression address the problem
+of transforming one string into another.  Levenshtein computes the minimum
+number of single-character insertions, deletions, and substitutions via
+O(mn) dynamic programming, producing an edit count (and, with backtracking,
+the edits themselves).  Differential compression uses Karp-Rabin
+fingerprinting to find matching variable-length byte sequences between two
+files and emits the actual edits — copy and add commands — that
+reconstruct the new version from the old, in O(n) time.
 
-The two solve different problems.  Edit distance produces a number — how
-similar are two strings?  Differential compression produces a compact
-encoding — a file that can reconstruct the new version from the old.  For
-a 1 MB file with a 1 KB change, Levenshtein requires ~10^12 operations;
-the onepass algorithm finds the change in a single linear scan.
+The key differences are granularity and cost.  Levenshtein works one
+character at a time; differential compression discovers variable-length
+common substrings (not fixed-size blocks) and encodes each as a single
+copy command, regardless of length.  For a 1 MB file with a 1 KB change,
+Levenshtein requires ~10^12 operations; the onepass algorithm finds the
+change in a single linear scan.
 
 ## Tuning parameters
 
