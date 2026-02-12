@@ -207,7 +207,71 @@ HOWTO.md
   publisher = {IBM},
   doi       = {10.1147/rd.312.0249},
 }
+
+@article{levenshtein1966binary,
+  author    = {Levenshtein, Vladimir I.},
+  title     = {Binary Codes Capable of Correcting Deletions,
+               Insertions, and Reversals},
+  journal   = {Soviet Physics Doklady},
+  volume    = {10},
+  number    = {8},
+  pages     = {707--710},
+  year      = {1966},
+}
+
+@article{miller1985file,
+  author    = {Miller, Webb and Myers, Eugene W.},
+  title     = {A File Comparison Program},
+  journal   = {Software---Practice and Experience},
+  volume    = {15},
+  number    = {11},
+  pages     = {1025--1040},
+  year      = {1985},
+  publisher = {Wiley},
+  doi       = {10.1002/spe.4380151102},
+}
+
+@inproceedings{reichenberger1991delta,
+  author    = {Reichenberger, Christoph},
+  title     = {Delta Storage for Arbitrary Non-Text Files},
+  booktitle = {Proceedings of the 3rd International Workshop on
+               Software Configuration Management},
+  pages     = {144--152},
+  year      = {1991},
+  publisher = {ACM},
+  doi       = {10.1145/111062.111080},
+}
+
+@article{tichy1984string,
+  author    = {Tichy, Walter F.},
+  title     = {The String-to-String Correction Problem with Block Moves},
+  journal   = {ACM Transactions on Computer Systems},
+  volume    = {2},
+  number    = {4},
+  pages     = {309--321},
+  year      = {1984},
+  month     = nov,
+  publisher = {ACM},
+  doi       = {10.1145/357401.357404},
+}
+
+@article{wagner1974string,
+  author    = {Wagner, Robert A. and Fischer, Michael J.},
+  title     = {The String-to-String Correction Problem},
+  journal   = {Journal of the ACM},
+  volume    = {21},
+  number    = {1},
+  pages     = {168--173},
+  year      = {1974},
+  month     = jan,
+  publisher = {ACM},
+  doi       = {10.1145/321796.321811},
+}
 ```
 
-The Karp-Rabin paper describes the rolling hash / fingerprinting
-technique used by all three differencing algorithms.
+The Karp-Rabin paper introduces the rolling hash / fingerprinting
+technique used by all three differencing algorithms.  Wagner and Fischer
+formalized string-to-string correction (edit distance).  Tichy extended
+it to block moves — the model solved by the algorithms here.
+Reichenberger and Miller-Myers are the prior O(n^2) optimal algorithms
+that Ajtai et al. improve upon.
