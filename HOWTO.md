@@ -133,15 +133,24 @@ delta encode correcting old.bin new.bin delta.bin --table-size 250007
 
 The correcting algorithm automatically detects when its hash table is
 overloaded (> 75% full) after indexing the reference.  When this happens
-it doubles the table size, finds the next prime via a deterministic
-Miller-Rabin test, and rebuilds the table.  This repeats until load drops
-below 75% (one doubling is almost always sufficient).
+it doubles the table size, finds the next prime via Miller-Rabin, and
+rebuilds the table.  This repeats until load drops below 75% (one
+doubling is almost always sufficient).
 
 The prime search starts at `2q + 1` and tests odd candidates upward.
 By the prime number theorem the expected gap between primes near n is
-O(log n), so only a handful of candidates are tested.  Miller-Rabin with
-the witness set {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37} is
-deterministic for all n < 3.3 * 10^24.
+O(log n), so only a handful of candidates are tested.
+
+Primality is tested using the Miller-Rabin probabilistic primality test
+(Rabin 1980) with 100 random witnesses drawn uniformly from [2, n-2).
+Each witness independently has at most a 1/4 probability of being a
+"liar" (falsely certifying a composite as prime), so 100 rounds give
+Pr[false positive] <= 4^{-100} < 10^{-60}.  Using random witnesses
+avoids the brittleness of fixed witness sets, which can be fooled by
+adversarially chosen composites — fixed witnesses are, to put it mildly,
+weak sauce.  Carmichael numbers (561, 1105, 1729, ...) pass the Fermat
+test for all bases coprime to n, but Miller-Rabin with random witnesses
+catches them reliably.
 
 In practice this means you rarely need to set `--table-size` manually —
 the correcting algorithm will grow its table to fit the reference.
@@ -302,6 +311,10 @@ cargo test
 - W. Miller and E.W. Myers.
   A file comparison program.
   *Software — Practice and Experience*, 15(11):1025-1040, 1985.
+
+- M.O. Rabin.
+  Probabilistic algorithm for testing primality.
+  *Journal of Number Theory*, 12(1):128-138, February 1980.
 
 - A. Reichenberger.
   Delta storage for arbitrary non-text files.

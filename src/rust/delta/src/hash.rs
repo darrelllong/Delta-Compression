@@ -255,4 +255,112 @@ mod tests {
             );
         }
     }
+
+    // ── Primality testing ────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_d_r() {
+        assert_eq!(get_d_r(8), (1, 3));
+        assert_eq!(get_d_r(15), (15, 0));
+        let (d, r) = get_d_r(12);
+        assert_eq!(d, 3);
+        assert_eq!(r, 2);
+        assert_eq!(d * (1u64 << r), 12);
+    }
+
+    #[test]
+    fn test_witness_composite() {
+        assert!(witness(2, 9));    // 9 = 3^2 is composite
+        assert!(witness(2, 15));
+    }
+
+    #[test]
+    fn test_witness_prime() {
+        // No a in [2, 13) should be a witness for the prime 13
+        for a in 2..12 {
+            assert!(!witness(a, 13), "a={} should not be a witness for 13", a);
+        }
+    }
+
+    #[test]
+    fn test_known_primes() {
+        let primes = [
+            2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47,
+            53, 59, 61, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113,
+            127, 131, 137, 139, 149, 151, 157, 163, 167, 173, 179, 181, 191,
+            193, 197, 199, 211, 223, 227, 229,
+        ];
+        for &p in &primes {
+            assert!(is_prime(p), "{} should be prime", p);
+        }
+    }
+
+    #[test]
+    fn test_known_composites() {
+        let composites = [
+            0, 1, 4, 6, 8, 9, 10, 12, 14, 15, 16, 18, 20,
+            21, 25, 27, 33, 35, 49, 51, 55, 63, 65, 77, 91,
+            100, 121, 143, 169, 221, 1000, 1000000,
+        ];
+        for &c in &composites {
+            assert!(!is_prime(c), "{} should be composite", c);
+        }
+    }
+
+    #[test]
+    fn test_large_primes() {
+        assert!(is_prime(1048573));   // largest prime < 2^20
+        assert!(is_prime(2097143));   // largest prime < 2^21
+        assert!(is_prime(104729));    // 10000th prime
+    }
+
+    #[test]
+    fn test_carmichael_numbers() {
+        // Carmichael numbers pass the Fermat test for all bases
+        // but Miller-Rabin with random witnesses catches them.
+        let carmichaels = [561, 1105, 1729, 2465, 2821, 6601, 8911];
+        for &c in &carmichaels {
+            assert!(!is_prime(c), "Carmichael number {} should be composite", c);
+        }
+    }
+
+    #[test]
+    fn test_mersenne_primes() {
+        for p in [2, 3, 5, 7, 13, 17, 19] {
+            let mp = (1usize << p) - 1;
+            assert!(is_prime(mp), "2^{}-1 = {} should be prime", p, mp);
+        }
+    }
+
+    #[test]
+    fn test_next_prime_exact() {
+        assert_eq!(next_prime(7), 7);
+        assert_eq!(next_prime(2), 2);
+    }
+
+    #[test]
+    fn test_next_prime_composite() {
+        assert_eq!(next_prime(8), 11);
+        assert_eq!(next_prime(14), 17);
+        assert_eq!(next_prime(100), 101);
+        assert_eq!(next_prime(1000), 1009);
+    }
+
+    #[test]
+    fn test_next_prime_small() {
+        assert_eq!(next_prime(0), 2);
+        assert_eq!(next_prime(1), 2);
+        assert_eq!(next_prime(2), 2);
+        assert_eq!(next_prime(3), 3);
+    }
+
+    #[test]
+    fn test_next_prime_consecutive() {
+        // Verify next_prime produces valid primes for a range of inputs
+        for n in 2..500 {
+            let np = next_prime(n);
+            assert!(np >= n);
+            assert!(is_prime(np), "next_prime({}) = {} should be prime", n, np);
+        }
+    }
 }

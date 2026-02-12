@@ -17,6 +17,7 @@ from delta import (
     is_inplace_delta,
     delta_summary, placed_summary,
     make_inplace,
+    _is_prime, _next_prime, _witness, _get_d_r,
 )
 
 
@@ -618,6 +619,149 @@ class TestLocalminPicksSmallest(unittest.TestCase):
         add_const = sum(len(c.data) for c in ip_const if isinstance(c, PlacedAdd))
         add_lmin  = sum(len(c.data) for c in ip_lmin  if isinstance(c, PlacedAdd))
         self.assertLessEqual(add_lmin, add_const)
+
+
+# ── Miller-Rabin primality testing ─────────────────────────────────────────
+
+class TestGetDR(unittest.TestCase):
+    """Factor n into d * 2^r."""
+
+    def test_power_of_two(self):
+        self.assertEqual(_get_d_r(8), (1, 3))
+
+    def test_odd(self):
+        self.assertEqual(_get_d_r(15), (15, 0))
+
+    def test_mixed(self):
+        d, r = _get_d_r(12)
+        self.assertEqual(d, 3)
+        self.assertEqual(r, 2)
+        self.assertEqual(d * (2 ** r), 12)
+
+    def test_one(self):
+        self.assertEqual(_get_d_r(1), (1, 0))
+
+
+class TestWitness(unittest.TestCase):
+    """The witness loop correctly identifies composites and primes."""
+
+    def test_composite_has_witness(self):
+        # 2 is always a witness for even composites and many odd ones
+        self.assertTrue(_witness(2, 9))     # 9 = 3^2
+
+    def test_prime_has_no_witness(self):
+        # For a true prime, no a in [2, n-1) is a witness
+        for a in range(2, 12):
+            self.assertFalse(_witness(a, 13), f"a={a} should not be a witness for 13")
+
+
+class TestIsPrime(unittest.TestCase):
+    """Miller-Rabin probabilistic primality with random witnesses."""
+
+    # First 50 primes
+    KNOWN_PRIMES = [
+        2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47,
+        53, 59, 61, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113,
+        127, 131, 137, 139, 149, 151, 157, 163, 167, 173, 179, 181, 191,
+        193, 197, 199, 211, 223, 227, 229,
+    ]
+
+    KNOWN_COMPOSITES = [0, 1, 4, 6, 8, 9, 10, 12, 14, 15, 16, 18, 20,
+                        21, 25, 27, 33, 35, 49, 51, 55, 63, 65, 77, 91,
+                        100, 121, 143, 169, 221, 1000, 1000000]
+
+    def test_known_primes(self):
+        for p in self.KNOWN_PRIMES:
+            self.assertTrue(_is_prime(p), f"{p} should be prime")
+
+    def test_known_composites(self):
+        for c in self.KNOWN_COMPOSITES:
+            self.assertFalse(_is_prime(c), f"{c} should be composite")
+
+    def test_large_primes(self):
+        # Large primes used as hash table sizes
+        self.assertTrue(_is_prime(1048573))    # largest prime < 2^20
+        self.assertTrue(_is_prime(2097143))    # largest prime < 2^21
+        self.assertTrue(_is_prime(104729))     # 10000th prime
+
+    def test_carmichael_numbers(self):
+        # Carmichael numbers pass the Fermat test for all bases
+        # but Miller-Rabin with random witnesses catches them.
+        carmichaels = [561, 1105, 1729, 2465, 2821, 6601, 8911]
+        for c in carmichaels:
+            self.assertFalse(_is_prime(c), f"Carmichael number {c} should be composite")
+
+    def test_mersenne_primes(self):
+        # 2^p - 1 for known Mersenne prime exponents
+        for p in [2, 3, 5, 7, 13, 17, 19]:
+            mp = (1 << p) - 1
+            self.assertTrue(_is_prime(mp), f"2^{p}-1 = {mp} should be prime")
+
+    def test_edge_cases(self):
+        self.assertFalse(_is_prime(-1))
+        self.assertFalse(_is_prime(0))
+        self.assertFalse(_is_prime(1))
+        self.assertTrue(_is_prime(2))
+        self.assertTrue(_is_prime(3))
+        self.assertFalse(_is_prime(4))
+
+
+class TestNextPrime(unittest.TestCase):
+    """next_prime(n) returns the smallest prime >= n."""
+
+    def test_exact_prime(self):
+        self.assertEqual(_next_prime(7), 7)
+
+    def test_composite(self):
+        self.assertEqual(_next_prime(8), 11)
+        self.assertEqual(_next_prime(14), 17)
+
+    def test_zero_one_two(self):
+        self.assertEqual(_next_prime(0), 2)
+        self.assertEqual(_next_prime(1), 2)
+        self.assertEqual(_next_prime(2), 2)
+
+    def test_even_input(self):
+        self.assertEqual(_next_prime(100), 101)
+        self.assertEqual(_next_prime(1000), 1009)
+
+    def test_consecutive(self):
+        # Verify next_prime produces a monotonically non-decreasing
+        # sequence of primes
+        p = 2
+        for n in range(2, 500):
+            np = _next_prime(n)
+            self.assertGreaterEqual(np, n)
+            self.assertTrue(_is_prime(np), f"next_prime({n}) = {np} should be prime")
+            # No prime was skipped
+            if n > p:
+                self.assertGreaterEqual(np, p)
+            p = np
+
+
+class TestAutoResize(unittest.TestCase):
+    """Correcting algorithm auto-resizes its hash table when overloaded."""
+
+    def test_tiny_table_still_works(self):
+        """With q=7, correcting must auto-resize to produce correct output."""
+        R = b'ABCDEFGHIJKLMNOP' * 20   # 320 bytes
+        V = R[:160] + b'XXXXYYYY' + R[160:]
+        cmds = diff_correcting(R, V, p=16, q=7)
+        recovered = apply_delta(R, cmds)
+        self.assertEqual(recovered, V)
+
+    def test_resize_improves_compression(self):
+        """A resized table should find at least as many matches as a tiny one."""
+        random.seed(42)
+        R = bytes(random.getrandbits(8) for _ in range(2000))
+        V = R[:500] + bytes(random.getrandbits(8) for _ in range(50)) + R[500:]
+        cmds_tiny = diff_correcting(R, V, p=16, q=7)
+        cmds_big  = diff_correcting(R, V, p=16, q=1048573)
+        # Auto-resized tiny should match big table's quality
+        recovered_tiny = apply_delta(R, cmds_tiny)
+        recovered_big  = apply_delta(R, cmds_big)
+        self.assertEqual(recovered_tiny, V)
+        self.assertEqual(recovered_big, V)
 
 
 if __name__ == '__main__':

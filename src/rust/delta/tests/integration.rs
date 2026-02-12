@@ -1,7 +1,7 @@
 use delta::{
     apply_delta, apply_delta_inplace, decode_delta, diff_correcting, diff_greedy, diff_onepass,
-    encode_delta, is_inplace_delta, make_inplace, output_size, place_commands, Command,
-    CyclePolicy, PlacedCommand, TABLE_SIZE,
+    encode_delta, is_inplace_delta, is_prime, make_inplace, next_prime, output_size,
+    place_commands, Command, CyclePolicy, PlacedCommand, TABLE_SIZE,
 };
 
 // ── helpers ──────────────────────────────────────────────────────────────
@@ -907,4 +907,28 @@ fn test_localmin_picks_smallest() {
         add_lmin,
         add_const
     );
+}
+
+// ── auto-resize: correcting with tiny table ─────────────────────────────
+
+#[test]
+fn test_correcting_auto_resize_tiny_table() {
+    // With q=7, the correcting algorithm must auto-resize its hash table
+    // to produce correct output.
+    let r = b"ABCDEFGHIJKLMNOP".repeat(20); // 320 bytes
+    let mut v = r[..160].to_vec();
+    v.extend_from_slice(b"XXXXYYYY");
+    v.extend_from_slice(&r[160..]);
+    let cmds = diff_correcting(&r, &v, 16, 7, 256);
+    let recovered = apply_delta(&r, &cmds);
+    assert_eq!(recovered, v);
+}
+
+#[test]
+fn test_next_prime_is_prime() {
+    // Verify that next_prime always returns a prime, and that the TABLE_SIZE
+    // constant is itself prime.
+    assert!(is_prime(TABLE_SIZE), "TABLE_SIZE should be prime");
+    assert!(is_prime(next_prime(1048574)));
+    assert_eq!(next_prime(1048573), 1048573);
 }

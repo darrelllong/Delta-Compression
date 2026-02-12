@@ -208,6 +208,19 @@ HOWTO.md
   doi       = {10.1147/rd.312.0249},
 }
 
+@article{rabin1980probabilistic,
+  author    = {Rabin, Michael O.},
+  title     = {Probabilistic Algorithm for Testing Primality},
+  journal   = {Journal of Number Theory},
+  volume    = {12},
+  number    = {1},
+  pages     = {128--138},
+  year      = {1980},
+  month     = feb,
+  publisher = {Elsevier},
+  doi       = {10.1016/0022-314X(80)90084-0},
+}
+
 @article{levenshtein1966binary,
   author    = {Levenshtein, Vladimir I.},
   title     = {Binary Codes Capable of Correcting Deletions,
@@ -274,4 +287,6 @@ technique used by all three differencing algorithms.  Wagner and Fischer
 formalized string-to-string correction (edit distance).  Tichy extended
 it to block moves — the model solved by the algorithms here.
 Reichenberger and Miller-Myers are the prior O(n^2) optimal algorithms
-that Ajtai et al. improve upon.
+that Ajtai et al. improve upon.  Rabin's paper describes the
+Miller-Rabin probabilistic primality test used for hash table
+auto-sizing.
