@@ -73,29 +73,34 @@ delta encode greedy old.bin new.bin delta.bin
 
 ## Relationship to edit distance and common substrings
 
-Differential compression is rooted in the string-to-string correction
-problem [Wagner and Fischer 1973], which asks for the minimum-cost
-sequence of edits that transforms one string into another.  Levenshtein
-distance is the simplest instance: single-character insertions, deletions,
-and substitutions, computed by O(mn) dynamic programming.
+Differential compression emerged as an application of the
+string-to-string correction problem (Wagner and Fischer 1974), which
+asks for the minimum-cost sequence of edits transforming one string into
+another.  Levenshtein distance (Levenshtein 1966) is the simplest
+instance: single-character insertions, deletions, and substitutions,
+computed by O(mn) dynamic programming.
 
-Early differencing algorithms solved this by computing the longest common
-subsequence (LCS) of R and V, treating everything outside the LCS as
-data to be added explicitly.  This works when matching substrings appear
-in the same order in both strings.  Tichy [1984] generalized to the
+Early differencing algorithms solved string-to-string correction by
+computing the longest common subsequence (LCS) of strings R and V, then
+treating all characters outside the LCS as data to be added explicitly
+(Ajtai et al. 2002, Section 1.1).  This formulation assumes a one-to-one
+correspondence between matching substrings and requires that they appear
+in the same order in both strings.  Tichy (1984) generalized to the
 "string-to-string correction problem with block move," which permits
-substrings to be copied multiple times and out of order — the model used
-by the algorithms in this project (Section 1.1 of the JACM paper).
+variable-length substrings to be copied multiple times and out of
+sequence.  Traditional algorithms for this problem — the greedy
+algorithm of Reichenberger (1991) and the dynamic programming approach
+of Miller and Myers (1985) — run in O(mn) or O(n^2) time.
 
-The algorithms here find common substrings (contiguous matching byte
-sequences of variable length) between R and V using Karp-Rabin
-fingerprinting, and emit copy and add commands that reconstruct V from R.
-Unlike LCS-based methods, a single substring in R can be copied to
-multiple locations in V, and matches need not preserve order.  The onepass
-and correcting algorithms run in O(n) time with constant space, compared
-to O(mn) for edit-distance dynamic programming.  For a 1 MB file with a
-1 KB change, Levenshtein requires ~10^12 operations; onepass finds the
-change in a single linear scan.
+The algorithms implemented here (Ajtai et al. 2002) solve the
+string-to-string correction problem with block move using Karp-Rabin
+fingerprinting (Karp and Rabin 1987) to discover variable-length common
+substrings between R and V in linear time.  A single substring in R may
+be copied to multiple locations in V, and matches need not preserve
+order.  The onepass and correcting algorithms run in O(n) time with O(1)
+space — compared to O(mn) for edit-distance dynamic programming.  For
+a 1 MB file with a 1 KB change, Levenshtein requires ~10^12 operations;
+onepass finds the change in a single linear scan.
 
 ## Tuning parameters
 
@@ -274,3 +279,39 @@ python3 -m unittest test_delta -v
 cd src/rust/delta
 cargo test
 ```
+
+## References
+
+- M. Ajtai, R. Burns, R. Fagin, D.D.E. Long, and L. Stockmeyer.
+  Compactly encoding unstructured inputs with differential compression.
+  *Journal of the ACM*, 49(3):318-367, May 2002.
+
+- R.C. Burns, D.D.E. Long, and L. Stockmeyer.
+  In-place reconstruction of version differences.
+  *IEEE Transactions on Knowledge and Data Engineering*, 15(4):973-984,
+  Jul/Aug 2003.
+
+- R.M. Karp and M.O. Rabin.
+  Efficient randomized pattern-matching algorithms.
+  *IBM Journal of Research and Development*, 31(2):249-260, March 1987.
+
+- V.I. Levenshtein.
+  Binary codes capable of correcting deletions, insertions, and reversals.
+  *Soviet Physics Doklady*, 10(8):707-710, 1966.
+
+- W. Miller and E.W. Myers.
+  A file comparison program.
+  *Software — Practice and Experience*, 15(11):1025-1040, 1985.
+
+- A. Reichenberger.
+  Delta storage for arbitrary non-text files.
+  *Proceedings of the 3rd International Workshop on Software Configuration
+  Management*, pages 144-152, 1991.
+
+- W.F. Tichy.
+  The string-to-string correction problem with block moves.
+  *ACM Transactions on Computer Systems*, 2(4):309-321, November 1984.
+
+- R.A. Wagner and M.J. Fischer.
+  The string-to-string correction problem.
+  *Journal of the ACM*, 21(1):168-173, January 1974.
