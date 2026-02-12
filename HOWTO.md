@@ -71,22 +71,30 @@ Use for small files or when compression ratio matters more than speed.
 delta encode greedy old.bin new.bin delta.bin
 ```
 
-## Differential compression vs. Levenshtein distance
+## Relationship to edit distance and common substrings
 
-Both Levenshtein distance and differential compression address the problem
-of transforming one string into another.  Levenshtein computes the minimum
-number of single-character insertions, deletions, and substitutions via
-O(mn) dynamic programming, producing an edit count (and, with backtracking,
-the edits themselves).  Differential compression uses Karp-Rabin
-fingerprinting to find matching variable-length byte sequences between two
-files and emits the actual edits — copy and add commands — that
-reconstruct the new version from the old, in O(n) time.
+Differential compression is rooted in the string-to-string correction
+problem [Wagner and Fischer 1973], which asks for the minimum-cost
+sequence of edits that transforms one string into another.  Levenshtein
+distance is the simplest instance: single-character insertions, deletions,
+and substitutions, computed by O(mn) dynamic programming.
 
-The key differences are granularity and cost.  Levenshtein works one
-character at a time; differential compression discovers variable-length
-common substrings (not fixed-size blocks) and encodes each as a single
-copy command, regardless of length.  For a 1 MB file with a 1 KB change,
-Levenshtein requires ~10^12 operations; the onepass algorithm finds the
+Early differencing algorithms solved this by computing the longest common
+subsequence (LCS) of R and V, treating everything outside the LCS as
+data to be added explicitly.  This works when matching substrings appear
+in the same order in both strings.  Tichy [1984] generalized to the
+"string-to-string correction problem with block move," which permits
+substrings to be copied multiple times and out of order — the model used
+by the algorithms in this project (Section 1.1 of the JACM paper).
+
+The algorithms here find common substrings (contiguous matching byte
+sequences of variable length) between R and V using Karp-Rabin
+fingerprinting, and emit copy and add commands that reconstruct V from R.
+Unlike LCS-based methods, a single substring in R can be copied to
+multiple locations in V, and matches need not preserve order.  The onepass
+and correcting algorithms run in O(n) time with constant space, compared
+to O(mn) for edit-distance dynamic programming.  For a 1 MB file with a
+1 KB change, Levenshtein requires ~10^12 operations; onepass finds the
 change in a single linear scan.
 
 ## Tuning parameters
