@@ -21,51 +21,68 @@ struct BufEntry {
 ///   and use tail correction (Section 5.1) to fix suboptimal earlier
 ///   encodings via an encoding lookback buffer (Section 5.2).
 /// Time: linear in practice. Space: O(q + buffer_capacity).
-/// Table must be large enough to hold all R seeds (Section 8, Table 1):
-///   q >= 2|R|/p avoids catastrophic collision (Section 8.1, p. 347).
+///
+/// Checkpointing (Section 8, pp. 347-349): the hash table has |C| = q
+///   entries (the user's memory budget).  The footprint modulus |F| ~ 2|R|
+///   controls which seeds enter the table: only seeds whose footprint
+///   satisfies f ≡ k (mod m) where m = ceil(|F|/|C|) are stored or
+///   looked up.  This gives ~|C|/2 occupied slots regardless of |R|.
+///   Backward extension (Section 5.1) recovers match starts that fall
+///   between checkpoint positions (Section 8.2, p. 349).
 pub fn diff_correcting(
     r: &[u8],
     v: &[u8],
     p: usize,
     q: usize,
     buf_cap: usize,
+    verbose: bool,
 ) -> Vec<Command> {
     let mut commands = Vec::new();
     if v.is_empty() {
         return commands;
     }
 
+    // Checkpointing (Section 8.1, pp. 347-348).
+    // |C| = q (hash table capacity, user's memory budget).
+    // |F| ~ 2|R| (footprint modulus) controls checkpoint density.
+    // m = ceil(|F|/|C|) is the checkpoint stride; only seeds whose
+    // footprint satisfies f % m == 0 enter the table.
+    // When |F| <= |C|, m = 1 and every seed is a checkpoint.
+    let cap = q; // |C|
+    let num_seeds = if r.len() >= p { r.len() - p + 1 } else { 0 };
+    let fp_mod = if num_seeds > 0 { next_prime(2 * num_seeds) } else { 1 }; // |F|
+    let m = std::cmp::max(1, (fp_mod + cap - 1) / cap); // ceil(|F|/|C|)
+    let k: u64 = 0;
+
+    if verbose {
+        let expected_fill = if m > 0 { num_seeds / m } else { 0 };
+        eprintln!(
+            "correcting: |C|={} |F|={} m={} k={}\n  \
+             checkpoint gap={} bytes, expected fill ~{} (~{}% table occupancy)\n  \
+             table memory ~{} MB",
+            cap, fp_mod, m, k,
+            m, expected_fill, if cap > 0 { 100 * expected_fill / cap } else { 0 },
+            cap * 24 / 1_048_576
+        );
+    }
+
     // Step (1): build hash table for R (first-found policy)
     // Slot stores (full_fingerprint, offset) for collision-free lookup.
-    let mut q = q;
-    let mut h_r: Vec<Option<(u64, usize)>> = vec![None; q];
+    let mut h_r: Vec<Option<(u64, usize)>> = vec![None; cap];
     if r.len() >= p {
         for a in 0..=(r.len() - p) {
             let fp = fingerprint(r, a, p);
-            let idx = (fp % q as u64) as usize;
+            let idx = if m <= 1 {
+                (fp % cap as u64) as usize
+            } else {
+                let f = fp % fp_mod as u64;
+                if f % m as u64 != k {
+                    continue;
+                }
+                (f / m as u64) as usize
+            };
             if h_r[idx].is_none() {
                 h_r[idx] = Some((fp, a));
-            }
-        }
-    }
-
-    // Auto-resize: Section 8.1 recommends q >= 2|R|/p for good compression.
-    // If the table is smaller than that, resize to the next prime >= 2|R|/p
-    // and rebuild.  With first-found policy the table is always fully
-    // occupied when |R| >> q, so a load-factor check would spiral; instead
-    // we jump directly to the paper's recommended size.
-    if r.len() >= p {
-        let num_seeds = r.len() - p + 1;
-        let recommended_q = 2 * num_seeds / p + 1;
-        if q < recommended_q {
-            q = next_prime(recommended_q);
-            h_r = vec![None; q];
-            for a in 0..=(r.len() - p) {
-                let fp = fingerprint(r, a, p);
-                let idx = (fp % q as u64) as usize;
-                if h_r[idx].is_none() {
-                    h_r[idx] = Some((fp, a));
-                }
             }
         }
     }
@@ -93,8 +110,17 @@ pub fn diff_correcting(
 
         let fp_v = fingerprint(v, v_c, p);
 
-        // Step (4): look up footprint in R's table
-        let idx = (fp_v % q as u64) as usize;
+        // Step (4): look up footprint in R's table (checkpoint filter)
+        let idx = if m <= 1 {
+            (fp_v % cap as u64) as usize
+        } else {
+            let f_v = fp_v % fp_mod as u64;
+            if f_v % m as u64 != k {
+                v_c += 1;
+                continue;
+            }
+            (f_v / m as u64) as usize
+        };
         let entry = h_r[idx];
         let r_cand = match entry {
             Some((stored_fp, offset)) if stored_fp == fp_v => {
@@ -244,5 +270,5 @@ pub fn diff_correcting(
 
 /// Convenience wrapper with default parameters.
 pub fn diff_correcting_default(r: &[u8], v: &[u8]) -> Vec<Command> {
-    diff_correcting(r, v, SEED_LEN, TABLE_SIZE, 256)
+    diff_correcting(r, v, SEED_LEN, TABLE_SIZE, 256, false)
 }

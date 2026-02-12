@@ -11,10 +11,17 @@ use crate::types::{Command, SEED_LEN, TABLE_SIZE};
 /// Time: O(np + q), space: O(q) — both constant for fixed p, q (Section 4.2).
 /// Suboptimal on transpositions: cannot match blocks that appear in
 /// different order between R and V (Section 4.3).
-pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize) -> Vec<Command> {
+pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool) -> Vec<Command> {
     let mut commands = Vec::new();
     if v.is_empty() {
         return commands;
+    }
+
+    if verbose {
+        eprintln!(
+            "onepass: hash table q={}, |R|={}, |V|={}, seed_len={}",
+            q, r.len(), v.len(), p
+        );
     }
 
     // Step (1): hash tables with version-based logical flushing.
@@ -148,5 +155,5 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize) -> Vec<Command> {
 
 /// Convenience wrapper with default parameters.
 pub fn diff_onepass_default(r: &[u8], v: &[u8]) -> Vec<Command> {
-    diff_onepass(r, v, SEED_LEN, TABLE_SIZE)
+    diff_onepass(r, v, SEED_LEN, TABLE_SIZE, false)
 }

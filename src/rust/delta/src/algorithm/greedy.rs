@@ -10,7 +10,7 @@ use crate::types::{Command, SEED_LEN, TABLE_SIZE};
 /// Uses a chained hash table (HashMap) storing ALL offsets in R per
 /// fingerprint (Section 3.1: hash table stores a chain of all matching offsets).
 /// Time: O(|V| * |R|) worst case. Space: O(|R|).
-pub fn diff_greedy(r: &[u8], v: &[u8], p: usize, _q: usize) -> Vec<Command> {
+pub fn diff_greedy(r: &[u8], v: &[u8], p: usize, _q: usize, _verbose: bool) -> Vec<Command> {
     let mut commands = Vec::new();
     if v.is_empty() {
         return commands;
@@ -94,5 +94,5 @@ pub fn diff_greedy(r: &[u8], v: &[u8], p: usize, _q: usize) -> Vec<Command> {
 
 /// Convenience wrapper with default parameters.
 pub fn diff_greedy_default(r: &[u8], v: &[u8]) -> Vec<Command> {
-    diff_greedy(r, v, SEED_LEN, TABLE_SIZE)
+    diff_greedy(r, v, SEED_LEN, TABLE_SIZE, false)
 }

@@ -739,29 +739,43 @@ class TestNextPrime(unittest.TestCase):
             p = np
 
 
-class TestAutoResize(unittest.TestCase):
-    """Correcting algorithm auto-resizes its hash table when overloaded."""
+class TestCheckpointing(unittest.TestCase):
+    """Correcting algorithm uses checkpointing (Section 8) for bounded memory."""
 
-    def test_tiny_table_still_works(self):
-        """With q=7, correcting must auto-resize to produce correct output."""
+    def test_tiny_table_roundtrip(self):
+        """With a tiny table (q=7), checkpointing still produces correct output."""
         R = b'ABCDEFGHIJKLMNOP' * 20   # 320 bytes
         V = R[:160] + b'XXXXYYYY' + R[160:]
         cmds = diff_correcting(R, V, p=16, q=7)
         recovered = apply_delta(R, cmds)
         self.assertEqual(recovered, V)
 
-    def test_resize_improves_compression(self):
-        """A resized table should find at least as many matches as a tiny one."""
+    def test_various_table_sizes(self):
+        """Correcting produces correct output across a range of table sizes."""
         random.seed(42)
         R = bytes(random.getrandbits(8) for _ in range(2000))
         V = R[:500] + bytes(random.getrandbits(8) for _ in range(50)) + R[500:]
-        cmds_tiny = diff_correcting(R, V, p=16, q=7)
-        cmds_big  = diff_correcting(R, V, p=16, q=1048573)
-        # Auto-resized tiny should match big table's quality
-        recovered_tiny = apply_delta(R, cmds_tiny)
-        recovered_big  = apply_delta(R, cmds_big)
-        self.assertEqual(recovered_tiny, V)
-        self.assertEqual(recovered_big, V)
+        for q in [7, 31, 101, 1009, TABLE_SIZE]:
+            cmds = diff_correcting(R, V, p=16, q=q)
+            recovered = apply_delta(R, cmds)
+            self.assertEqual(recovered, V, f"failed with q={q}")
+
+    def test_small_file_no_checkpointing(self):
+        """When |F| <= |C|, m=1 and all seeds are checkpoints (no filtering)."""
+        R = b'hello world, this is a test string!'
+        V = b'hello world, this is a new string!'
+        cmds = diff_correcting(R, V, p=4, q=TABLE_SIZE)
+        recovered = apply_delta(R, cmds)
+        self.assertEqual(recovered, V)
+
+    def test_checkpoint_long_matches(self):
+        """Checkpointing finds long matches even with tiny tables."""
+        # 10 KB of data with a 100-byte insertion in the middle
+        R = bytes(range(256)) * 40  # 10240 bytes
+        V = R[:5000] + b'X' * 100 + R[5000:]
+        cmds = diff_correcting(R, V, p=16, q=31)
+        recovered = apply_delta(R, cmds)
+        self.assertEqual(recovered, V)
 
 
 if __name__ == '__main__':

@@ -55,11 +55,11 @@ delta encode onepass old.bin new.bin delta.bin
 
 Near-optimal 1.5-pass algorithm.  Better than onepass when blocks
 have been rearranged or moved (e.g., function reordering in a binary).
-Uses a larger hash table to find matches across the whole reference.
+Uses checkpointing (Section 8) to work with a fixed-size hash table
+regardless of input size.
 
 ```bash
-# For large files, set --table-size to ~2x reference size
-delta encode correcting old.bin new.bin delta.bin --table-size 2000003
+delta encode correcting old.bin new.bin delta.bin
 ```
 
 ### greedy
@@ -119,41 +119,70 @@ delta encode onepass old.bin new.bin delta.bin --seed-len 32
 
 ### --table-size (default: 1048573)
 
-Hash table size.  Larger tables reduce collisions and find more matches,
-especially for the correcting algorithm.  For correcting on large files,
-set to approximately 2x the reference file size divided by seed length
-(Section 8.1).
+Hash table capacity.  For the correcting algorithm, this is the memory
+budget — checkpointing (see below) keeps the table at this fixed size
+regardless of input size.  Larger tables find shorter matches; smaller
+tables save memory.  The default (~25 MB) works well for most inputs.
 
 ```bash
-# 1 MB reference with 16-byte seeds: ~125K entries, use ~250K
-delta encode correcting old.bin new.bin delta.bin --table-size 250007
+# Smaller table — less memory, may miss short matches
+delta encode correcting old.bin new.bin delta.bin --table-size 25013
+
+# Larger table — more memory, finds shorter matches
+delta encode correcting old.bin new.bin delta.bin --table-size 8388593
 ```
 
-### Auto-resize (correcting algorithm)
+### Checkpointing (correcting algorithm)
 
-The correcting algorithm automatically checks whether its hash table is
-large enough after indexing the reference.  Section 8.1 of the JACM
-paper recommends q >= 2|R|/p for good compression.  If the table is
-smaller than that, the algorithm computes `next_prime(2|R|/p + 1)` and
-rebuilds the table at the new size.  This is a single resize — with
-first-found policy the table is always fully occupied when |R| >> q, so
-an iterative load-factor check would spiral.
+The correcting algorithm uses checkpointing (Ajtai et al. 2002,
+Section 8) to bound hash table memory regardless of reference size.
 
-Primality is tested using the Miller-Rabin probabilistic primality test
-(Rabin 1980) with 100 random witnesses drawn uniformly from [2, n-2).
-Each witness independently has at most a 1/4 probability of being a
-"liar" (falsely certifying a composite as prime), so 100 rounds give
-Pr[false positive] <= 4^{-100} < 10^{-60}.  Using random witnesses
-avoids the brittleness of fixed witness sets, which can be fooled by
-adversarially chosen composites — fixed witnesses are, to put it mildly,
-weak sauce.  Carmichael numbers (561, 1105, 1729, ...) pass the Fermat
-test for all bases coprime to n, but Miller-Rabin with random witnesses
-catches them reliably.
+Two parameters govern the hash table:
 
-By the prime number theorem the expected gap between primes near n is
-O(log n), so `next_prime` tests only a handful of odd candidates.  In
-practice this means you rarely need to set `--table-size` manually —
-the correcting algorithm will grow its table to fit the reference.
+- **|C|** = `--table-size` (default 1,048,573): the number of hash table
+  entries — the user's memory budget.  Each entry is ~24 bytes, so the
+  default uses ~25 MB.
+- **|F|** ≈ 2|R| (auto-computed): the footprint modulus.  Set to
+  `next_prime(2 * num_seeds)` for good distribution.
+
+The checkpoint stride is `m = ⌈|F|/|C|⌉`.  A seed is a **checkpoint
+seed** if its footprint `f = fingerprint mod |F|` satisfies `f ≡ 0
+(mod m)` (Section 8.1, Eq. 3).  Only checkpoint seeds are stored in or
+looked up from the hash table; all others are skipped.  This gives
+~|C|/2 occupied slots (~50% load factor) regardless of |R| (Section 8.1,
+p. 347: L · |C|/|F| ≈ |C|/2, hence |F| ≈ 2L).
+
+The checkpoint stride `m` equals the average spacing between checkpoint
+seeds.  Matching substrings shorter than ~m bytes may be missed because
+none of their seeds pass the checkpoint test.  Longer matches are found
+reliably: backward extension (Section 5.1) discovers the true start of
+the match even when it falls between checkpoint positions (Section 8.2,
+p. 349).
+
+For larger `--table-size`, `m` decreases and shorter matches are found,
+at the cost of more memory:
+
+```
+--table-size  |  Memory  |  Checkpoint gap (871 MB ref)
+   1,048,573  |   25 MB  |  ~1,663 bytes
+  10,000,000  |  240 MB  |  ~175 bytes
+ 100,000,000  |  2.4 GB  |  ~18 bytes
+```
+
+When the reference is small enough that |F| ≤ |C|, the stride is m=1 and
+every seed is a checkpoint — equivalent to direct indexing with no
+filtering overhead.
+
+The footprint modulus |F| is chosen as a prime using the Miller-Rabin
+probabilistic primality test (Rabin 1980) with 100 random witnesses
+drawn uniformly from [2, n-2).  Each witness independently has at most
+a 1/4 probability of being a "liar" (falsely certifying a composite as
+prime), so 100 rounds give Pr[false positive] ≤ 4^{-100} < 10^{-60}.
+Using random witnesses avoids the brittleness of fixed witness sets,
+which can be fooled by adversarially chosen composites — fixed witnesses
+are, to put it mildly, weak sauce.  Carmichael numbers (561, 1105,
+1729, ...) pass the Fermat test for all bases coprime to n, but
+Miller-Rabin with random witnesses catches them reliably.
 
 ## In-place mode
 

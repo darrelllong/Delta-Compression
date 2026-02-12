@@ -114,7 +114,7 @@ PlacedCommand = Union[PlacedCopy, PlacedAdd]
 
 SEED_LEN = 16
 TABLE_SIZE = 1048573  # hash table capacity (largest prime < 2^20)
-                      # Section 8.1: for correcting, q should be >= 2|R|/p
+                      # Section 8: correcting uses checkpointing to fit any |R|
 HASH_BASE = 263      # small prime, avoids b=256 which makes low bits depend only on last byte
 HASH_MOD = (1 << 61) - 1  # Mersenne prime 2^61-1: ~2.3 * 10^18
 
@@ -222,7 +222,8 @@ def _fp_to_index(fp: int, table_size: int) -> int:
 # ============================================================================
 
 def diff_greedy(R: bytes, V: bytes,
-                p: int = SEED_LEN, q: int = TABLE_SIZE) -> List[Command]:
+                p: int = SEED_LEN, q: int = TABLE_SIZE,
+                verbose: bool = False) -> List[Command]:
     commands: List[Command] = []
     if not V:
         return commands
@@ -295,10 +296,16 @@ def diff_greedy(R: bytes, V: bytes,
 # ============================================================================
 
 def diff_onepass(R: bytes, V: bytes,
-                 p: int = SEED_LEN, q: int = TABLE_SIZE) -> List[Command]:
+                 p: int = SEED_LEN, q: int = TABLE_SIZE,
+                 verbose: bool = False) -> List[Command]:
     commands: List[Command] = []
     if not V:
         return commands
+
+    if verbose:
+        print(f"onepass: hash table q={q:,}, |R|={len(R):,}, "
+              f"|V|={len(V):,}, seed_len={p}",
+              file=sys.stderr)
 
     # Step (1): hash tables with version-based logical flushing.
     # Each slot stores (full_fingerprint, offset, version).
@@ -412,8 +419,14 @@ def diff_onepass(R: bytes, V: bytes,
 #   and use tail correction (Section 5.1) to fix suboptimal earlier
 #   encodings via an encoding lookback buffer (Section 5.2).
 # Time: linear in practice.  Space: O(q + buffer_capacity).
-# Table must be large enough to hold all R seeds (Section 8, Table 1):
-#   q >= 2|R|/p avoids catastrophic collision (Section 8.1, p. 347).
+#
+# Checkpointing (Section 8, pp. 347-349): the hash table has |C| = q
+#   entries (the user's memory budget).  The footprint modulus |F| ~ 2|R|
+#   controls which seeds enter the table: only seeds whose footprint
+#   satisfies f ≡ k (mod m) where m = ceil(|F|/|C|) are stored or
+#   looked up.  This gives ~|C|/2 occupied slots regardless of |R|.
+#   Backward extension (Section 5.1) recovers match starts that fall
+#   between checkpoint positions (Section 8.2, p. 349).
 # ============================================================================
 
 @dataclass
@@ -427,35 +440,47 @@ class _BufEntry:
 
 def diff_correcting(R: bytes, V: bytes,
                     p: int = SEED_LEN, q: int = TABLE_SIZE,
-                    buf_cap: int = 256) -> List[Command]:
+                    buf_cap: int = 256,
+                    verbose: bool = False) -> List[Command]:
     commands: List[Command] = []
     if not V:
         return commands
 
+    # Checkpointing (Section 8.1, pp. 347-348).
+    # |C| = q (hash table capacity, user's memory budget).
+    # |F| ~ 2|R| (footprint modulus) controls checkpoint density.
+    # m = ceil(|F|/|C|) is the checkpoint stride; only seeds whose
+    # footprint satisfies f % m == 0 enter the table.
+    # When |R| is small enough that |F| <= |C|, m = 1 and every seed
+    # is a checkpoint (no filtering, same as direct indexing).
+    C = q
+    num_seeds = max(0, len(R) - p + 1)
+    F = _next_prime(2 * num_seeds) if num_seeds > 0 else 1
+    m = max(1, -(-F // C))  # ceiling division
+    k = 0
+
+    if verbose:
+        expected_fill = num_seeds // m if m > 0 else 0
+        print(f"correcting: |C|={C:,} |F|={F:,} m={m:,} k={k}"
+              f"\n  checkpoint gap={m:,} bytes, "
+              f"expected fill ~{expected_fill:,} (~{100*expected_fill//C if C else 0}% "
+              f"table occupancy)\n  table memory ~{C * 24 // 1048576} MB",
+              file=sys.stderr)
+
     # Step (1): build hash table for R (first-found policy)
     # Slot stores (full_fingerprint, offset) for collision-free lookup.
-    H_R: list = [None] * q
-    for a in range(max(0, len(R) - p + 1)):
+    H_R: list = [None] * C
+    for a in range(num_seeds):
         fp = _fingerprint(R, a, p)
-        idx = fp % q
+        if m <= 1:
+            idx = fp % C
+        else:
+            f = fp % F
+            if f % m != k:
+                continue
+            idx = f // m
         if H_R[idx] is None:
             H_R[idx] = (fp, a)
-
-    # Auto-resize: Section 8.1 recommends q >= 2|R|/p for good compression.
-    # If the table is smaller than that, resize to the next prime >= 2|R|/p
-    # and rebuild.  With first-found policy the table is always fully
-    # occupied when |R| >> q, so a load-factor check would spiral; instead
-    # we jump directly to the paper's recommended size.
-    num_seeds = max(0, len(R) - p + 1)
-    recommended_q = 2 * num_seeds // p + 1
-    if q < recommended_q:
-        q = _next_prime(recommended_q)
-        H_R = [None] * q
-        for a in range(num_seeds):
-            fp = _fingerprint(R, a, p)
-            idx = fp % q
-            if H_R[idx] is None:
-                H_R[idx] = (fp, a)
 
     # Encoding lookback buffer (Section 5.2)
     buf: List[_BufEntry] = []
@@ -484,8 +509,15 @@ def diff_correcting(R: bytes, V: bytes,
 
         fp_v = _fingerprint(V, v_c, p)
 
-        # Step (4): look up footprint in R's table
-        idx = fp_v % q
+        # Step (4): look up footprint in R's table (checkpoint filter)
+        if m <= 1:
+            idx = fp_v % C
+        else:
+            f_v = fp_v % F
+            if f_v % m != k:
+                v_c += 1
+                continue
+            idx = f_v // m
         entry = H_R[idx]
         if entry is None or entry[0] != fp_v:
             v_c += 1
@@ -1008,7 +1040,8 @@ def cmd_encode(args):
     algo = ALGORITHMS[args.algorithm]
     with mmap_open(args.reference) as R, mmap_open(args.version) as V:
         t0 = time.time()
-        commands = algo(R, V, p=args.seed_len, q=args.table_size)
+        commands = algo(R, V, p=args.seed_len, q=args.table_size,
+                        verbose=args.verbose)
 
         if args.inplace:
             placed = make_inplace(R, commands, policy=args.policy)
@@ -1097,6 +1130,8 @@ def main():
     enc.add_argument('--policy', choices=['localmin', 'constant'],
                      default='localmin',
                      help='Cycle-breaking policy for --inplace (default: localmin)')
+    enc.add_argument('--verbose', action='store_true',
+                     help='Print diagnostic messages to stderr')
     enc.set_defaults(func=cmd_encode)
 
     # decode

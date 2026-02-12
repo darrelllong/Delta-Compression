@@ -119,6 +119,10 @@ enum Commands {
         /// Cycle-breaking policy for --inplace
         #[arg(long, value_enum, default_value_t = PolicyArg::Localmin)]
         policy: PolicyArg,
+
+        /// Print diagnostic messages to stderr
+        #[arg(long)]
+        verbose: bool,
     },
 
     /// Reconstruct version from delta
@@ -155,6 +159,7 @@ fn main() {
             table_size,
             inplace,
             policy,
+            verbose,
         } => {
             let (_rf, r_mmap) = mmap_open(&reference).unwrap_or_else(|e| {
                 eprintln!("Error reading {}: {}", reference, e);
@@ -170,7 +175,7 @@ fn main() {
 
             let algo: Algorithm = algorithm.into();
             let t0 = Instant::now();
-            let commands = delta::diff(algo, r, v, seed_len, table_size);
+            let commands = delta::diff(algo, r, v, seed_len, table_size, verbose);
 
             let placed = if inplace {
                 let pol: CyclePolicy = policy.into();

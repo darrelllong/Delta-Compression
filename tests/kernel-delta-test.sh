@@ -101,13 +101,13 @@ for ALGO in onepass correcting; do
         DELTA_FILE="delta-${ALGO}-5.1.0-to-5.1.$i.delta"
         VER_BYTES=$(wc -c < "$VER" | tr -d ' ')
 
-        # Encode delta (the tool prints timing to stdout)
-        "$DELTA" encode "$ALGO" "$REF" "$VER" "$DELTA_FILE" > /dev/null 2>&1
+        # Encode delta; --verbose prints diagnostics to stderr on first run
+        "$DELTA" encode "$ALGO" "$REF" "$VER" "$DELTA_FILE" --verbose > /dev/null
 
         DELTA_BYTES=$(wc -c < "$DELTA_FILE" | tr -d ' ')
         RATIO=$(echo "scale=2; $DELTA_BYTES * 100 / $VER_BYTES" | bc)
 
-        # Time a fresh encode for the report
+        # Time a fresh encode for the report (quiet)
         T0=$(date +%s)
         "$DELTA" encode "$ALGO" "$REF" "$VER" "$DELTA_FILE" > /dev/null 2>&1
         T1=$(date +%s)

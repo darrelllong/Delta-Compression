@@ -11,15 +11,16 @@ pub fn diff(
     v: &[u8],
     p: usize,
     q: usize,
+    verbose: bool,
 ) -> Vec<Command> {
     match algorithm {
-        Algorithm::Greedy => greedy::diff_greedy(r, v, p, q),
-        Algorithm::Onepass => onepass::diff_onepass(r, v, p, q),
-        Algorithm::Correcting => correcting::diff_correcting(r, v, p, q, 256),
+        Algorithm::Greedy => greedy::diff_greedy(r, v, p, q, verbose),
+        Algorithm::Onepass => onepass::diff_onepass(r, v, p, q, verbose),
+        Algorithm::Correcting => correcting::diff_correcting(r, v, p, q, 256, verbose),
     }
 }
 
 /// Dispatch with default parameters.
 pub fn diff_default(algorithm: Algorithm, r: &[u8], v: &[u8]) -> Vec<Command> {
-    diff(algorithm, r, v, SEED_LEN, TABLE_SIZE)
+    diff(algorithm, r, v, SEED_LEN, TABLE_SIZE, false)
 }
