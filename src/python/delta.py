@@ -94,27 +94,79 @@ PlacedCommand = Union[PlacedCopy, PlacedAdd]
 
 
 # ============================================================================
-# Karp-Rabin Rolling Hash (Section 2.1.3)
+# Karp-Rabin Rolling Hash (Karp & Rabin 1987; Section 2.1.3)
 #
 # We use a polynomial hash with a large Mersenne prime (2^61 - 1) to make
 # collisions astronomically unlikely (~1 in 2^61 per comparison).  The full
 # 61-bit fingerprint is used for collision-free seed comparison; a separate
 # modular reduction maps fingerprints into the fixed-size hash table.
 #
-#   F(X_r) = (x_r * b^{p-1} + x_{r+1} * b^{p-2} + ... + x_{r+p-1}) mod Q
-#   F(X_{r+1}) = ((F(X_r) - x_r * b^{p-1}) * b + x_{r+p}) mod Q
+#   F(X_r) = (x_r * b^{p-1} + x_{r+1} * b^{p-2} + ... + x_{r+p-1}) mod Q  [Eq. 1]
+#   F(X_{r+1}) = ((F(X_r) - x_r * b^{p-1}) * b + x_{r+p}) mod Q           [Eq. 2]
 #
-# Parameters:
-#   p  = seed length (default 16 bytes, per Section 2.1.3)
+# Parameters (Section 2.1.3):
+#   p  = seed length (default 16 bytes, per Section 2.1.3 recommendation)
 #   Q  = 2^61 - 1 (Mersenne prime, for fingerprint computation)
-#   TABLE_SIZE = hash table capacity (separate from Q)
+#   q  = TABLE_SIZE = hash table capacity (separate from Q);
+#        for correcting, q should be >= 2|R|/p (Section 8.1, p. 347)
 #   b  = 263 (small prime base, better mixing than 256)
 # ============================================================================
 
 SEED_LEN = 16
-TABLE_SIZE = 65521   # hash table capacity (largest prime < 2^16)
+TABLE_SIZE = 1048573  # hash table capacity (largest prime < 2^20)
+                      # Section 8.1: for correcting, q should be >= 2|R|/p
 HASH_BASE = 263      # small prime, avoids b=256 which makes low bits depend only on last byte
 HASH_MOD = (1 << 61) - 1  # Mersenne prime 2^61-1: ~2.3 * 10^18
+
+# ── Primality testing (for hash table auto-sizing) ────────────────────────
+
+def _is_prime(n: int) -> bool:
+    """Deterministic Miller-Rabin primality test.
+
+    Correct for all n < 3.3 * 10^24 using the witness set
+    {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37}.
+    """
+    if n < 2:
+        return False
+    if n < 4:
+        return True
+    if n % 2 == 0:
+        return False
+    # Write n-1 = d * 2^r
+    d = n - 1
+    r = 0
+    while d % 2 == 0:
+        d //= 2
+        r += 1
+    for a in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37):
+        if a >= n:
+            continue
+        x = pow(a, d, n)
+        if x == 1 or x == n - 1:
+            continue
+        for _ in range(r - 1):
+            x = pow(x, 2, n)
+            if x == n - 1:
+                break
+        else:
+            return False
+    return True
+
+
+def _next_prime(n: int) -> int:
+    """Smallest prime >= n.
+
+    Searches odd candidates upward from n.  By the prime number theorem,
+    the expected gap is O(log n), so this terminates quickly.
+    """
+    if n <= 2:
+        return 2
+    if n % 2 == 0:
+        n += 1
+    while not _is_prime(n):
+        n += 2
+    return n
+
 
 # Precompute b^{p-1} mod Q for each seed length on first use
 _bp_cache: dict = {}
@@ -130,6 +182,9 @@ def _get_bp(p: int) -> int:
 def _fingerprint(data: bytes, offset: int, p: int, _q_unused: int = 0) -> int:
     """Compute 61-bit Karp-Rabin fingerprint of data[offset:offset+p].
 
+    Implements Eq. (1) from Section 2.1.3:
+      F(X_r) = (x_r * b^{p-1} + ... + x_{r+p-1}) mod Q
+
     The _q_unused parameter is accepted for API compatibility but ignored;
     the fingerprint is always computed mod 2^61-1.
     """
@@ -140,15 +195,17 @@ def _fingerprint(data: bytes, offset: int, p: int, _q_unused: int = 0) -> int:
 
 
 def _fp_to_index(fp: int, table_size: int) -> int:
-    """Map a full fingerprint to a hash table index."""
+    """Map a full fingerprint to a hash table index (F mod q, Section 2.1.3)."""
     return fp % table_size
 
 
 # ============================================================================
 # Greedy Algorithm (Section 3.1, Figure 2)
 #
-# Finds an optimal delta encoding under the simple cost measure.
-# Uses a chained hash table storing ALL offsets in R per footprint.
+# Finds an optimal delta encoding under the simple cost measure
+# (optimality proof: Section 3.3, Theorem 1).
+# Uses a chained hash table storing ALL offsets in R per footprint
+# (Section 3.1: hash table stores a chain of all matching offsets).
 # Time: O(|V| * |R|) worst case.  Space: O(|R|).
 # ============================================================================
 
@@ -216,9 +273,13 @@ def diff_greedy(R: bytes, V: bytes,
 # One-Pass Algorithm (Section 4.1, Figure 3)
 #
 # Scans R and V concurrently with two hash tables (one per string).
-# Each table stores at most one offset per footprint (retain-existing).
-# Hash tables are logically flushed after each match (next-match policy).
-# Time: O(n) where n = |R|+|V|.  Space: O(q) (constant).
+# Each table stores at most one offset per footprint (retain-existing
+# policy: first entry wins, later collisions are discarded).
+# Hash tables are logically flushed after each match via version counter
+# (next-match policy).
+# Time: O(np + q), space: O(q) — both constant for fixed p, q (Section 4.2).
+# Suboptimal on transpositions: cannot match blocks that appear in
+# different order between R and V (Section 4.3).
 # ============================================================================
 
 def diff_onepass(R: bytes, V: bytes,
@@ -331,11 +392,16 @@ def diff_onepass(R: bytes, V: bytes,
 # ============================================================================
 # Correcting 1.5-Pass Algorithm (Section 7, Figure 8)
 #
-# Pass 1: index the reference string (first-found policy, one entry per fp).
+# Pass 1: index the reference string using first-found policy (Section 6:
+#   first-found stores the first offset seen for each footprint, vs.
+#   onepass's retain-existing which keeps the earliest offset).
+#   Tables are never flushed — all of R is indexed before scanning V.
 # Pass 2: scan V, extend matches both forwards AND backwards from the seed,
-#          and use tail correction (Section 5.1) to fix suboptimal earlier
-#          encodings via an encoding lookback buffer.
+#   and use tail correction (Section 5.1) to fix suboptimal earlier
+#   encodings via an encoding lookback buffer (Section 5.2).
 # Time: linear in practice.  Space: O(q + buffer_capacity).
+# Table must be large enough to hold all R seeds (Section 8, Table 1):
+#   q >= 2|R|/p avoids catastrophic collision (Section 8.1, p. 347).
 # ============================================================================
 
 @dataclass
@@ -362,6 +428,21 @@ def diff_correcting(R: bytes, V: bytes,
         idx = fp % q
         if H_R[idx] is None:
             H_R[idx] = (fp, a)
+
+    # Auto-resize: if table is more than 75% full, seeds are being silently
+    # evicted.  Double the table size (+ 1) and search upward for the next
+    # prime, then rebuild.  One doubling drops load to ~37%, so the loop
+    # almost never iterates more than once.
+    occupied = sum(1 for slot in H_R if slot is not None)
+    while occupied * 4 > q * 3:
+        q = _next_prime(2 * q + 1)
+        H_R = [None] * q
+        for a in range(max(0, len(R) - p + 1)):
+            fp = _fingerprint(R, a, p)
+            idx = fp % q
+            if H_R[idx] is None:
+                H_R[idx] = (fp, a)
+        occupied = sum(1 for slot in H_R if slot is not None)
 
     # Encoding lookback buffer (Section 5.2)
     buf: List[_BufEntry] = []
@@ -667,10 +748,11 @@ def apply_binary(R: bytes, delta: bytes) -> bytes:
 # the new version is reconstructed in the same buffer that holds the
 # reference, without requiring scratch space.
 #
-# Algorithm (Section 4):
+# Algorithm:
 #   1. Annotate each command with its write offset in the output
-#   2. Build CRWI digraph on copy commands — edge from i to j when i's
-#      read interval overlaps j's write interval (i must execute before j)
+#   2. Build CRWI (Copy-Read/Write-Intersection) digraph on copy commands
+#      (Section 4.2) — edge from i to j when i's read interval overlaps
+#      j's write interval (i must execute before j)
 #   3. Topological sort; break cycles by converting copies to adds
 #   4. Output: copies in topological order, then all adds
 #

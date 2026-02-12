@@ -71,6 +71,21 @@ Use for small files or when compression ratio matters more than speed.
 delta encode greedy old.bin new.bin delta.bin
 ```
 
+## Differential compression vs. Levenshtein distance
+
+Levenshtein (edit) distance operates on individual symbols: it counts the
+minimum number of single-character insertions, deletions, and substitutions
+to transform one string into another, computed by an O(mn) dynamic
+programming algorithm.  Differential compression works at the block level:
+it finds long common substrings via fingerprinting and encodes the
+difference as a sequence of copy and add commands in O(n) time.
+
+The two solve different problems.  Edit distance produces a number — how
+similar are two strings?  Differential compression produces a compact
+encoding — a file that can reconstruct the new version from the old.  For
+a 1 MB file with a 1 KB change, Levenshtein requires ~10^12 operations;
+the onepass algorithm finds the change in a single linear scan.
+
 ## Tuning parameters
 
 ### --seed-len (default: 16)
@@ -86,16 +101,34 @@ delta encode onepass old.bin new.bin delta.bin --seed-len 8
 delta encode onepass old.bin new.bin delta.bin --seed-len 32
 ```
 
-### --table-size (default: 65521)
+### --table-size (default: 1048573)
 
 Hash table size.  Larger tables reduce collisions and find more matches,
 especially for the correcting algorithm.  For correcting on large files,
-set to approximately 2x the reference file size divided by seed length.
+set to approximately 2x the reference file size divided by seed length
+(Section 8.1).
 
 ```bash
 # 1 MB reference with 16-byte seeds: ~125K entries, use ~250K
 delta encode correcting old.bin new.bin delta.bin --table-size 250007
 ```
+
+### Auto-resize (correcting algorithm)
+
+The correcting algorithm automatically detects when its hash table is
+overloaded (> 75% full) after indexing the reference.  When this happens
+it doubles the table size, finds the next prime via a deterministic
+Miller-Rabin test, and rebuilds the table.  This repeats until load drops
+below 75% (one doubling is almost always sufficient).
+
+The prime search starts at `2q + 1` and tests odd candidates upward.
+By the prime number theorem the expected gap between primes near n is
+O(log n), so only a handful of candidates are tested.  Miller-Rabin with
+the witness set {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37} is
+deterministic for all n < 3.3 * 10^24.
+
+In practice this means you rarely need to set `--table-size` manually —
+the correcting algorithm will grow its table to fit the reference.
 
 ## In-place mode
 
@@ -203,7 +236,7 @@ let r: &[u8] = &reference_data;
 let v: &[u8] = &version_data;
 
 // Diff
-let commands = diff(Algorithm::Onepass, r, v, 16, 65521);
+let commands = diff(Algorithm::Onepass, r, v, 16, 1048573);
 
 // Standard binary delta
 let placed = place_commands(&commands);

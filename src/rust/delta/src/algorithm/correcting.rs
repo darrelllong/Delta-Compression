@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::hash::fingerprint;
+use crate::hash::{fingerprint, next_prime};
 use crate::types::{Command, SEED_LEN, TABLE_SIZE};
 
 /// Internal buffer entry tracking which region of V a command encodes.
@@ -13,11 +13,16 @@ struct BufEntry {
 
 /// Correcting 1.5-Pass algorithm (Section 7, Figure 8).
 ///
-/// Pass 1: index the reference string (first-found policy, one entry per fp).
+/// Pass 1: index the reference string using first-found policy (Section 6:
+///   first-found stores the first offset seen for each footprint, vs.
+///   onepass's retain-existing which keeps the earliest offset).
+///   Tables are never flushed — all of R is indexed before scanning V.
 /// Pass 2: scan V, extend matches both forwards AND backwards from the seed,
-///          and use tail correction (Section 5.1) to fix suboptimal earlier
-///          encodings via an encoding lookback buffer.
+///   and use tail correction (Section 5.1) to fix suboptimal earlier
+///   encodings via an encoding lookback buffer (Section 5.2).
 /// Time: linear in practice. Space: O(q + buffer_capacity).
+/// Table must be large enough to hold all R seeds (Section 8, Table 1):
+///   q >= 2|R|/p avoids catastrophic collision (Section 8.1, p. 347).
 pub fn diff_correcting(
     r: &[u8],
     v: &[u8],
@@ -32,6 +37,7 @@ pub fn diff_correcting(
 
     // Step (1): build hash table for R (first-found policy)
     // Slot stores (full_fingerprint, offset) for collision-free lookup.
+    let mut q = q;
     let mut h_r: Vec<Option<(u64, usize)>> = vec![None; q];
     if r.len() >= p {
         for a in 0..=(r.len() - p) {
@@ -40,6 +46,26 @@ pub fn diff_correcting(
             if h_r[idx].is_none() {
                 h_r[idx] = Some((fp, a));
             }
+        }
+    }
+
+    // Auto-resize: if table is more than 75% full, seeds are being silently
+    // evicted.  Double the table size (+ 1) and search upward for the next
+    // prime via Miller-Rabin, then rebuild.  One doubling drops load to ~37%,
+    // so the loop almost never iterates more than once.
+    if r.len() >= p {
+        let mut occupied = h_r.iter().filter(|s| s.is_some()).count();
+        while occupied * 4 > q * 3 {
+            q = next_prime(2 * q + 1);
+            h_r = vec![None; q];
+            for a in 0..=(r.len() - p) {
+                let fp = fingerprint(r, a, p);
+                let idx = (fp % q as u64) as usize;
+                if h_r[idx].is_none() {
+                    h_r[idx] = Some((fp, a));
+                }
+            }
+            occupied = h_r.iter().filter(|s| s.is_some()).count();
         }
     }
 

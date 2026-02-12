@@ -46,11 +46,13 @@ fn find_cycle(adj: &[Vec<usize>], removed: &[bool], n: usize) -> Option<Vec<usiz
 /// The returned commands can be applied to a buffer initialized with R
 /// to reconstruct V in-place, without a separate output buffer.
 ///
-/// Algorithm (Burns, Long, Stockmeyer, IEEE TKDE 2003, Section 4):
+/// Algorithm (Burns, Long, Stockmeyer, IEEE TKDE 2003):
 ///   1. Annotate each command with its write offset in the output
-///   2. Build CRWI digraph on copy commands — edge from i to j when i's
-///      read interval overlaps j's write interval (i must execute before j)
+///   2. Build CRWI (Copy-Read/Write-Intersection) digraph on copy commands
+///      (Section 4.2) — edge from i to j when i's read interval overlaps
+///      j's write interval (i must execute before j)
 ///   3. Topological sort; break cycles by converting copies to adds
+///      (cycle-breaking policies: Section 4.3)
 ///   4. Output: copies in topological order, then all adds
 pub fn make_inplace(
     r: &[u8],

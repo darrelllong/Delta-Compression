@@ -1,11 +1,20 @@
 use std::fmt;
 
 // ============================================================================
-// Constants
+// Constants (Ajtai, Burns, Fagin, Long — JACM 2002)
+//
+// Hash parameters (Section 2.1.3):
+//   p (SEED_LEN)  = minimum match length / fingerprint window
+//   b (HASH_BASE) = polynomial base for Karp-Rabin hash
+//   Q (HASH_MOD)  = Mersenne prime 2^61-1 for fingerprint arithmetic
+//   q (TABLE_SIZE) = hash table capacity; for correcting, q >= 2|R|/p
+//                    to avoid catastrophic collision (Section 8.1, p. 347)
+// Delta commands: Section 2.1.1
 // ============================================================================
 
 pub const SEED_LEN: usize = 16;
-pub const TABLE_SIZE: usize = 65521; // largest prime < 2^16
+pub const TABLE_SIZE: usize = 1048573; // largest prime < 2^20
+                                       // Section 8.1: for correcting, q should be >= 2|R|/p
 pub const HASH_BASE: u64 = 263;
 pub const HASH_MOD: u64 = (1 << 61) - 1; // Mersenne prime 2^61-1
 pub const DELTA_MAGIC: &[u8; 4] = b"DLT\x01";

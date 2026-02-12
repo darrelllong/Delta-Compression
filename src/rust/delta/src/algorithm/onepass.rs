@@ -4,9 +4,13 @@ use crate::types::{Command, SEED_LEN, TABLE_SIZE};
 /// One-Pass algorithm (Section 4.1, Figure 3).
 ///
 /// Scans R and V concurrently with two hash tables (one per string).
-/// Each table stores at most one offset per footprint (retain-existing).
-/// Hash tables are logically flushed after each match (next-match policy).
-/// Time: O(n) where n = |R|+|V|. Space: O(q) (constant).
+/// Each table stores at most one offset per footprint (retain-existing
+/// policy: first entry wins, later collisions are discarded).
+/// Hash tables are logically flushed after each match via version counter
+/// (next-match policy).
+/// Time: O(np + q), space: O(q) — both constant for fixed p, q (Section 4.2).
+/// Suboptimal on transpositions: cannot match blocks that appear in
+/// different order between R and V (Section 4.3).
 pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize) -> Vec<Command> {
     let mut commands = Vec::new();
     if v.is_empty() {

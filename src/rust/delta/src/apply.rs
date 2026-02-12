@@ -65,7 +65,7 @@ pub fn apply_placed_to(r: &[u8], commands: &[PlacedCommand], out: &mut [u8]) -> 
 
 /// Apply placed commands in-place within a single buffer.
 ///
-/// Uses `copy_within` (memmove) so overlapping src/dst is safe.
+/// Uses `copy_within` (maps to libc `memmove`) so overlapping src/dst is safe.
 pub fn apply_placed_inplace_to(commands: &[PlacedCommand], buf: &mut [u8]) {
     for cmd in commands {
         match cmd {
