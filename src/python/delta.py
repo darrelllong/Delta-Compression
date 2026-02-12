@@ -120,35 +120,47 @@ HASH_MOD = (1 << 61) - 1  # Mersenne prime 2^61-1: ~2.3 * 10^18
 
 # ── Primality testing (for hash table auto-sizing) ────────────────────────
 
-def _is_prime(n: int) -> bool:
-    """Deterministic Miller-Rabin primality test.
+from random import randrange as _uniform
 
-    Correct for all n < 3.3 * 10^24 using the witness set
-    {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37}.
-    """
-    if n < 2:
-        return False
-    if n < 4:
-        return True
-    if n % 2 == 0:
-        return False
-    # Write n-1 = d * 2^r
-    d = n - 1
+
+def _get_d_r(n: int) -> tuple:
+    """Factor n into d * 2^r, returning (d, r)."""
     r = 0
-    while d % 2 == 0:
-        d //= 2
+    while n % 2 == 0:
+        n //= 2
         r += 1
-    for a in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37):
-        if a >= n:
-            continue
-        x = pow(a, d, n)
-        if x == 1 or x == n - 1:
-            continue
-        for _ in range(r - 1):
-            x = pow(x, 2, n)
-            if x == n - 1:
-                break
-        else:
+    return (n, r)
+
+
+def _witness(a: int, n: int) -> bool:
+    """The witness loop of the Miller-Rabin probabilistic primality test.
+
+    Returns True if a is a witness to the compositeness of n (i.e., n is
+    definitely composite).  Returns False if a is a "liar" — n may be prime.
+    """
+    d, r = _get_d_r(n - 1)
+    x = pow(a, d, n)
+    for _ in range(r):
+        y = pow(x, 2, n)
+        if y == 1 and x != 1 and x != n - 1:
+            return True
+        x = y
+    return x != 1
+
+
+def _is_prime(n: int, k: int = 100) -> bool:
+    """Miller-Rabin probabilistic primality test with confidence k.
+
+    Pr[false positive] <= 4^{-k}.  With the default k = 100, the
+    probability of a composite being reported as prime is < 10^{-60}.
+    """
+    if n < 2 or (n != 2 and n % 2 == 0):
+        return False
+    if n == 2 or n == 3:
+        return True
+    for _ in range(k):
+        a = _uniform(2, n - 1)
+        if _witness(a, n):
             return False
     return True
 

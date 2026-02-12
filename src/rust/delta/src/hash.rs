@@ -109,8 +109,10 @@ impl RollingHash {
 
 // ── Primality testing (for hash table auto-sizing) ───────────────────────
 
+use rand::Rng;
+
 /// Modular exponentiation: base^exp mod modulus (uses u128 to avoid overflow).
-fn mod_pow(base: u64, mut exp: u64, modulus: u64) -> u64 {
+fn power_mod(base: u64, mut exp: u64, modulus: u64) -> u64 {
     if modulus == 1 {
         return 0;
     }
@@ -127,45 +129,55 @@ fn mod_pow(base: u64, mut exp: u64, modulus: u64) -> u64 {
     result as u64
 }
 
-/// Deterministic Miller-Rabin primality test.
-///
-/// Correct for all n < 3.3 * 10^24 using the witness set
-/// {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37}.
-pub fn is_prime(n: usize) -> bool {
-    let n = n as u64;
-    if n < 2 {
-        return false;
-    }
-    if n < 4 {
-        return true;
-    }
-    if n % 2 == 0 {
-        return false;
-    }
-    // Write n-1 = d * 2^r
-    let mut d = n - 1;
+/// Factor n into d * 2^r, returning (d, r).
+fn get_d_r(mut n: u64) -> (u64, u32) {
     let mut r: u32 = 0;
-    while d % 2 == 0 {
-        d /= 2;
+    while n % 2 == 0 {
+        n /= 2;
         r += 1;
     }
-    for &a in &[2u64, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37] {
-        if a >= n {
-            continue;
+    (n, r)
+}
+
+/// The witness loop of the Miller-Rabin probabilistic primality test.
+///
+/// Returns `true` if `a` is a witness to the compositeness of `n`
+/// (i.e., n is definitely composite).  Returns `false` if `a` is a
+/// "liar" — n may be prime.
+fn witness(a: u64, n: u64) -> bool {
+    let (d, r) = get_d_r(n - 1);
+    let mut x = power_mod(a, d, n);
+    for _ in 0..r {
+        let y = power_mod(x, 2, n);
+        if y == 1 && x != 1 && x != n - 1 {
+            return true;
         }
-        let mut x = mod_pow(a, d, n);
-        if x == 1 || x == n - 1 {
-            continue;
-        }
-        let mut composite = true;
-        for _ in 0..r - 1 {
-            x = mod_pow(x, 2, n);
-            if x == n - 1 {
-                composite = false;
-                break;
-            }
-        }
-        if composite {
+        x = y;
+    }
+    x != 1
+}
+
+/// Miller-Rabin probabilistic primality test with confidence `k`.
+///
+/// Pr[false positive] <= 4^{-k}.  With the default k = 100, the
+/// probability of a composite being reported as prime is < 10^{-60}.
+pub fn is_prime(n: usize) -> bool {
+    is_prime_mr(n, 100)
+}
+
+/// Miller-Rabin with explicit confidence parameter.
+pub fn is_prime_mr(n: usize, k: u32) -> bool {
+    let n = n as u64;
+    if n < 2 || (n != 2 && n % 2 == 0) {
+        return false;
+    }
+    if n == 2 || n == 3 {
+        return true;
+    }
+    let mut rng = rand::thread_rng();
+    for _ in 0..k {
+        let a = rng.gen_range(2..n - 1);
+        if witness(a, n) {
             return false;
         }
     }
