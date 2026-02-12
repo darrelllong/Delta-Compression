@@ -131,15 +131,13 @@ delta encode correcting old.bin new.bin delta.bin --table-size 250007
 
 ### Auto-resize (correcting algorithm)
 
-The correcting algorithm automatically detects when its hash table is
-overloaded (> 75% full) after indexing the reference.  When this happens
-it doubles the table size, finds the next prime via Miller-Rabin, and
-rebuilds the table.  This repeats until load drops below 75% (one
-doubling is almost always sufficient).
-
-The prime search starts at `2q + 1` and tests odd candidates upward.
-By the prime number theorem the expected gap between primes near n is
-O(log n), so only a handful of candidates are tested.
+The correcting algorithm automatically checks whether its hash table is
+large enough after indexing the reference.  Section 8.1 of the JACM
+paper recommends q >= 2|R|/p for good compression.  If the table is
+smaller than that, the algorithm computes `next_prime(2|R|/p + 1)` and
+rebuilds the table at the new size.  This is a single resize — with
+first-found policy the table is always fully occupied when |R| >> q, so
+an iterative load-factor check would spiral.
 
 Primality is tested using the Miller-Rabin probabilistic primality test
 (Rabin 1980) with 100 random witnesses drawn uniformly from [2, n-2).
@@ -152,7 +150,9 @@ weak sauce.  Carmichael numbers (561, 1105, 1729, ...) pass the Fermat
 test for all bases coprime to n, but Miller-Rabin with random witnesses
 catches them reliably.
 
-In practice this means you rarely need to set `--table-size` manually —
+By the prime number theorem the expected gap between primes near n is
+O(log n), so `next_prime` tests only a handful of odd candidates.  In
+practice this means you rarely need to set `--table-size` manually —
 the correcting algorithm will grow its table to fit the reference.
 
 ## In-place mode

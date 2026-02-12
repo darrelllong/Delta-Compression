@@ -441,20 +441,21 @@ def diff_correcting(R: bytes, V: bytes,
         if H_R[idx] is None:
             H_R[idx] = (fp, a)
 
-    # Auto-resize: if table is more than 75% full, seeds are being silently
-    # evicted.  Double the table size (+ 1) and search upward for the next
-    # prime, then rebuild.  One doubling drops load to ~37%, so the loop
-    # almost never iterates more than once.
-    occupied = sum(1 for slot in H_R if slot is not None)
-    while occupied * 4 > q * 3:
-        q = _next_prime(2 * q + 1)
+    # Auto-resize: Section 8.1 recommends q >= 2|R|/p for good compression.
+    # If the table is smaller than that, resize to the next prime >= 2|R|/p
+    # and rebuild.  With first-found policy the table is always fully
+    # occupied when |R| >> q, so a load-factor check would spiral; instead
+    # we jump directly to the paper's recommended size.
+    num_seeds = max(0, len(R) - p + 1)
+    recommended_q = 2 * num_seeds // p + 1
+    if q < recommended_q:
+        q = _next_prime(recommended_q)
         H_R = [None] * q
-        for a in range(max(0, len(R) - p + 1)):
+        for a in range(num_seeds):
             fp = _fingerprint(R, a, p)
             idx = fp % q
             if H_R[idx] is None:
                 H_R[idx] = (fp, a)
-        occupied = sum(1 for slot in H_R if slot is not None)
 
     # Encoding lookback buffer (Section 5.2)
     buf: List[_BufEntry] = []

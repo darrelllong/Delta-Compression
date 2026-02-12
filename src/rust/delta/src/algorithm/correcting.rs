@@ -49,14 +49,16 @@ pub fn diff_correcting(
         }
     }
 
-    // Auto-resize: if table is more than 75% full, seeds are being silently
-    // evicted.  Double the table size (+ 1) and search upward for the next
-    // prime via Miller-Rabin, then rebuild.  One doubling drops load to ~37%,
-    // so the loop almost never iterates more than once.
+    // Auto-resize: Section 8.1 recommends q >= 2|R|/p for good compression.
+    // If the table is smaller than that, resize to the next prime >= 2|R|/p
+    // and rebuild.  With first-found policy the table is always fully
+    // occupied when |R| >> q, so a load-factor check would spiral; instead
+    // we jump directly to the paper's recommended size.
     if r.len() >= p {
-        let mut occupied = h_r.iter().filter(|s| s.is_some()).count();
-        while occupied * 4 > q * 3 {
-            q = next_prime(2 * q + 1);
+        let num_seeds = r.len() - p + 1;
+        let recommended_q = 2 * num_seeds / p + 1;
+        if q < recommended_q {
+            q = next_prime(recommended_q);
             h_r = vec![None; q];
             for a in 0..=(r.len() - p) {
                 let fp = fingerprint(r, a, p);
@@ -65,7 +67,6 @@ pub fn diff_correcting(
                     h_r[idx] = Some((fp, a));
                 }
             }
-            occupied = h_r.iter().filter(|s| s.is_some()).count();
         }
     }
 
