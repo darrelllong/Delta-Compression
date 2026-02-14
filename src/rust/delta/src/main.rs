@@ -177,8 +177,8 @@ fn main() {
             let t0 = Instant::now();
             let commands = delta::diff(algo, r, v, seed_len, table_size, verbose);
 
+            let pol: CyclePolicy = policy.into();
             let placed = if inplace {
-                let pol: CyclePolicy = policy.into();
                 make_inplace(r, &commands, pol)
             } else {
                 place_commands(&commands)
@@ -199,7 +199,6 @@ fn main() {
             };
             let algo_name = format!("{:?}", algo).to_lowercase();
             if inplace {
-                let pol: CyclePolicy = policy.into();
                 let pol_name = format!("{:?}", pol).to_lowercase();
                 println!("Algorithm:    {} + in-place ({})", algo_name, pol_name);
             } else {

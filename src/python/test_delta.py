@@ -8,14 +8,13 @@ import random
 import unittest
 
 from delta import (
-    ALGORITHMS, TABLE_SIZE,
+    TABLE_SIZE,
     CopyCmd, AddCmd,
     PlacedCopy, PlacedAdd,
     diff_greedy, diff_onepass, diff_correcting,
     place_commands, encode_delta, decode_delta,
     apply_delta, apply_placed, apply_placed_inplace,
     is_inplace_delta,
-    delta_summary, placed_summary,
     make_inplace,
     _is_prime, _next_prime, _witness, _get_d_r,
 )
@@ -752,9 +751,9 @@ class TestCheckpointing(unittest.TestCase):
 
     def test_various_table_sizes(self):
         """Correcting produces correct output across a range of table sizes."""
-        random.seed(42)
-        R = bytes(random.getrandbits(8) for _ in range(2000))
-        V = R[:500] + bytes(random.getrandbits(8) for _ in range(50)) + R[500:]
+        rng = random.Random(42)
+        R = bytes(rng.getrandbits(8) for _ in range(2000))
+        V = R[:500] + bytes(rng.getrandbits(8) for _ in range(50)) + R[500:]
         for q in [7, 31, 101, 1009, TABLE_SIZE]:
             cmds = diff_correcting(R, V, p=16, q=q)
             recovered = apply_delta(R, cmds)

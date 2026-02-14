@@ -32,6 +32,7 @@ import time
 from collections import defaultdict, deque
 from contextlib import contextmanager
 from dataclasses import dataclass
+from random import randrange as _randrange
 from typing import List, Union
 
 
@@ -118,9 +119,7 @@ TABLE_SIZE = 1048573  # hash table capacity (largest prime < 2^20)
 HASH_BASE = 263      # small prime, avoids b=256 which makes low bits depend only on last byte
 HASH_MOD = (1 << 61) - 1  # Mersenne prime 2^61-1: ~2.3 * 10^18
 
-# ── Primality testing (for hash table auto-sizing) ────────────────────────
-
-from random import randrange as _uniform
+# ── Primality testing ─────────────────────────────────────────────────────
 
 
 def _get_d_r(n: int) -> tuple:
@@ -159,7 +158,7 @@ def _is_prime(n: int, k: int = 100) -> bool:
     if n == 2 or n == 3:
         return True
     for _ in range(k):
-        a = _uniform(2, n - 1)
+        a = _randrange(2, n - 1)
         if _witness(a, n):
             return False
     return True
@@ -191,14 +190,11 @@ def _get_bp(p: int) -> int:
     return _bp_cache[p]
 
 
-def _fingerprint(data: bytes, offset: int, p: int, _q_unused: int = 0) -> int:
+def _fingerprint(data: bytes, offset: int, p: int) -> int:
     """Compute 61-bit Karp-Rabin fingerprint of data[offset:offset+p].
 
     Implements Eq. (1) from Section 2.1.3:
       F(X_r) = (x_r * b^{p-1} + ... + x_{r+p-1}) mod Q
-
-    The _q_unused parameter is accepted for API compatibility but ignored;
-    the fingerprint is always computed mod 2^61-1.
     """
     h = 0
     for i in range(p):
@@ -224,6 +220,12 @@ def _fp_to_index(fp: int, table_size: int) -> int:
 def diff_greedy(R: bytes, V: bytes,
                 p: int = SEED_LEN, q: int = TABLE_SIZE,
                 verbose: bool = False) -> List[Command]:
+    """Greedy algorithm (Section 3.1, Figure 2).
+
+    Uses a chained hash table (Python dict) that stores ALL offsets per
+    footprint, so q and verbose are accepted for API consistency with
+    the other algorithms but have no effect.
+    """
     commands: List[Command] = []
     if not V:
         return commands
@@ -231,7 +233,7 @@ def diff_greedy(R: bytes, V: bytes,
     # Step (1): Build chained hash table for R
     H_R: dict = defaultdict(list)
     for a in range(max(0, len(R) - p + 1)):
-        fp = _fingerprint(R, a, p, q)
+        fp = _fingerprint(R, a, p)
         H_R[fp].append(a)
 
     # Step (2)
@@ -243,7 +245,7 @@ def diff_greedy(R: bytes, V: bytes,
         if v_c + p > len(V):
             break
 
-        fp_v = _fingerprint(V, v_c, p, q)
+        fp_v = _fingerprint(V, v_c, p)
 
         # Steps (4)+(5): find the longest matching substring among all
         # reference offsets that share this footprint.
@@ -300,9 +302,9 @@ def diff_onepass(R: bytes, V: bytes,
                  verbose: bool = False) -> List[Command]:
     """One-pass algorithm (Section 4.1, Figure 3).
 
-    The hash table is auto-sized to max(q, num_seeds // p) so that large
-    inputs get one slot per seed-length chunk of R.  TABLE_SIZE acts as a
-    floor for small files.
+    The hash table is auto-sized to next_prime(max(q, num_seeds // p)) so
+    that large inputs get one slot per seed-length chunk of R.  TABLE_SIZE
+    acts as a floor for small files.
     """
     commands: List[Command] = []
     if not V:
@@ -1140,7 +1142,8 @@ def mmap_create(path, size):
     Yields a writable mmap object (or empty bytearray for size=0).
     """
     if size == 0:
-        open(path, 'wb').close()
+        with open(path, 'wb'):
+            pass
         yield bytearray()
     else:
         with open(path, 'wb') as f:
@@ -1173,7 +1176,8 @@ def cmd_encode(args):
 
         delta = encode_delta(placed, inplace=args.inplace,
                              version_size=len(V))
-        open(args.delta, 'wb').write(delta)
+        with open(args.delta, 'wb') as f:
+            f.write(delta)
 
         stats = placed_summary(placed)
         ratio = len(delta) / len(V) if V else 0
@@ -1193,7 +1197,8 @@ def cmd_encode(args):
 
 def cmd_decode(args):
     with mmap_open(args.reference) as R:
-        delta_bytes = open(args.delta, 'rb').read()
+        with open(args.delta, 'rb') as f:
+            delta_bytes = f.read()
 
         t0 = time.time()
         placed, is_ip, version_size = decode_delta(delta_bytes)
@@ -1219,7 +1224,8 @@ def cmd_decode(args):
 
 
 def cmd_info(args):
-    delta_bytes = open(args.delta, 'rb').read()
+    with open(args.delta, 'rb') as f:
+        delta_bytes = f.read()
 
     placed, is_ip, version_size = decode_delta(delta_bytes)
     stats = placed_summary(placed)

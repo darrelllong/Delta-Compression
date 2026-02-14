@@ -57,7 +57,7 @@ for i in $(seq 0 3); do
         gunzip "$GZ"
     else
         echo "  $URL"
-        curl -sLO "$URL"
+        curl -sfLO "$URL"
         gunzip "$GZ"
     fi
 done

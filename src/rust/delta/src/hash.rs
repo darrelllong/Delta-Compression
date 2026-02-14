@@ -100,11 +100,6 @@ impl RollingHash {
         self.value = mod_mersenne(v as u128 * HASH_BASE as u128 + new_byte as u128);
     }
 
-    /// Seed length this rolling hash was initialized with.
-    #[inline]
-    pub fn seed_len(&self) -> usize {
-        self.p
-    }
 }
 
 // ── Primality testing (for hash table auto-sizing) ───────────────────────
