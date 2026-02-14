@@ -22,6 +22,20 @@ cargo build --release
 # Binary at target/release/delta
 ```
 
+### C++
+
+Requires a C++20 compiler (GCC 11+, Clang 14+, Apple Clang 15+) and CMake 3.20+.
+Catch2 v3 and CLI11 are fetched automatically.
+
+```bash
+cd src/cpp
+cmake -B build
+cmake --build build
+# Binary at build/delta
+# Run tests
+ctest --test-dir build
+```
+
 ## Basic usage
 
 Compute a delta between a reference file (old) and a version file (new),
@@ -33,6 +47,10 @@ python3 delta.py encode onepass old.bin new.bin delta.bin
 python3 delta.py decode old.bin delta.bin recovered.bin
 
 # Rust
+delta encode onepass old.bin new.bin delta.bin
+delta decode old.bin delta.bin recovered.bin
+
+# C++
 delta encode onepass old.bin new.bin delta.bin
 delta decode old.bin delta.bin recovered.bin
 
@@ -234,16 +252,20 @@ Output size:  5678 bytes
 
 ## Cross-language compatibility
 
-The Python and Rust implementations produce byte-identical delta files.
-You can encode with one and decode with the other.
+All three implementations (Python, Rust, C++) produce byte-identical
+delta files.  You can encode with any one and decode with any other.
 
 ```bash
 # Encode with Rust, decode with Python
 delta encode onepass old.bin new.bin delta.bin
 python3 delta.py decode old.bin delta.bin recovered.bin
 
-# Encode with Python, decode with Rust
+# Encode with Python, decode with C++
 python3 delta.py encode onepass old.bin new.bin delta.bin
+delta decode old.bin delta.bin recovered.bin
+
+# Encode with C++, decode with Rust (or any combination)
+delta encode onepass old.bin new.bin delta.bin
 delta decode old.bin delta.bin recovered.bin
 ```
 
@@ -311,6 +333,33 @@ let ip = make_inplace(r, &commands, CyclePolicy::Localmin);
 let ip_delta = encode_delta(&ip, true, v.len());
 ```
 
+### C++
+
+```cpp
+#include <delta/delta.h>
+
+using namespace delta;
+
+std::span<const uint8_t> r = reference_data;
+std::span<const uint8_t> v = version_data;
+
+// Diff (verbose=true prints hash table stats to stderr)
+auto commands = diff(Algorithm::Onepass, r, v, SEED_LEN, TABLE_SIZE, false);
+
+// Standard binary delta
+auto placed = place_commands(commands);
+auto delta_bytes = encode_delta(placed, false, v.size());
+
+// Decode and reconstruct
+auto [placed2, is_ip, version_size] = decode_delta(delta_bytes);
+std::vector<uint8_t> output(version_size, 0);
+apply_placed_to(r, placed2, output);
+
+// In-place delta
+auto ip = make_inplace(r, commands, CyclePolicy::Localmin);
+auto ip_delta = encode_delta(ip, true, v.size());
+```
+
 ## Running the tests
 
 ```bash
@@ -318,9 +367,14 @@ let ip_delta = encode_delta(&ip, true, v.len());
 cd src/python
 python3 -m unittest test_delta -v
 
-# Rust — 48 tests (13 unit + 35 integration)
+# Rust — 69 tests (16 unit + 53 integration)
 cd src/rust/delta
 cargo test
+
+# C++ — 46 tests (11 hash + 35 integration)
+cd src/cpp
+cmake -B build && cmake --build build
+ctest --test-dir build
 ```
 
 A kernel tarball benchmark (`tests/kernel-delta-test.sh`) exercises
