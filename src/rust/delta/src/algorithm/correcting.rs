@@ -11,24 +11,31 @@ struct BufEntry {
     dummy: bool,
 }
 
-/// Correcting 1.5-Pass algorithm (Section 7, Figure 8).
+/// Correcting 1.5-Pass algorithm (Section 7, Figure 8) with
+/// fingerprint-based checkpointing (Section 8).
 ///
-/// Pass 1: index the reference string using first-found policy (Section 6:
-///   first-found stores the first offset seen for each footprint, vs.
-///   onepass's retain-existing which keeps the earliest offset).
-///   Tables are never flushed — all of R is indexed before scanning V.
-/// Pass 2: scan V, extend matches both forwards AND backwards from the seed,
-///   and use tail correction (Section 5.1) to fix suboptimal earlier
-///   encodings via an encoding lookback buffer (Section 5.2).
-/// Time: linear in practice. Space: O(q + buffer_capacity).
+/// The hash table is auto-sized to max(q, 2 * num_seeds / p) so that
+/// checkpoint spacing m ≈ p, giving near-seed-granularity sampling.
+/// TABLE_SIZE acts as a floor for small files.
 ///
-/// Checkpointing (Section 8, pp. 347-349): the hash table has |C| = q
-///   entries (the user's memory budget).  The footprint modulus |F| ~ 2|R|
-///   controls which seeds enter the table: only seeds whose footprint
-///   satisfies f ≡ k (mod m) where m = ceil(|F|/|C|) are stored or
-///   looked up.  This gives ~|C|/2 occupied slots regardless of |R|.
-///   Backward extension (Section 5.1) recovers match starts that fall
-///   between checkpoint positions (Section 8.2, p. 349).
+/// |C| = q (hash table capacity, auto-sized from input).
+/// |F| = next_prime(2 * num_R_seeds) (footprint universe, Section 8.1,
+///       pp. 347-348: "|F| ≈ 2L").
+/// m  = ceil(|F| / |C|) (checkpoint spacing, p. 348).
+/// k  = checkpoint class (Eq. 3, p. 348).
+///
+/// A seed with fingerprint fp passes the checkpoint test iff
+///     (fp % |F|) % m == k.
+/// Its table index is (fp % |F|) / m  (p. 348: "i = floor(f/m)").
+///
+/// Step 1 (R pass): compute fingerprint at every R position, apply
+/// checkpoint filter, store first-found offset per slot.
+/// Steps 3-4 (V scan): compute fingerprint at every V position, apply
+/// checkpoint filter, look up matching R offset.
+/// Step 5: extend match both forwards and backwards (Section 7, p. 345).
+/// Step 6: encode with tail correction via lookback buffer (Section 5.1).
+/// Backward extension (Section 8.2, p. 349) recovers true match starts
+/// that fall between checkpoint positions.
 pub fn diff_correcting(
     r: &[u8],
     v: &[u8],
@@ -42,52 +49,99 @@ pub fn diff_correcting(
         return commands;
     }
 
-    // Checkpointing (Section 8.1, pp. 347-348).
-    // |C| = q (hash table capacity, user's memory budget).
-    // |F| ~ 2|R| (footprint modulus) controls checkpoint density.
-    // m = ceil(|F|/|C|) is the checkpoint stride; only seeds whose
-    // footprint satisfies f % m == 0 enter the table.
-    // When |F| <= |C|, m = 1 and every seed is a checkpoint.
-    let cap = q; // |C|
+    // ── Checkpointing parameters (Section 8.1, pp. 347-348) ─────────
     let num_seeds = if r.len() >= p { r.len() - p + 1 } else { 0 };
-    let fp_mod = if num_seeds > 0 { next_prime(2 * num_seeds) } else { 1 }; // |F|
-    let m = std::cmp::max(1, (fp_mod + cap - 1) / cap); // ceil(|F|/|C|)
-    let k: u64 = 0;
+    // Auto-size: 2x factor for correcting's |F|=2L convention.
+    let cap = if num_seeds > 0 {
+        next_prime(q.max(2 * num_seeds / p))
+    } else {
+        q
+    }; // |C|
+    let f_size: u64 = if num_seeds > 0 {
+        next_prime(2 * num_seeds) as u64 // |F|
+    } else {
+        1
+    };
+    let m: u64 = if f_size <= cap as u64 {
+        1
+    } else {
+        (f_size + cap as u64 - 1) / cap as u64 // ceil(|F| / |C|)
+    };
+    // Biased k (p. 348): pick a V offset, use its footprint mod m.
+    let k: u64 = if v.len() >= p {
+        let fp_k = fingerprint(v, v.len() / 2, p);
+        fp_k % f_size % m
+    } else {
+        0
+    };
 
     if verbose {
-        let expected_fill = if m > 0 { num_seeds / m } else { 0 };
+        let expected = if m > 0 { num_seeds as u64 / m } else { 0 };
+        let occ_est = if cap > 0 { expected * 100 / cap as u64 } else { 0 };
         eprintln!(
             "correcting: |C|={} |F|={} m={} k={}\n  \
              checkpoint gap={} bytes, expected fill ~{} (~{}% table occupancy)\n  \
              table memory ~{} MB",
-            cap, fp_mod, m, k,
-            m, expected_fill, if cap > 0 { 100 * expected_fill / cap } else { 0 },
+            cap, f_size, m, k,
+            m, expected, occ_est,
             cap * 24 / 1_048_576
         );
     }
 
-    // Step (1): build hash table for R (first-found policy)
-    // Slot stores (full_fingerprint, offset) for collision-free lookup.
+    // Debug counters
+    let mut dbg_build_passed: usize = 0;
+    let mut dbg_build_stored: usize = 0;
+    let mut dbg_build_skipped_collision: usize = 0;
+    let mut dbg_scan_checkpoints: usize = 0;
+    let mut dbg_scan_match: usize = 0;
+    let mut dbg_scan_fp_mismatch: usize = 0;
+    let mut dbg_scan_byte_mismatch: usize = 0;
+
+    // ── Step (1): Build hash table for R (first-found policy) ────────
+    // Scan every R position, apply checkpoint test (Eq. 3), store at
+    // index i = floor(f / m) where f = fp % |F|.  (Section 8.2, p. 349)
     let mut h_r: Vec<Option<(u64, usize)>> = vec![None; cap];
-    if r.len() >= p {
-        for a in 0..=(r.len() - p) {
-            let fp = fingerprint(r, a, p);
-            let idx = if m <= 1 {
-                (fp % cap as u64) as usize
-            } else {
-                let f = fp % fp_mod as u64;
-                if f % m as u64 != k {
-                    continue;
-                }
-                (f / m as u64) as usize
-            };
-            if h_r[idx].is_none() {
-                h_r[idx] = Some((fp, a));
-            }
+    for a in 0..num_seeds {
+        let fp = fingerprint(r, a, p);
+        let f = fp % f_size;
+        if f % m != k {
+            continue; // not a checkpoint seed
+        }
+        dbg_build_passed += 1;
+        let i = (f / m) as usize;
+        if i >= cap {
+            continue; // safety
+        }
+        if h_r[i].is_none() {
+            h_r[i] = Some((fp, a)); // first-found (Section 7 Step 1)
+            dbg_build_stored += 1;
+        } else {
+            dbg_build_skipped_collision += 1;
         }
     }
 
-    // Encoding lookback buffer (Section 5.2)
+    if verbose {
+        let passed_pct = if num_seeds > 0 {
+            dbg_build_passed as f64 / num_seeds as f64 * 100.0
+        } else {
+            0.0
+        };
+        let occ_pct = if cap > 0 {
+            dbg_build_stored as f64 / cap as f64 * 100.0
+        } else {
+            0.0
+        };
+        eprintln!(
+            "  build: {} seeds, {} passed checkpoint ({:.2}%), \
+             {} stored, {} collisions\n  \
+             build: table occupancy {}/{} ({:.1}%)",
+            num_seeds, dbg_build_passed, passed_pct,
+            dbg_build_stored, dbg_build_skipped_collision,
+            dbg_build_stored, cap, occ_pct
+        );
+    }
+
+    // ── Encoding lookback buffer (Section 5.2) ───────────────────────
     let mut buf: VecDeque<BufEntry> = VecDeque::new();
 
     let flush_buf = |buf: &mut VecDeque<BufEntry>, commands: &mut Vec<Command>| {
@@ -98,7 +152,7 @@ pub fn diff_correcting(
         }
     };
 
-    // Step (2)
+    // ── Step (2) ─────────────────────────────────────────────────────
     let mut v_c: usize = 0;
     let mut v_s: usize = 0;
 
@@ -108,56 +162,68 @@ pub fn diff_correcting(
             break;
         }
 
+        // Step (4): generate footprint at v_c, apply checkpoint test.
         let fp_v = fingerprint(v, v_c, p);
+        let f_v = fp_v % f_size;
+        if f_v % m != k {
+            v_c += 1;
+            continue; // not a checkpoint — skip
+        }
 
-        // Step (4): look up footprint in R's table (checkpoint filter)
-        let idx = if m <= 1 {
-            (fp_v % cap as u64) as usize
-        } else {
-            let f_v = fp_v % fp_mod as u64;
-            if f_v % m as u64 != k {
-                v_c += 1;
-                continue;
-            }
-            (f_v / m as u64) as usize
-        };
-        let entry = h_r[idx];
-        let r_cand = match entry {
+        // Checkpoint passed — look up H_R at index i = floor(f/m).
+        dbg_scan_checkpoints += 1;
+        let i = (f_v / m) as usize;
+        if i >= cap {
+            v_c += 1;
+            continue;
+        }
+
+        let r_offset = match h_r[i] {
             Some((stored_fp, offset)) if stored_fp == fp_v => {
+                // Full fingerprint matches — verify bytes.
                 if r[offset..offset + p] != v[v_c..v_c + p] {
+                    dbg_scan_byte_mismatch += 1;
                     v_c += 1;
                     continue;
                 }
+                dbg_scan_match += 1;
                 offset
             }
-            _ => {
+            Some(_) => {
+                dbg_scan_fp_mismatch += 1;
+                v_c += 1;
+                continue;
+            }
+            None => {
                 v_c += 1;
                 continue;
             }
         };
 
-        // Step (5): extend match forwards and backwards
+        // ── Step (5): extend match forwards and backwards ────────
+        // (Section 7, Step 5; Section 8.2 backward extension, p. 349)
         let mut fwd = p;
-        while v_c + fwd < v.len() && r_cand + fwd < r.len() && v[v_c + fwd] == r[r_cand + fwd] {
+        while v_c + fwd < v.len() && r_offset + fwd < r.len() && v[v_c + fwd] == r[r_offset + fwd]
+        {
             fwd += 1;
         }
 
         let mut bwd: usize = 0;
         while v_c >= bwd + 1
-            && r_cand >= bwd + 1
-            && v[v_c - bwd - 1] == r[r_cand - bwd - 1]
+            && r_offset >= bwd + 1
+            && v[v_c - bwd - 1] == r[r_offset - bwd - 1]
         {
             bwd += 1;
         }
 
         let v_m = v_c - bwd;
-        let r_m = r_cand - bwd;
+        let r_m = r_offset - bwd;
         let ml = bwd + fwd;
         let match_end = v_m + ml;
 
-        // Step (6): encode with correction
+        // ── Step (6): encode with correction ─────────────────────
         if v_s <= v_m {
-            // (6a) match is entirely in unencoded suffix
+            // (6a) match is entirely in unencoded suffix (Section 7)
             if v_s < v_m {
                 if buf.len() >= buf_cap {
                     let oldest = buf.pop_front().unwrap();
@@ -191,7 +257,8 @@ pub fn diff_correcting(
             });
             v_s = match_end;
         } else {
-            // (6b) match extends backward into encoded prefix — tail correction
+            // (6b) match extends backward into encoded prefix —
+            // tail correction (Section 5.1, p. 339)
             let mut effective_start = v_s;
 
             while let Some(tail) = buf.back() {
@@ -212,7 +279,6 @@ pub fn diff_correcting(
                         // Partial add — trim to [v_start, v_m)
                         let keep = v_m - tail.v_start;
                         if keep > 0 {
-                            // Need to modify the back entry
                             let back = buf.back_mut().unwrap();
                             back.cmd = Command::Add {
                                 data: v[back.v_start..v_m].to_vec(),
@@ -257,12 +323,60 @@ pub fn diff_correcting(
         v_c = match_end;
     }
 
-    // Step (8)
+    // ── Step (8) ─────────────────────────────────────────────────────
     flush_buf(&mut buf, &mut commands);
     if v_s < v.len() {
         commands.push(Command::Add {
             data: v[v_s..].to_vec(),
         });
+    }
+
+    if verbose {
+        let mut total_copy: usize = 0;
+        let mut total_add: usize = 0;
+        let mut num_copies: usize = 0;
+        let mut num_adds: usize = 0;
+        for cmd in &commands {
+            match cmd {
+                Command::Copy { length, .. } => {
+                    total_copy += length;
+                    num_copies += 1;
+                }
+                Command::Add { data } => {
+                    total_add += data.len();
+                    num_adds += 1;
+                }
+            }
+        }
+        let v_seeds = if v.len() >= p { v.len() - p + 1 } else { 0 };
+        let cp_pct = if v_seeds > 0 {
+            dbg_scan_checkpoints as f64 / v_seeds as f64 * 100.0
+        } else {
+            0.0
+        };
+        let hit_pct = if dbg_scan_checkpoints > 0 {
+            dbg_scan_match as f64 / dbg_scan_checkpoints as f64 * 100.0
+        } else {
+            0.0
+        };
+        let total_out = total_copy + total_add;
+        let copy_pct = if total_out > 0 {
+            total_copy as f64 / total_out as f64 * 100.0
+        } else {
+            0.0
+        };
+        eprintln!(
+            "  scan: {} V positions, {} checkpoints ({:.3}%), {} matches\n  \
+             scan: hit rate {:.1}% (of checkpoints), \
+             fp collisions {}, byte mismatches {}",
+            v_seeds, dbg_scan_checkpoints, cp_pct, dbg_scan_match,
+            hit_pct, dbg_scan_fp_mismatch, dbg_scan_byte_mismatch
+        );
+        eprintln!(
+            "  result: {} copies ({} bytes), {} adds ({} bytes)\n  \
+             result: copy coverage {:.1}%, output {} bytes",
+            num_copies, total_copy, num_adds, total_add, copy_pct, total_out
+        );
     }
 
     commands

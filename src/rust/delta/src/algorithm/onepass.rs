@@ -1,4 +1,4 @@
-use crate::hash::fingerprint;
+use crate::hash::{fingerprint, next_prime};
 use crate::types::{Command, SEED_LEN, TABLE_SIZE};
 
 /// One-Pass algorithm (Section 4.1, Figure 3).
@@ -11,11 +11,19 @@ use crate::types::{Command, SEED_LEN, TABLE_SIZE};
 /// Time: O(np + q), space: O(q) — both constant for fixed p, q (Section 4.2).
 /// Suboptimal on transpositions: cannot match blocks that appear in
 /// different order between R and V (Section 4.3).
+///
+/// The hash table is auto-sized to max(q, num_seeds / p) so that large
+/// inputs get one slot per seed-length chunk of R.  TABLE_SIZE acts as a
+/// floor for small files.
 pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool) -> Vec<Command> {
     let mut commands = Vec::new();
     if v.is_empty() {
         return commands;
     }
+
+    // Auto-size hash table: one slot per p-byte chunk of R (floor = q).
+    let num_seeds = if r.len() >= p { r.len() - p + 1 } else { 0 };
+    let q = next_prime(q.max(num_seeds / p));
 
     if verbose {
         eprintln!(
@@ -29,6 +37,11 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool) -> Ve
     let mut h_v: Vec<Option<(u64, usize, u64)>> = vec![None; q];
     let mut h_r: Vec<Option<(u64, usize, u64)>> = vec![None; q];
     let mut ver: u64 = 0;
+
+    // Debug counters (verbose mode only)
+    let mut dbg_positions: usize = 0;
+    let mut dbg_lookups: usize = 0;
+    let mut dbg_matches: usize = 0;
 
     // Inline table access functions to avoid borrow issues
     #[inline]
@@ -66,6 +79,7 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool) -> Ve
         if !can_v && !can_r {
             break;
         }
+        dbg_positions += 1;
 
         let fp_v = if can_v {
             Some(fingerprint(v, v_c, p))
@@ -93,6 +107,7 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool) -> Ve
 
         if let Some(fp) = fp_r {
             if let Some(v_cand) = hget(&h_v, fp, q, ver) {
+                dbg_lookups += 1;
                 if r[r_c..r_c + p] == v[v_cand..v_cand + p] {
                     r_m = r_c;
                     v_m = v_cand;
@@ -104,6 +119,7 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool) -> Ve
         if !match_found {
             if let Some(fp) = fp_v {
                 if let Some(r_cand) = hget(&h_r, fp, q, ver) {
+                    dbg_lookups += 1;
                     if v[v_c..v_c + p] == r[r_cand..r_cand + p] {
                         v_m = v_c;
                         r_m = r_cand;
@@ -118,6 +134,7 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool) -> Ve
             r_c += 1;
             continue;
         }
+        dbg_matches += 1;
 
         // Step (5): extend match forward
         let mut ml: usize = 0;
@@ -148,6 +165,33 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool) -> Ve
         commands.push(Command::Add {
             data: v[v_s..].to_vec(),
         });
+    }
+
+    if verbose {
+        let mut total_copy: usize = 0;
+        let mut total_add: usize = 0;
+        let mut num_copies: usize = 0;
+        let mut num_adds: usize = 0;
+        for cmd in &commands {
+            match cmd {
+                Command::Copy { length, .. } => { total_copy += length; num_copies += 1; }
+                Command::Add { data } => { total_add += data.len(); num_adds += 1; }
+            }
+        }
+        let hit_pct = if dbg_lookups > 0 { dbg_matches as f64 / dbg_lookups as f64 * 100.0 } else { 0.0 };
+        let total_out = total_copy + total_add;
+        let copy_pct = if total_out > 0 { total_copy as f64 / total_out as f64 * 100.0 } else { 0.0 };
+        eprintln!(
+            "  scan: {} positions, {} lookups, {} matches (flushes)\n  \
+             scan: hit rate {:.1}% (of lookups)",
+            dbg_positions, dbg_lookups, dbg_matches, hit_pct
+        );
+        eprintln!(
+            "  result: {} copies ({} bytes), {} adds ({} bytes)\n  \
+             result: copy coverage {:.1}%, output {} bytes",
+            num_copies, total_copy, num_adds, total_add,
+            copy_pct, total_out
+        );
     }
 
     commands

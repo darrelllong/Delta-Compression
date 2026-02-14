@@ -298,9 +298,19 @@ def diff_greedy(R: bytes, V: bytes,
 def diff_onepass(R: bytes, V: bytes,
                  p: int = SEED_LEN, q: int = TABLE_SIZE,
                  verbose: bool = False) -> List[Command]:
+    """One-pass algorithm (Section 4.1, Figure 3).
+
+    The hash table is auto-sized to max(q, num_seeds // p) so that large
+    inputs get one slot per seed-length chunk of R.  TABLE_SIZE acts as a
+    floor for small files.
+    """
     commands: List[Command] = []
     if not V:
         return commands
+
+    # Auto-size hash table: one slot per p-byte chunk of R (floor = q).
+    num_seeds = max(0, len(R) - p + 1)
+    q = _next_prime(max(q, num_seeds // p))
 
     if verbose:
         print(f"onepass: hash table q={q:,}, |R|={len(R):,}, "
@@ -345,6 +355,9 @@ def diff_onepass(R: bytes, V: bytes,
     r_c = 0
     v_c = 0
     v_s = 0
+    dbg_positions = 0
+    dbg_lookups = 0
+    dbg_matches = 0
 
     while True:
         # Step (3)
@@ -353,6 +366,7 @@ def diff_onepass(R: bytes, V: bytes,
 
         if not can_v and not can_r:
             break
+        dbg_positions += 1
 
         fp_v = _fingerprint(V, v_c, p) if can_v else None
         fp_r = _fingerprint(R, r_c, p) if can_r else None
@@ -369,20 +383,25 @@ def diff_onepass(R: bytes, V: bytes,
 
         if fp_r is not None:
             v_cand = hv_get(fp_r)
-            if v_cand is not None and R[r_c:r_c + p] == V[v_cand:v_cand + p]:
-                r_m, v_m = r_c, v_cand
-                match_found = True
+            if v_cand is not None:
+                dbg_lookups += 1
+                if R[r_c:r_c + p] == V[v_cand:v_cand + p]:
+                    r_m, v_m = r_c, v_cand
+                    match_found = True
 
         if not match_found and fp_v is not None:
             r_cand = hr_get(fp_v)
-            if r_cand is not None and V[v_c:v_c + p] == R[r_cand:r_cand + p]:
-                v_m, r_m = v_c, r_cand
-                match_found = True
+            if r_cand is not None:
+                dbg_lookups += 1
+                if V[v_c:v_c + p] == R[r_cand:r_cand + p]:
+                    v_m, r_m = v_c, r_cand
+                    match_found = True
 
         if not match_found:
             v_c += 1
             r_c += 1
             continue
+        dbg_matches += 1
 
         # Step (5): extend match forward
         ml = 0
@@ -404,6 +423,23 @@ def diff_onepass(R: bytes, V: bytes,
     # Step (8)
     if v_s < len(V):
         commands.append(AddCmd(data=V[v_s:]))
+
+    if verbose:
+        total_copy = sum(c.length for c in commands if isinstance(c, CopyCmd))
+        total_add = sum(len(c.data) for c in commands if isinstance(c, AddCmd))
+        num_copies = sum(1 for c in commands if isinstance(c, CopyCmd))
+        num_adds = sum(1 for c in commands if isinstance(c, AddCmd))
+        hit_pct = dbg_matches / dbg_lookups * 100 if dbg_lookups else 0
+        total_out = total_copy + total_add
+        copy_pct = total_copy / total_out * 100 if total_out else 0
+        print(f"  scan: {dbg_positions:,} positions, {dbg_lookups:,} lookups, "
+              f"{dbg_matches:,} matches (flushes)\n"
+              f"  scan: hit rate {hit_pct:.1f}% (of lookups)",
+              file=sys.stderr)
+        print(f"  result: {num_copies:,} copies ({total_copy:,} bytes), "
+              f"{num_adds:,} adds ({total_add:,} bytes)\n"
+              f"  result: copy coverage {copy_pct:.1f}%, output {total_out:,} bytes",
+              file=sys.stderr)
 
     return commands
 
@@ -442,47 +478,96 @@ def diff_correcting(R: bytes, V: bytes,
                     p: int = SEED_LEN, q: int = TABLE_SIZE,
                     buf_cap: int = 256,
                     verbose: bool = False) -> List[Command]:
+    """Correcting 1.5-pass algorithm (Section 7, Figure 8) with
+    fingerprint-based checkpointing (Section 8).
+
+    The hash table is auto-sized to max(q, 2 * num_seeds // p) so that
+    checkpoint spacing m ≈ p, giving near-seed-granularity sampling.
+    TABLE_SIZE acts as a floor for small files.
+
+    |C| = q (hash table capacity, auto-sized from input).
+    |F| = next_prime(2 * num_R_seeds) (footprint universe size, Section 8.1,
+          p. 347-348: "|F| ≈ 2L" so that ~|C|/2 checkpoint seeds from R
+          occupy the table).
+    m  = ceil(|F| / |C|) (checkpoint spacing, p. 348).
+    k  = checkpoint class (Eq. 3, p. 348).
+
+    A seed with fingerprint fp passes the checkpoint test iff
+        (fp % |F|) % m == k.
+    Its table index is (fp % |F|) // m  (p. 348: "i = floor(f/m)").
+
+    Step 1 (R pass): compute fingerprint at every R position, apply
+    checkpoint filter, store first-found offset per slot.
+    Steps 3-4 (V scan): compute fingerprint at every V position, apply
+    checkpoint filter, look up matching R offset.
+    Step 5: extend match both forwards and backwards (Section 7, p. 345).
+    Step 6: encode with tail correction via lookback buffer (Section 5.1).
+    Backward extension (Section 8.2, p. 349) recovers true match starts
+    that fall between checkpoint positions.
+    """
     commands: List[Command] = []
     if not V:
         return commands
 
-    # Checkpointing (Section 8.1, pp. 347-348).
-    # |C| = q (hash table capacity, user's memory budget).
-    # |F| ~ 2|R| (footprint modulus) controls checkpoint density.
-    # m = ceil(|F|/|C|) is the checkpoint stride; only seeds whose
-    # footprint satisfies f % m == 0 enter the table.
-    # When |R| is small enough that |F| <= |C|, m = 1 and every seed
-    # is a checkpoint (no filtering, same as direct indexing).
-    C = q
+    # ── Checkpointing parameters (Section 8.1, pp. 347-348) ──────────
     num_seeds = max(0, len(R) - p + 1)
-    F = _next_prime(2 * num_seeds) if num_seeds > 0 else 1
-    m = max(1, -(-F // C))  # ceiling division
-    k = 0
+    # Auto-size: 2x factor for correcting's |F|=2L convention.
+    q = _next_prime(max(q, 2 * num_seeds // p))
+    C = q                                                # |C|
+    F = _next_prime(2 * num_seeds) if num_seeds > 0 else 1  # |F|
+    m = max(1, -(-F // C))                               # ceil(|F| / |C|)
+    # Biased k (p. 348): pick a V offset, use its footprint mod m.
+    # This biases checkpoints toward footprints common in V.
+    if len(V) >= p:
+        k = _fingerprint(V, len(V) // 2, p) % F % m
+    else:
+        k = 0
 
     if verbose:
-        expected_fill = num_seeds // m if m > 0 else 0
-        print(f"correcting: |C|={C:,} |F|={F:,} m={m:,} k={k}"
-              f"\n  checkpoint gap={m:,} bytes, "
-              f"expected fill ~{expected_fill:,} (~{100*expected_fill//C if C else 0}% "
-              f"table occupancy)\n  table memory ~{C * 24 // 1048576} MB",
+        expected = num_seeds // m if m > 0 else 0
+        print(f"correcting: |C|={C} |F|={F} m={m} k={k}\n"
+              f"  checkpoint gap={m} bytes, "
+              f"expected fill ~{expected} "
+              f"(~{expected * 100 // C if C else 0}% table occupancy)\n"
+              f"  table memory ~{C * 24 // 1048576} MB",
               file=sys.stderr)
 
-    # Step (1): build hash table for R (first-found policy)
-    # Slot stores (full_fingerprint, offset) for collision-free lookup.
+    # Debug counters (verbose mode only)
+    dbg_build_passed = 0
+    dbg_build_stored = 0
+    dbg_build_skip_coll = 0
+    dbg_scan_checkpoints = 0
+    dbg_scan_match = 0
+    dbg_scan_fp_miss = 0
+    dbg_scan_byte_miss = 0
+
+    # ── Step (1): Build hash table for R (first-found policy) ─────────
+    # Scan every R position, apply checkpoint test (Eq. 3), store at
+    # index i = floor(f / m) where f = fp % |F|.  (Section 8.2, p. 349)
     H_R: list = [None] * C
     for a in range(num_seeds):
         fp = _fingerprint(R, a, p)
-        if m <= 1:
-            idx = fp % C
+        f = fp % F
+        if f % m != k:
+            continue                     # not a checkpoint seed
+        dbg_build_passed += 1
+        i = f // m
+        if H_R[i] is None:
+            H_R[i] = (fp, a)            # first-found (Section 7 Step 1)
+            dbg_build_stored += 1
         else:
-            f = fp % F
-            if f % m != k:
-                continue
-            idx = f // m
-        if H_R[idx] is None:
-            H_R[idx] = (fp, a)
+            dbg_build_skip_coll += 1
 
-    # Encoding lookback buffer (Section 5.2)
+    if verbose:
+        passed_pct = dbg_build_passed / num_seeds * 100 if num_seeds else 0
+        occ_pct = dbg_build_stored / C * 100 if C else 0
+        print(f"  build: {num_seeds} seeds, {dbg_build_passed} passed "
+              f"checkpoint ({passed_pct:.2f}%), "
+              f"{dbg_build_stored} stored, {dbg_build_skip_coll} collisions\n"
+              f"  build: table occupancy {dbg_build_stored}/{C} ({occ_pct:.1f}%)",
+              file=sys.stderr)
+
+    # ── Encoding lookback buffer (Section 5.2) ────────────────────────
     buf: List[_BufEntry] = []
 
     def flush_all():
@@ -498,60 +583,75 @@ def diff_correcting(R: bytes, V: bytes,
                 commands.append(oldest.cmd)
         buf.append(_BufEntry(v_start, v_end, cmd))
 
-    # Step (2)
+    # ── Step (2) ──────────────────────────────────────────────────────
     v_c = 0
     v_s = 0
 
     while True:
-        # Step (3)
+        # Step (3): if no more seeds in V, finish up.
         if v_c + p > len(V):
             break
 
+        # Step (4): generate footprint at v_c, apply checkpoint test.
         fp_v = _fingerprint(V, v_c, p)
+        f_v = fp_v % F
+        if f_v % m != k:
+            v_c += 1
+            continue                     # not a checkpoint — skip
 
-        # Step (4): look up footprint in R's table (checkpoint filter)
-        if m <= 1:
-            idx = fp_v % C
-        else:
-            f_v = fp_v % F
-            if f_v % m != k:
-                v_c += 1
-                continue
-            idx = f_v // m
-        entry = H_R[idx]
-        if entry is None or entry[0] != fp_v:
+        # Checkpoint passed — look up H_R at index i = floor(f/m).
+        dbg_scan_checkpoints += 1
+        i = f_v // m
+        entry = H_R[i]
+        if entry is None:
+            v_c += 1
+            continue                     # no R entry at this slot
+
+        stored_fp, r_offset = entry
+        if stored_fp != fp_v:
+            # Different full fingerprint mapped to same slot (fp % |F|
+            # differ but floor(f/m) collides).
+            dbg_scan_fp_miss += 1
             v_c += 1
             continue
-        r_cand = entry[1]
-        if R[r_cand:r_cand + p] != V[v_c:v_c + p]:
+
+        # Verify seeds are byte-identical (Section 7, Step 4).
+        if R[r_offset:r_offset + p] != V[v_c:v_c + p]:
+            dbg_scan_byte_miss += 1
             v_c += 1
             continue
 
-        # Step (5): extend match forwards and backwards
+        dbg_scan_match += 1
+
+        # ── Step (5): extend match forwards and backwards ─────────
+        # (Section 7, Step 5; Section 8.2 backward extension, p. 349)
         fwd = p
-        while (v_c + fwd < len(V) and r_cand + fwd < len(R)
-               and V[v_c + fwd] == R[r_cand + fwd]):
+        while (v_c + fwd < len(V) and r_offset + fwd < len(R)
+               and V[v_c + fwd] == R[r_offset + fwd]):
             fwd += 1
 
         bwd = 0
-        while (v_c - bwd - 1 >= 0 and r_cand - bwd - 1 >= 0
-               and V[v_c - bwd - 1] == R[r_cand - bwd - 1]):
+        while (v_c - bwd - 1 >= 0 and r_offset - bwd - 1 >= 0
+               and V[v_c - bwd - 1] == R[r_offset - bwd - 1]):
             bwd += 1
 
         v_m = v_c - bwd
-        r_m = r_cand - bwd
+        r_m = r_offset - bwd
         ml = bwd + fwd
         match_end = v_m + ml
 
-        # Step (6): encode with correction
+        # ── Step (6): encode with correction ──────────────────────
         if v_s <= v_m:
-            # (6a) match is entirely in unencoded suffix
+            # (6a) match is entirely in unencoded suffix (Section 7)
             if v_s < v_m:
                 buf_emit(v_s, v_m, AddCmd(data=V[v_s:v_m]))
             buf_emit(v_m, match_end, CopyCmd(offset=r_m, length=ml))
             v_s = match_end
         else:
-            # (6b) match extends backward into encoded prefix — tail correction
+            # (6b) v_m < v_s — match extends backward into the encoded
+            # prefix of V.  Perform tail correction (Section 5.1, p. 339):
+            # integrate commands from the tail of the buffer into the
+            # new copy command.
             effective_start = v_s
 
             while buf:
@@ -576,7 +676,7 @@ def diff_correcting(R: bytes, V: bytes,
                         else:
                             buf.pop()
                         effective_start = min(effective_start, v_m)
-                    # Partial copy — don't reclaim (Section 5.1)
+                    # Partial copy — don't reclaim (Section 5.1, p. 339)
                     break
 
                 # No overlap with match
@@ -592,10 +692,32 @@ def diff_correcting(R: bytes, V: bytes,
         # Step (7)
         v_c = match_end
 
-    # Step (8)
+    # ── Step (8) ──────────────────────────────────────────────────────
     flush_all()
     if v_s < len(V):
         commands.append(AddCmd(data=V[v_s:]))
+
+    if verbose:
+        v_seeds = max(0, len(V) - p + 1)
+        cp_pct = dbg_scan_checkpoints / v_seeds * 100 if v_seeds else 0
+        hit_pct = (dbg_scan_match / dbg_scan_checkpoints * 100
+                   if dbg_scan_checkpoints else 0)
+        total_copy = sum(c.length for c in commands if isinstance(c, CopyCmd))
+        total_add = sum(len(c.data) for c in commands if isinstance(c, AddCmd))
+        num_copies = sum(1 for c in commands if isinstance(c, CopyCmd))
+        num_adds = sum(1 for c in commands if isinstance(c, AddCmd))
+        total_out = total_copy + total_add
+        copy_pct = total_copy / total_out * 100 if total_out else 0
+        print(f"  scan: {v_seeds} V positions, {dbg_scan_checkpoints} checkpoints "
+              f"({cp_pct:.3f}%), {dbg_scan_match} matches\n"
+              f"  scan: hit rate {hit_pct:.1f}% (of checkpoints), "
+              f"fp collisions {dbg_scan_fp_miss}, "
+              f"byte mismatches {dbg_scan_byte_miss}",
+              file=sys.stderr)
+        print(f"  result: {num_copies} copies ({total_copy} bytes), "
+              f"{num_adds} adds ({total_add} bytes)\n"
+              f"  result: copy coverage {copy_pct:.1f}%, output {total_out} bytes",
+              file=sys.stderr)
 
     return commands
 

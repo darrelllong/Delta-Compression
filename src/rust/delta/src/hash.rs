@@ -96,7 +96,7 @@ impl RollingHash {
         } else {
             HASH_MOD - (sub - self.value)
         };
-        // Multiply by base and add new byte
+        // Multiply by base and add new_byte
         self.value = mod_mersenne(v as u128 * HASH_BASE as u128 + new_byte as u128);
     }
 

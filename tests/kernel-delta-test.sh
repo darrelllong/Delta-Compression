@@ -2,10 +2,10 @@
 #
 # kernel-delta-test.sh — Measure delta compression on Linux kernel tarballs
 #
-# Downloads Linux 5.1.0 through 5.1.9 from kernel.org, decompresses the
+# Downloads Linux 5.1.0 through 5.1.3 from kernel.org, decompresses the
 # gzip layer (leaving .tar files), then encodes deltas from 5.1.0 to each
 # successive release using the Rust delta tool.  Reports compression ratio
-# for both the onepass and correcting algorithms.
+# for onepass and correcting algorithms (both auto-size their hash tables).
 #
 # Usage:
 #   ./tests/kernel-delta-test.sh
@@ -13,8 +13,8 @@
 # Requirements:
 #   - curl, gunzip, bc
 #   - Rust toolchain (builds the delta binary via cargo)
-#   - ~10 GB disk in /tmp (ten ~1 GB tarballs)
-#   - ~2 GB RAM for the correcting algorithm's hash table
+#   - ~4 GB disk in /tmp (four ~1 GB tarballs)
+#   - ~2.5 GB RAM (auto-sized hash tables for 871 MB kernel tarballs)
 #
 # The tarballs are cached in WORKDIR so re-runs skip the download.
 
@@ -39,7 +39,7 @@ mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
 echo "Downloading Linux 5.1.x kernel tarballs to $WORKDIR ..."
-for i in $(seq 0 9); do
+for i in $(seq 0 3); do
     if [ "$i" -eq 0 ]; then
         TAR="linux-5.1.tar"
         GZ="linux-5.1.tar.gz"
@@ -96,7 +96,7 @@ for ALGO in onepass correcting; do
     header "Version" "Tar Size" "Delta Size" "Ratio" "Time"
     header "-------" "--------" "----------" "-----" "----"
 
-    for i in $(seq 1 9); do
+    for i in $(seq 1 3); do
         VER="linux-5.1.$i.tar"
         DELTA_FILE="delta-${ALGO}-5.1.0-to-5.1.$i.delta"
         VER_BYTES=$(wc -c < "$VER" | tr -d ' ')
