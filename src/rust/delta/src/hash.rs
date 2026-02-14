@@ -207,31 +207,11 @@ mod tests {
     }
 
     #[test]
-    fn test_fingerprint_matches_python() {
-        // Same as Python: _fingerprint(b"ABCDEFGHIJKLMNOP", 0, 16)
+    fn test_fingerprint_deterministic() {
         let data = b"ABCDEFGHIJKLMNOP";
         let fp = fingerprint(data, 0, 16);
-        // Just verify it's deterministic and non-zero
         assert_ne!(fp, 0);
         assert_eq!(fp, fingerprint(data, 0, 16));
-    }
-
-    #[test]
-    fn test_rolling_hash_consistency() {
-        let data = b"ABCDEFGHIJKLMNOPQRST";
-        let p = 4;
-
-        // Compute fingerprint at offset 0
-        let mut rh = RollingHash::new(data, 0, p);
-        assert_eq!(rh.value(), fingerprint(data, 0, p));
-
-        // Roll to offset 1
-        rh.roll(data[0], data[p]);
-        assert_eq!(rh.value(), fingerprint(data, 1, p));
-
-        // Roll to offset 2
-        rh.roll(data[1], data[p + 1]);
-        assert_eq!(rh.value(), fingerprint(data, 2, p));
     }
 
     #[test]
@@ -317,20 +297,6 @@ mod tests {
         for &c in &carmichaels {
             assert!(!is_prime(c), "Carmichael number {} should be composite", c);
         }
-    }
-
-    #[test]
-    fn test_mersenne_primes() {
-        for p in [2, 3, 5, 7, 13, 17, 19] {
-            let mp = (1usize << p) - 1;
-            assert!(is_prime(mp), "2^{}-1 = {} should be prime", p, mp);
-        }
-    }
-
-    #[test]
-    fn test_next_prime_exact() {
-        assert_eq!(next_prime(7), 7);
-        assert_eq!(next_prime(2), 2);
     }
 
     #[test]

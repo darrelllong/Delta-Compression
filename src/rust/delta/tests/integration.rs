@@ -69,152 +69,66 @@ fn all_policies() -> Vec<(&'static str, CyclePolicy)> {
 
 // TestPaperExample — Section 2.1.1 of Ajtai et al. 2002
 #[test]
-fn test_paper_example_greedy() {
+fn test_paper_example() {
     let r = b"ABCDEFGHIJKLMNOP";
     let v = b"QWIJKLMNOBCDEFGHZDEFGHIJKL";
-    assert_eq!(apply_delta(r, &diff_greedy(r, v, 2, TABLE_SIZE, false)), v);
-}
-
-#[test]
-fn test_paper_example_onepass() {
-    let r = b"ABCDEFGHIJKLMNOP";
-    let v = b"QWIJKLMNOBCDEFGHZDEFGHIJKL";
-    assert_eq!(apply_delta(r, &diff_onepass(r, v, 2, TABLE_SIZE, false)), v);
-}
-
-#[test]
-fn test_paper_example_correcting() {
-    let r = b"ABCDEFGHIJKLMNOP";
-    let v = b"QWIJKLMNOBCDEFGHZDEFGHIJKL";
-    assert_eq!(apply_delta(r, &correcting_wrapper(r, v, 2, TABLE_SIZE, false)), v);
+    for (name, algo) in all_algos() {
+        assert_eq!(apply_delta(r, &algo(r, v, 2, TABLE_SIZE, false)), v, "failed for {}", name);
+    }
 }
 
 // TestIdentical
 #[test]
-fn test_identical_greedy() {
+fn test_identical() {
     let data: Vec<u8> = b"The quick brown fox jumps over the lazy dog."
         .iter()
         .cycle()
         .take(44 * 10)
         .copied()
         .collect();
-    let cmds = diff_greedy(&data, &data, 2, TABLE_SIZE, false);
-    assert_eq!(apply_delta(&data, &cmds), data);
-    assert!(
-        cmds.iter()
-            .all(|c| matches!(c, Command::Copy { .. })),
-        "identical strings should produce no adds"
-    );
-}
-
-#[test]
-fn test_identical_onepass() {
-    let data: Vec<u8> = b"The quick brown fox jumps over the lazy dog."
-        .iter()
-        .cycle()
-        .take(44 * 10)
-        .copied()
-        .collect();
-    let cmds = diff_onepass(&data, &data, 2, TABLE_SIZE, false);
-    assert_eq!(apply_delta(&data, &cmds), data);
-    assert!(
-        cmds.iter()
-            .all(|c| matches!(c, Command::Copy { .. })),
-        "identical strings should produce no adds"
-    );
-}
-
-#[test]
-fn test_identical_correcting() {
-    let data: Vec<u8> = b"The quick brown fox jumps over the lazy dog."
-        .iter()
-        .cycle()
-        .take(44 * 10)
-        .copied()
-        .collect();
-    let cmds = correcting_wrapper(&data, &data, 2, TABLE_SIZE, false);
-    assert_eq!(apply_delta(&data, &cmds), data);
-    assert!(
-        cmds.iter()
-            .all(|c| matches!(c, Command::Copy { .. })),
-        "identical strings should produce no adds"
-    );
+    for (name, algo) in all_algos() {
+        let cmds = algo(&data, &data, 2, TABLE_SIZE, false);
+        assert_eq!(apply_delta(&data, &cmds), data, "failed for {}", name);
+        assert!(
+            cmds.iter()
+                .all(|c| matches!(c, Command::Copy { .. })),
+            "{}: identical strings should produce no adds", name
+        );
+    }
 }
 
 // TestCompletelyDifferent
-fn completely_different_data() -> (Vec<u8>, Vec<u8>) {
+#[test]
+fn test_completely_different() {
     let r: Vec<u8> = (0..=255u8).cycle().take(512).collect();
     let v: Vec<u8> = (0..=255u8).rev().cycle().take(512).collect();
-    (r, v)
-}
-
-#[test]
-fn test_completely_different_greedy() {
-    let (r, v) = completely_different_data();
-    assert_eq!(apply_delta(&r, &diff_greedy(&r, &v, 2, TABLE_SIZE, false)), v);
-}
-
-#[test]
-fn test_completely_different_onepass() {
-    let (r, v) = completely_different_data();
-    assert_eq!(apply_delta(&r, &diff_onepass(&r, &v, 2, TABLE_SIZE, false)), v);
-}
-
-#[test]
-fn test_completely_different_correcting() {
-    let (r, v) = completely_different_data();
-    assert_eq!(
-        apply_delta(&r, &correcting_wrapper(&r, &v, 2, TABLE_SIZE, false)),
-        v
-    );
+    for (name, algo) in all_algos() {
+        assert_eq!(apply_delta(&r, &algo(&r, &v, 2, TABLE_SIZE, false)), v, "failed for {}", name);
+    }
 }
 
 // TestEmptyVersion
 #[test]
-fn test_empty_version_greedy() {
-    let cmds = diff_greedy(b"hello", b"", 2, TABLE_SIZE, false);
-    assert!(cmds.is_empty());
-    assert_eq!(apply_delta(b"hello", &cmds), b"");
-}
-
-#[test]
-fn test_empty_version_onepass() {
-    let cmds = diff_onepass(b"hello", b"", 2, TABLE_SIZE, false);
-    assert!(cmds.is_empty());
-    assert_eq!(apply_delta(b"hello", &cmds), b"");
-}
-
-#[test]
-fn test_empty_version_correcting() {
-    let cmds = correcting_wrapper(b"hello", b"", 2, TABLE_SIZE, false);
-    assert!(cmds.is_empty());
-    assert_eq!(apply_delta(b"hello", &cmds), b"");
+fn test_empty_version() {
+    for (name, algo) in all_algos() {
+        let cmds = algo(b"hello", b"", 2, TABLE_SIZE, false);
+        assert!(cmds.is_empty(), "{}: should be empty", name);
+        assert_eq!(apply_delta(b"hello", &cmds), b"", "failed for {}", name);
+    }
 }
 
 // TestEmptyReference
 #[test]
-fn test_empty_reference_greedy() {
+fn test_empty_reference() {
     let v = b"hello world";
-    assert_eq!(apply_delta(b"", &diff_greedy(b"", v, 2, TABLE_SIZE, false)), v);
-}
-
-#[test]
-fn test_empty_reference_onepass() {
-    let v = b"hello world";
-    assert_eq!(apply_delta(b"", &diff_onepass(b"", v, 2, TABLE_SIZE, false)), v);
-}
-
-#[test]
-fn test_empty_reference_correcting() {
-    let v = b"hello world";
-    assert_eq!(
-        apply_delta(b"", &correcting_wrapper(b"", v, 2, TABLE_SIZE, false)),
-        v
-    );
+    for (name, algo) in all_algos() {
+        assert_eq!(apply_delta(b"", &algo(b"", v, 2, TABLE_SIZE, false)), v, "failed for {}", name);
+    }
 }
 
 // TestBinaryRoundTrip
-fn binary_roundtrip_data() -> (Vec<u8>, Vec<u8>) {
+#[test]
+fn test_binary_roundtrip() {
     let r: Vec<u8> = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         .iter()
         .cycle()
@@ -227,25 +141,9 @@ fn binary_roundtrip_data() -> (Vec<u8>, Vec<u8>) {
         .take(37 * 100)
         .copied()
         .collect();
-    (r, v)
-}
-
-#[test]
-fn test_binary_roundtrip_greedy() {
-    let (r, v) = binary_roundtrip_data();
-    assert_eq!(roundtrip(diff_greedy, &r, &v, 4), v);
-}
-
-#[test]
-fn test_binary_roundtrip_onepass() {
-    let (r, v) = binary_roundtrip_data();
-    assert_eq!(roundtrip(diff_onepass, &r, &v, 4), v);
-}
-
-#[test]
-fn test_binary_roundtrip_correcting() {
-    let (r, v) = binary_roundtrip_data();
-    assert_eq!(roundtrip(correcting_wrapper, &r, &v, 4), v);
+    for (name, algo) in all_algos() {
+        assert_eq!(roundtrip(algo, &r, &v, 4), v, "failed for {}", name);
+    }
 }
 
 // TestBinaryEncoding — unified format encode/decode
@@ -334,7 +232,8 @@ fn test_large_add_roundtrip() {
 }
 
 // TestBackwardExtension
-fn backward_extension_data() -> (Vec<u8>, Vec<u8>) {
+#[test]
+fn test_backward_extension() {
     let block: Vec<u8> = b"ABCDEFGHIJKLMNOP"
         .iter()
         .cycle()
@@ -347,32 +246,14 @@ fn backward_extension_data() -> (Vec<u8>, Vec<u8>) {
     let mut v = b"**".to_vec();
     v.extend_from_slice(&block);
     v.extend_from_slice(b"**");
-    (r, v)
-}
-
-#[test]
-fn test_backward_extension_greedy() {
-    let (r, v) = backward_extension_data();
-    assert_eq!(apply_delta(&r, &diff_greedy(&r, &v, 4, TABLE_SIZE, false)), v);
-}
-
-#[test]
-fn test_backward_extension_onepass() {
-    let (r, v) = backward_extension_data();
-    assert_eq!(apply_delta(&r, &diff_onepass(&r, &v, 4, TABLE_SIZE, false)), v);
-}
-
-#[test]
-fn test_backward_extension_correcting() {
-    let (r, v) = backward_extension_data();
-    assert_eq!(
-        apply_delta(&r, &correcting_wrapper(&r, &v, 4, TABLE_SIZE, false)),
-        v
-    );
+    for (name, algo) in all_algos() {
+        assert_eq!(apply_delta(&r, &algo(&r, &v, 4, TABLE_SIZE, false)), v, "failed for {}", name);
+    }
 }
 
 // TestTransposition
-fn transposition_data() -> (Vec<u8>, Vec<u8>) {
+#[test]
+fn test_transposition() {
     let x: Vec<u8> = b"FIRST_BLOCK_DATA_"
         .iter()
         .cycle()
@@ -389,32 +270,14 @@ fn transposition_data() -> (Vec<u8>, Vec<u8>) {
     r.extend_from_slice(&y);
     let mut v = y;
     v.extend_from_slice(&x);
-    (r, v)
-}
-
-#[test]
-fn test_transposition_greedy() {
-    let (r, v) = transposition_data();
-    assert_eq!(apply_delta(&r, &diff_greedy(&r, &v, 4, TABLE_SIZE, false)), v);
-}
-
-#[test]
-fn test_transposition_onepass() {
-    let (r, v) = transposition_data();
-    assert_eq!(apply_delta(&r, &diff_onepass(&r, &v, 4, TABLE_SIZE, false)), v);
-}
-
-#[test]
-fn test_transposition_correcting() {
-    let (r, v) = transposition_data();
-    assert_eq!(
-        apply_delta(&r, &correcting_wrapper(&r, &v, 4, TABLE_SIZE, false)),
-        v
-    );
+    for (name, algo) in all_algos() {
+        assert_eq!(apply_delta(&r, &algo(&r, &v, 4, TABLE_SIZE, false)), v, "failed for {}", name);
+    }
 }
 
 // TestScatteredModifications
-fn scattered_modifications_data() -> (Vec<u8>, Vec<u8>) {
+#[test]
+fn test_scattered_modifications() {
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
     let mut rng = StdRng::seed_from_u64(42);
@@ -424,25 +287,9 @@ fn scattered_modifications_data() -> (Vec<u8>, Vec<u8>) {
         let idx = rng.gen_range(0..v.len());
         v[idx] = rng.gen();
     }
-    (r, v)
-}
-
-#[test]
-fn test_scattered_modifications_greedy() {
-    let (r, v) = scattered_modifications_data();
-    assert_eq!(roundtrip(diff_greedy, &r, &v, 4), v);
-}
-
-#[test]
-fn test_scattered_modifications_onepass() {
-    let (r, v) = scattered_modifications_data();
-    assert_eq!(roundtrip(diff_onepass, &r, &v, 4), v);
-}
-
-#[test]
-fn test_scattered_modifications_correcting() {
-    let (r, v) = scattered_modifications_data();
-    assert_eq!(roundtrip(correcting_wrapper, &r, &v, 4), v);
+    for (name, algo) in all_algos() {
+        assert_eq!(roundtrip(algo, &r, &v, 4), v, "failed for {}", name);
+    }
 }
 
 // ── in-place basics ──────────────────────────────────────────────────────

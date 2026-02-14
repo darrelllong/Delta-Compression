@@ -61,6 +61,9 @@ Encode with one, decode with the other.
 
 All three use Karp-Rabin rolling hashes with a Mersenne prime (2^61-1)
 for fingerprinting and a polynomial base of 263 for good bit mixing.
+Hash tables are auto-sized based on input length (`--table-size` acts
+as a floor).  Use `--verbose` to see hash table sizing and match
+statistics on stderr.
 
 ## In-place mode
 
@@ -114,11 +117,11 @@ standard deltas (flag 0x00) from in-place deltas (flag 0x01).
 ## Testing
 
 ```bash
-# Python — 133 tests
+# Python — 154 tests
 cd src/python
 python3 -m unittest test_delta -v
 
-# Rust — 54 tests (4 unit + 50 integration)
+# Rust — 48 tests (13 unit + 35 integration)
 cd src/rust/delta
 cargo test
 ```
@@ -128,7 +131,9 @@ edge cases (empty/identical/completely different files), in-place
 reconstruction with both cycle-breaking policies, variable-length block
 transpositions (8 blocks, 200-5000 bytes each, permuted, reversed,
 interleaved with junk, duplicated, halved and scrambled, plus 20
-random subset trials), and cross-language compatibility.
+random subset trials), checkpointing correctness, and cross-language
+compatibility.  A kernel tarball benchmark (`tests/kernel-delta-test.sh`)
+exercises onepass and correcting on ~871 MB inputs.
 
 ## Project layout
 
@@ -136,13 +141,13 @@ random subset trials), and cross-language compatibility.
 src/
   python/
     delta.py              Library + CLI
-    test_delta.py         Test suite (133 tests)
+    test_delta.py         Test suite (154 tests)
   rust/delta/
     src/
       lib.rs              Re-exports
       main.rs             CLI (clap)
       types.rs            Command, PlacedCommand, constants
-      hash.rs             Karp-Rabin rolling hash
+      hash.rs             Karp-Rabin rolling hash (13 unit tests)
       encoding.rs         Unified binary format
       apply.rs            place_commands, apply_placed_to, apply_placed_inplace_to
       inplace.rs          CRWI digraph, topological sort, cycle breaking
@@ -152,8 +157,10 @@ src/
         onepass.rs        O(n) linear
         correcting.rs     1.5-pass with tail correction
     tests/
-      integration.rs      50 integration tests
+      integration.rs      35 integration tests
     Cargo.toml
+tests/
+  kernel-delta-test.sh    Kernel tarball benchmark (onepass + correcting)
 pubs/
   ajtai-et-al-jacm-2002-differential-compression.pdf
   burns-et-al-tkde-2003-inplace-reconstruction.pdf

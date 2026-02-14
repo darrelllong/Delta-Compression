@@ -230,18 +230,18 @@ def diff_greedy(R: bytes, V: bytes,
     if not V:
         return commands
 
-    # Step (1): Build chained hash table for R
+    # Step (1): build chained hash table mapping fingerprints to R offsets
     H_R: dict = defaultdict(list)
     for a in range(max(0, len(R) - p + 1)):
         fp = _fingerprint(R, a, p)
         H_R[fp].append(a)
 
-    # Step (2)
+    # Step (2): initialize scan pointers
     v_c = 0
     v_s = 0
 
     while True:
-        # Step (3)
+        # Step (3): stop when no full seed remains in V
         if v_c + p > len(V):
             break
 
@@ -268,16 +268,16 @@ def diff_greedy(R: bytes, V: bytes,
             v_c += 1
             continue
 
-        # Step (6): encode
+        # Step (6): emit ADD for unmatched gap, then COPY for match
         if v_s < v_c:
             commands.append(AddCmd(data=V[v_s:v_c]))
         commands.append(CopyCmd(offset=best_rm, length=best_len))
         v_s = v_c + best_len
 
-        # Step (7)
+        # Step (7): advance past the matched region
         v_c = v_c + best_len
 
-    # Step (8)
+    # Step (8): emit trailing ADD for any unmatched suffix of V
     if v_s < len(V):
         commands.append(AddCmd(data=V[v_s:]))
 
@@ -353,7 +353,7 @@ def diff_onepass(R: bytes, V: bytes,
         if e is None or e[2] != ver:
             H_R[idx] = (fp, off, ver)
 
-    # Step (2)
+    # Step (2): initialize scan pointers for concurrent R/V traversal
     r_c = 0
     v_c = 0
     v_s = 0
@@ -362,7 +362,7 @@ def diff_onepass(R: bytes, V: bytes,
     dbg_matches = 0
 
     while True:
-        # Step (3)
+        # Step (3): check if seeds remain in V and/or R
         can_v = v_c + p <= len(V)
         can_r = r_c + p <= len(R)
 
@@ -405,24 +405,24 @@ def diff_onepass(R: bytes, V: bytes,
             continue
         dbg_matches += 1
 
-        # Step (5): extend match forward
+        # Step (5): extend match forward past the seed
         ml = 0
         while (v_m + ml < len(V) and r_m + ml < len(R)
                and V[v_m + ml] == R[r_m + ml]):
             ml += 1
 
-        # Step (6): encode
+        # Step (6): emit ADD for unmatched gap, then COPY for match
         if v_s < v_m:
             commands.append(AddCmd(data=V[v_s:v_m]))
         commands.append(CopyCmd(offset=r_m, length=ml))
         v_s = v_m + ml
 
-        # Step (7): advance pointers and flush tables
+        # Step (7): advance past match and flush tables (next-match policy)
         v_c = v_m + ml
         r_c = r_m + ml
         ver += 1
 
-    # Step (8)
+    # Step (8): emit trailing ADD for any unmatched suffix of V
     if v_s < len(V):
         commands.append(AddCmd(data=V[v_s:]))
 
@@ -449,10 +449,10 @@ def diff_onepass(R: bytes, V: bytes,
 # ============================================================================
 # Correcting 1.5-Pass Algorithm (Section 7, Figure 8)
 #
-# Pass 1: index the reference string using first-found policy (Section 6:
-#   first-found stores the first offset seen for each footprint, vs.
-#   onepass's retain-existing which keeps the earliest offset).
-#   Tables are never flushed — all of R is indexed before scanning V.
+# Pass 1: index the reference string using first-found policy (same
+#   collision policy as onepass — first entry wins).  The key difference
+#   is that tables are never flushed: all of R is indexed before scanning V,
+#   whereas onepass flushes both tables after each match.
 # Pass 2: scan V, extend matches both forwards AND backwards from the seed,
 #   and use tail correction (Section 5.1) to fix suboptimal earlier
 #   encodings via an encoding lookback buffer (Section 5.2).
@@ -554,6 +554,8 @@ def diff_correcting(R: bytes, V: bytes,
             continue                     # not a checkpoint seed
         dbg_build_passed += 1
         i = f // m
+        if i >= C:
+            continue                     # safety: rounding can overshoot
         if H_R[i] is None:
             H_R[i] = (fp, a)            # first-found (Section 7 Step 1)
             dbg_build_stored += 1
@@ -585,7 +587,7 @@ def diff_correcting(R: bytes, V: bytes,
                 commands.append(oldest.cmd)
         buf.append(_BufEntry(v_start, v_end, cmd))
 
-    # ── Step (2) ──────────────────────────────────────────────────────
+    # ── Step (2): initialize V scan pointers ───────────────────────────
     v_c = 0
     v_s = 0
 
@@ -604,6 +606,9 @@ def diff_correcting(R: bytes, V: bytes,
         # Checkpoint passed — look up H_R at index i = floor(f/m).
         dbg_scan_checkpoints += 1
         i = f_v // m
+        if i >= C:
+            v_c += 1
+            continue                     # safety: rounding can overshoot
         entry = H_R[i]
         if entry is None:
             v_c += 1
@@ -691,10 +696,10 @@ def diff_correcting(R: bytes, V: bytes,
                          CopyCmd(offset=r_m + adj, length=new_len))
             v_s = match_end
 
-        # Step (7)
+        # Step (7): advance past the matched region
         v_c = match_end
 
-    # ── Step (8) ──────────────────────────────────────────────────────
+    # ── Step (8): flush buffer and emit trailing ADD ──────────────────
     flush_all()
     if v_s < len(V):
         commands.append(AddCmd(data=V[v_s:]))
@@ -735,7 +740,7 @@ def output_size(commands: List[Command]) -> int:
 
 
 def place_commands(commands: List[Command]) -> List[PlacedCommand]:
-    """Convert algorithm output to placed commands with sequential destinations."""
+    """Assign sequential destination offsets to algorithm output commands."""
     placed = []
     dst = 0
     for cmd in commands:
@@ -848,7 +853,7 @@ def apply_placed_to(R, commands: List[PlacedCommand], buf) -> int:
 
 
 def apply_placed_inplace_to(commands: List[PlacedCommand], buf) -> None:
-    """Apply placed commands in-place within a single buffer.
+    """Execute placed commands in a buffer that serves as both source and destination.
 
     Slice assignment creates a temporary copy of the RHS, so overlapping
     src/dst within a single copy is handled correctly.
@@ -1060,7 +1065,9 @@ def make_inplace(R: bytes, commands: List[Command],
                 if in_deg[w] == 0:
                     queue.append(w)
 
-    # Step 4: assemble result — copies in topo order, then all adds
+    # Step 4: assemble result — copies first (in topo order) because they
+    # read from the buffer; adds last because they only write literal data
+    # and never read, so they can't conflict with any copy's source region.
     result: List[PlacedCommand] = []
 
     for i in topo_order:

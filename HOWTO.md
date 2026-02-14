@@ -55,8 +55,8 @@ delta encode onepass old.bin new.bin delta.bin
 
 Near-optimal 1.5-pass algorithm.  Better than onepass when blocks
 have been rearranged or moved (e.g., function reordering in a binary).
-Uses checkpointing (Section 8) to work with a fixed-size hash table
-regardless of input size.
+Uses checkpointing (Section 8) with an auto-sized hash table.
+`--table-size` acts as a floor; the table scales up for large inputs.
 
 ```bash
 delta encode correcting old.bin new.bin delta.bin
@@ -119,35 +119,47 @@ delta encode onepass old.bin new.bin delta.bin --seed-len 32
 
 ### --table-size (default: 1048573)
 
-Hash table capacity.  For the correcting algorithm, this is the memory
-budget — checkpointing (see below) keeps the table at this fixed size
-regardless of input size.  Larger tables find shorter matches; smaller
-tables save memory.  The default (~25 MB) works well for most inputs.
+Minimum hash table capacity (floor).  The actual table size is
+auto-computed as `next_prime(max(table_size, num_seeds / p))` for
+onepass, and `next_prime(max(table_size, 2 * num_seeds / p))` for
+correcting, where `num_seeds = |R| - p + 1`.  For small files the
+default is used as-is; for large files the table grows automatically.
 
 ```bash
-# Smaller table — less memory, may miss short matches
+# Override the floor — force a smaller table (saves memory, may miss matches)
 delta encode correcting old.bin new.bin delta.bin --table-size 25013
 
-# Larger table — more memory, finds shorter matches
+# Force a larger floor — useful if auto-sizing picks something too small
 delta encode correcting old.bin new.bin delta.bin --table-size 8388593
+```
+
+### --verbose
+
+Print hash table sizing and match statistics to stderr.  Useful for
+understanding compression behavior and diagnosing performance.
+
+```bash
+delta encode onepass old.bin new.bin delta.bin --verbose
+delta encode correcting old.bin new.bin delta.bin --verbose
 ```
 
 ### Checkpointing (correcting algorithm)
 
 The correcting algorithm uses checkpointing (Ajtai et al. 2002,
-Section 8) to bound hash table memory regardless of reference size.
+Section 8) to select which seeds enter the hash table.
 
 Two parameters govern the hash table:
 
-- **|C|** = `--table-size` (default 1,048,573): the number of hash table
-  entries — the user's memory budget.  Each entry is ~24 bytes, so the
-  default uses ~25 MB.
+- **|C|** = auto-sized table capacity (`next_prime(max(table_size, 2 *
+  num_seeds / p))`).  Each entry is ~24 bytes.  `--table-size` sets
+  the floor.
 - **|F|** ≈ 2|R| (auto-computed): the footprint modulus.  Set to
   `next_prime(2 * num_seeds)` for good distribution.
 
 The checkpoint stride is `m = ⌈|F|/|C|⌉`.  A seed is a **checkpoint
-seed** if its footprint `f = fingerprint mod |F|` satisfies `f ≡ 0
-(mod m)` (Section 8.1, Eq. 3).  Only checkpoint seeds are stored in or
+seed** if its footprint `f = fingerprint mod |F|` satisfies `f ≡ k
+(mod m)` (Section 8.1, Eq. 3), where `k` is a biased checkpoint class
+chosen from V (p. 348).  Only checkpoint seeds are stored in or
 looked up from the hash table; all others are skipped.  This gives
 ~|C|/2 occupied slots (~50% load factor) regardless of |R| (Section 8.1,
 p. 347: L · |C|/|F| ≈ |C|/2, hence |F| ≈ 2L).
@@ -159,19 +171,10 @@ reliably: backward extension (Section 5.1) discovers the true start of
 the match even when it falls between checkpoint positions (Section 8.2,
 p. 349).
 
-For larger `--table-size`, `m` decreases and shorter matches are found,
-at the cost of more memory:
-
-```
---table-size  |  Memory  |  Checkpoint gap (871 MB ref)
-   1,048,573  |   25 MB  |  ~1,663 bytes
-  10,000,000  |  240 MB  |  ~175 bytes
- 100,000,000  |  2.4 GB  |  ~18 bytes
-```
-
-When the reference is small enough that |F| ≤ |C|, the stride is m=1 and
-every seed is a checkpoint — equivalent to direct indexing with no
-filtering overhead.
+With auto-sizing, `m ≈ p` (the seed length), so checkpoint granularity
+roughly matches seed granularity.  When the reference is small enough
+that |F| ≤ |C|, the stride is m=1 and every seed is a checkpoint —
+equivalent to direct indexing with no filtering overhead.
 
 The footprint modulus |F| is chosen as a prime using the Miller-Rabin
 probabilistic primality test (Rabin 1980) with 100 random witnesses
@@ -256,10 +259,12 @@ from delta import (
     make_inplace,
 )
 
-R = open('old.bin', 'rb').read()
-V = open('new.bin', 'rb').read()
+with open('old.bin', 'rb') as f:
+    R = f.read()
+with open('new.bin', 'rb') as f:
+    V = f.read()
 
-# Diff
+# Diff (verbose=True prints hash table stats to stderr)
 commands = diff_onepass(R, V)
 
 # Standard binary delta
@@ -289,8 +294,8 @@ use delta::{
 let r: &[u8] = &reference_data;
 let v: &[u8] = &version_data;
 
-// Diff
-let commands = diff(Algorithm::Onepass, r, v, 16, 1048573);
+// Diff (verbose=true prints hash table stats to stderr)
+let commands = diff(Algorithm::Onepass, r, v, 16, 1048573, false);
 
 // Standard binary delta
 let placed = place_commands(&commands);
@@ -309,14 +314,17 @@ let ip_delta = encode_delta(&ip, true, v.len());
 ## Running the tests
 
 ```bash
-# Python — 133 tests
+# Python — 154 tests
 cd src/python
 python3 -m unittest test_delta -v
 
-# Rust — 54 tests
+# Rust — 48 tests (13 unit + 35 integration)
 cd src/rust/delta
 cargo test
 ```
+
+A kernel tarball benchmark (`tests/kernel-delta-test.sh`) exercises
+onepass and correcting on ~871 MB inputs.
 
 ## References
 

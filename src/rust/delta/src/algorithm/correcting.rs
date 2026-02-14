@@ -55,7 +55,7 @@ pub fn diff_correcting(
     let cap = if num_seeds > 0 {
         next_prime(q.max(2 * num_seeds / p))
     } else {
-        q
+        next_prime(q)
     }; // |C|
     let f_size: u64 = if num_seeds > 0 {
         next_prime(2 * num_seeds) as u64 // |F|
