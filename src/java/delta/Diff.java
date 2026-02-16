@@ -11,11 +11,16 @@ public final class Diff {
     public static List<Command> diff(Algorithm algo, byte[] r, byte[] v,
                                      int p, int q, boolean verbose,
                                      boolean useSplay, int minCopy) {
-        return switch (algo) {
-            case GREEDY -> Greedy.diff(r, v, p, q, verbose, useSplay, minCopy);
-            case ONEPASS -> Onepass.diff(r, v, p, q, verbose, useSplay, minCopy);
-            case CORRECTING -> Correcting.diff(r, v, p, q, 256, verbose, useSplay, minCopy);
-        };
+        switch (algo) {
+            case GREEDY:
+                return Greedy.diff(r, v, p, q, verbose, useSplay, minCopy);
+            case ONEPASS:
+                return Onepass.diff(r, v, p, q, verbose, useSplay, minCopy);
+            case CORRECTING:
+                return Correcting.diff(r, v, p, q, 256, verbose, useSplay, minCopy);
+            default:
+                throw new IllegalArgumentException("unknown algorithm: " + algo);
+        }
     }
 
     public static List<Command> diffDefault(Algorithm algo, byte[] r, byte[] v) {
