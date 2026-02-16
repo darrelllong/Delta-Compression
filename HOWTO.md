@@ -153,13 +153,43 @@ delta encode correcting old.bin new.bin delta.bin --table-size 8388593
 
 ### --verbose
 
-Print hash table sizing and match statistics to stderr.  Useful for
-understanding compression behavior and diagnosing performance.
+Print hash table sizing, match statistics, and copy-length summary
+(min/max/mean/median) to stderr.  Useful for understanding compression
+behavior and diagnosing performance.
 
 ```bash
 delta encode onepass old.bin new.bin delta.bin --verbose
 delta encode correcting old.bin new.bin delta.bin --verbose
 ```
+
+### --splay (Rust and C++ only)
+
+Replace the hash table with a Tarjan-Sleator splay tree for fingerprint
+lookup.  A splay tree is a self-adjusting binary search tree where every
+access splays the accessed node to the root via zig/zig-zig/zig-zag
+rotations, giving amortized O(log n) per operation (Sleator & Tarjan,
+JACM 1985).
+
+```bash
+delta encode onepass old.bin new.bin delta.bin --splay
+delta encode correcting old.bin new.bin delta.bin --splay
+```
+
+The splay tree exploits temporal locality: recently accessed fingerprints
+are near the root and found quickly.  For onepass, where the same seeds
+are looked up soon after insertion, this gives a significant speedup
+(~3.6x on 871 MB kernel tarballs).  For correcting, where the R pass
+inserts millions of checkpoint seeds in random order before any lookups,
+the splay tree is slower than the hash table due to O(log n) per
+insertion with no locality benefit.
+
+The `--splay` flag does not affect the delta output format — deltas
+produced with and without `--splay` are decoded identically.  The
+greedy algorithm also supports `--splay`, though greedy is already
+O(n^2) so the lookup structure is not the bottleneck.
+
+Not available in Python: Python's built-in `dict` is a C-optimized hash
+table that always outperforms a pure-Python tree structure.
 
 ### Checkpointing (correcting algorithm)
 
@@ -316,8 +346,8 @@ use delta::{
 let r: &[u8] = &reference_data;
 let v: &[u8] = &version_data;
 
-// Diff (verbose=true prints hash table stats to stderr)
-let commands = diff(Algorithm::Onepass, r, v, 16, 1048573, false);
+// Diff (verbose=true prints stats to stderr, use_splay=true for splay tree)
+let commands = diff(Algorithm::Onepass, r, v, 16, 1048573, false, false);
 
 // Standard binary delta
 let placed = place_commands(&commands);
@@ -343,8 +373,8 @@ using namespace delta;
 std::span<const uint8_t> r = reference_data;
 std::span<const uint8_t> v = version_data;
 
-// Diff (verbose=true prints hash table stats to stderr)
-auto commands = diff(Algorithm::Onepass, r, v, SEED_LEN, TABLE_SIZE, false);
+// Diff (verbose=true prints stats to stderr, use_splay=true for splay tree)
+auto commands = diff(Algorithm::Onepass, r, v, SEED_LEN, TABLE_SIZE, false, false);
 
 // Standard binary delta
 auto placed = place_commands(commands);
@@ -367,7 +397,7 @@ auto ip_delta = encode_delta(ip, true, v.size());
 cd src/python
 python3 -m unittest test_delta -v
 
-# Rust — 69 tests (16 unit + 53 integration)
+# Rust — 52 tests (17 unit + 35 integration)
 cd src/rust/delta
 cargo test
 
@@ -406,6 +436,10 @@ onepass and correcting on ~871 MB inputs.
 - M.O. Rabin.
   Probabilistic algorithm for testing primality.
   *Journal of Number Theory*, 12(1):128-138, February 1980.
+
+- D.D. Sleator and R.E. Tarjan.
+  Self-adjusting binary search trees.
+  *Journal of the ACM*, 32(3):652-686, July 1985.
 
 - A. Reichenberger.
   Delta storage for arbitrary non-text files.
