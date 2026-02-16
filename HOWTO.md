@@ -36,6 +36,16 @@ cmake --build build
 ctest --test-dir build
 ```
 
+### Java
+
+Requires Java 11+.  No external dependencies.
+
+```bash
+cd src/java
+javac -d out delta/*.java
+# Run via java -cp out delta.Delta
+```
+
 ## Basic usage
 
 Compute a delta between a reference file (old) and a version file (new),
@@ -53,6 +63,10 @@ delta decode old.bin delta.bin recovered.bin
 # C++
 delta encode onepass old.bin new.bin delta.bin
 delta decode old.bin delta.bin recovered.bin
+
+# Java
+java -cp out delta.Delta encode onepass old.bin new.bin delta.bin
+java -cp out delta.Delta decode old.bin delta.bin recovered.bin
 
 # Verify
 diff new.bin recovered.bin
@@ -188,7 +202,7 @@ into ADD commands, increasing delta size from 7 MB to 13 MB.
 The flag does not affect the delta format — deltas produced with any
 `--min-copy` value are decoded identically by all three implementations.
 
-### --splay (Rust and C++ only)
+### --splay (Rust, C++, and Java)
 
 Replace the hash table with a Tarjan-Sleator splay tree for fingerprint
 lookup.  A splay tree is a self-adjusting binary search tree where every
@@ -215,7 +229,8 @@ greedy algorithm also supports `--splay`, though greedy is already
 O(n^2) so the lookup structure is not the bottleneck.
 
 Not available in Python: Python's built-in `dict` is a C-optimized hash
-table that always outperforms a pure-Python tree structure.
+table that always outperforms a pure-Python tree structure.  Available in
+Java via the same `--splay` flag.
 
 ### Checkpointing (correcting algorithm)
 
@@ -308,7 +323,7 @@ Output size:  5678 bytes
 
 ## Cross-language compatibility
 
-All three implementations (Python, Rust, C++) produce byte-identical
+All four implementations (Python, Rust, C++, Java) produce byte-identical
 delta files.  You can encode with any one and decode with any other.
 
 ```bash
@@ -316,13 +331,13 @@ delta files.  You can encode with any one and decode with any other.
 delta encode onepass old.bin new.bin delta.bin
 python3 delta.py decode old.bin delta.bin recovered.bin
 
-# Encode with Python, decode with C++
-python3 delta.py encode onepass old.bin new.bin delta.bin
+# Encode with Java, decode with C++
+java -cp out delta.Delta encode onepass old.bin new.bin delta.bin
 delta decode old.bin delta.bin recovered.bin
 
-# Encode with C++, decode with Rust (or any combination)
-delta encode onepass old.bin new.bin delta.bin
-delta decode old.bin delta.bin recovered.bin
+# Encode with Python, decode with Java
+python3 delta.py encode onepass old.bin new.bin delta.bin
+java -cp out delta.Delta decode old.bin delta.bin recovered.bin
 ```
 
 ## Using as a library
@@ -414,6 +429,35 @@ apply_placed_to(r, placed2, output);
 // In-place delta
 auto ip = make_inplace(r, commands, CyclePolicy::Localmin);
 auto ip_delta = encode_delta(ip, true, v.size());
+```
+
+### Java
+
+```java
+import delta.*;
+import static delta.Types.*;
+import java.util.List;
+
+byte[] r = readReference();
+byte[] v = readVersion();
+
+// Diff (verbose=true prints stats, useSplay=true for splay tree, minCopy=0 for default)
+List<Command> commands = Diff.diff(Algorithm.ONEPASS, r, v,
+    SEED_LEN, TABLE_SIZE, false, false, 0);
+
+// Standard binary delta
+List<PlacedCommand> placed = Apply.placeCommands(commands);
+byte[] deltaBytes = Encoding.encodeDelta(placed, false, v.length);
+
+// Decode and reconstruct
+Encoding.DecodeResult result = Encoding.decodeDelta(deltaBytes);
+byte[] output = new byte[result.versionSize];
+Apply.applyPlacedTo(r, result.commands, output);
+
+// In-place delta
+List<PlacedCommand> ip = Apply.makeInplace(r, commands, CyclePolicy.LOCALMIN);
+byte[] ipDelta = Encoding.encodeDelta(ip, true, v.length);
+byte[] recovered = Apply.applyDeltaInplace(r, ip, v.length);
 ```
 
 ## Running the tests
