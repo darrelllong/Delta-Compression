@@ -13,7 +13,7 @@ import static delta.Types.*;
 /**
  * Command placement, application, and in-place reordering.
  *
- * place_commands: assign sequential destinations (Section 2.1.1)
+ * placeCommands: assign sequential destinations (Section 2.1.1)
  * makeInplace:   CRWI digraph + topological sort (Burns et al. 2003)
  */
 public final class Apply {
@@ -23,8 +23,8 @@ public final class Apply {
     public static int outputSize(List<Command> commands) {
         int size = 0;
         for (Command cmd : commands) {
-            if (cmd instanceof CopyCmd c) size += c.length();
-            else if (cmd instanceof AddCmd a) size += a.data().length;
+            if (cmd instanceof CopyCmd) size += ((CopyCmd) cmd).length;
+            else if (cmd instanceof AddCmd) size += ((AddCmd) cmd).data.length;
         }
         return size;
     }
@@ -34,12 +34,14 @@ public final class Apply {
         List<PlacedCommand> placed = new ArrayList<>(commands.size());
         int dst = 0;
         for (Command cmd : commands) {
-            if (cmd instanceof CopyCmd c) {
-                placed.add(new PlacedCopy(c.offset(), dst, c.length()));
-                dst += c.length();
-            } else if (cmd instanceof AddCmd a) {
-                placed.add(new PlacedAdd(dst, a.data()));
-                dst += a.data().length;
+            if (cmd instanceof CopyCmd) {
+                CopyCmd c = (CopyCmd) cmd;
+                placed.add(new PlacedCopy(c.offset, dst, c.length));
+                dst += c.length;
+            } else if (cmd instanceof AddCmd) {
+                AddCmd a = (AddCmd) cmd;
+                placed.add(new PlacedAdd(dst, a.data));
+                dst += a.data.length;
             }
         }
         return placed;
@@ -49,13 +51,15 @@ public final class Apply {
     public static int applyPlacedTo(byte[] r, List<PlacedCommand> commands, byte[] out) {
         int maxWritten = 0;
         for (PlacedCommand cmd : commands) {
-            if (cmd instanceof PlacedCopy c) {
-                System.arraycopy(r, c.src(), out, c.dst(), c.length());
-                int end = c.dst() + c.length();
+            if (cmd instanceof PlacedCopy) {
+                PlacedCopy c = (PlacedCopy) cmd;
+                System.arraycopy(r, c.src, out, c.dst, c.length);
+                int end = c.dst + c.length;
                 if (end > maxWritten) maxWritten = end;
-            } else if (cmd instanceof PlacedAdd a) {
-                System.arraycopy(a.data(), 0, out, a.dst(), a.data().length);
-                int end = a.dst() + a.data().length;
+            } else if (cmd instanceof PlacedAdd) {
+                PlacedAdd a = (PlacedAdd) cmd;
+                System.arraycopy(a.data, 0, out, a.dst, a.data.length);
+                int end = a.dst + a.data.length;
                 if (end > maxWritten) maxWritten = end;
             }
         }
@@ -65,10 +69,12 @@ public final class Apply {
     /** Apply placed commands in-place within a single buffer. */
     public static void applyPlacedInplaceTo(List<PlacedCommand> commands, byte[] buf) {
         for (PlacedCommand cmd : commands) {
-            if (cmd instanceof PlacedCopy c) {
-                System.arraycopy(buf, c.src(), buf, c.dst(), c.length());
-            } else if (cmd instanceof PlacedAdd a) {
-                System.arraycopy(a.data(), 0, buf, a.dst(), a.data().length);
+            if (cmd instanceof PlacedCopy) {
+                PlacedCopy c = (PlacedCopy) cmd;
+                System.arraycopy(buf, c.src, buf, c.dst, c.length);
+            } else if (cmd instanceof PlacedAdd) {
+                PlacedAdd a = (PlacedAdd) cmd;
+                System.arraycopy(a.data, 0, buf, a.dst, a.data.length);
             }
         }
     }
@@ -78,12 +84,14 @@ public final class Apply {
         byte[] out = new byte[outputSize(commands)];
         int pos = 0;
         for (Command cmd : commands) {
-            if (cmd instanceof CopyCmd c) {
-                System.arraycopy(r, c.offset(), out, pos, c.length());
-                pos += c.length();
-            } else if (cmd instanceof AddCmd a) {
-                System.arraycopy(a.data(), 0, out, pos, a.data().length);
-                pos += a.data().length;
+            if (cmd instanceof CopyCmd) {
+                CopyCmd c = (CopyCmd) cmd;
+                System.arraycopy(r, c.offset, out, pos, c.length);
+                pos += c.length;
+            } else if (cmd instanceof AddCmd) {
+                AddCmd a = (AddCmd) cmd;
+                System.arraycopy(a.data, 0, out, pos, a.data.length);
+                pos += a.data.length;
             }
         }
         return out;
@@ -115,21 +123,22 @@ public final class Apply {
      */
     public static List<PlacedCommand> makeInplace(byte[] r, List<Command> commands,
                                                    CyclePolicy policy) {
-        if (commands.isEmpty()) return List.of();
+        if (commands.isEmpty()) return new ArrayList<>();
 
         // Step 1: compute write offsets
-        record CopyInfo(int idx, int src, int dst, int length) {}
-        List<CopyInfo> copies = new ArrayList<>();
+        List<int[]> copies = new ArrayList<>(); // {idx, src, dst, length}
         List<PlacedAdd> adds = new ArrayList<>();
         int writePos = 0;
 
         for (Command cmd : commands) {
-            if (cmd instanceof CopyCmd c) {
-                copies.add(new CopyInfo(copies.size(), c.offset(), writePos, c.length()));
-                writePos += c.length();
-            } else if (cmd instanceof AddCmd a) {
-                adds.add(new PlacedAdd(writePos, a.data()));
-                writePos += a.data().length;
+            if (cmd instanceof CopyCmd) {
+                CopyCmd c = (CopyCmd) cmd;
+                copies.add(new int[]{copies.size(), c.offset, writePos, c.length});
+                writePos += c.length;
+            } else if (cmd instanceof AddCmd) {
+                AddCmd a = (AddCmd) cmd;
+                adds.add(new PlacedAdd(writePos, a.data));
+                writePos += a.data.length;
             }
         }
 
@@ -142,12 +151,11 @@ public final class Apply {
         for (int i = 0; i < n; i++) adj.add(new ArrayList<>());
 
         for (int i = 0; i < n; i++) {
-            CopyInfo ci = copies.get(i);
+            int si = copies.get(i)[1], li = copies.get(i)[3];
             for (int j = 0; j < n; j++) {
                 if (i == j) continue;
-                CopyInfo cj = copies.get(j);
-                // i's read [src_i, src_i+len_i) overlaps j's write [dst_j, dst_j+len_j)
-                if (ci.src < cj.dst + cj.length && cj.dst < ci.src + ci.length) {
+                int dj = copies.get(j)[2], lj = copies.get(j)[3];
+                if (si < dj + lj && dj < si + li) {
                     adj.get(i).add(j);
                     inDeg[j]++;
                 }
@@ -193,10 +201,10 @@ public final class Apply {
                 List<Integer> cycle = findCycle(adj, removed, n);
                 if (cycle != null) {
                     victim = cycle.get(0);
-                    int minLen = copies.get(victim).length;
+                    int minLen = copies.get(victim)[3];
                     for (int idx : cycle) {
-                        if (copies.get(idx).length < minLen) {
-                            minLen = copies.get(idx).length;
+                        if (copies.get(idx)[3] < minLen) {
+                            minLen = copies.get(idx)[3];
                             victim = idx;
                         }
                     }
@@ -209,10 +217,10 @@ public final class Apply {
             }
 
             // Convert victim: materialize copy data as literal add
-            CopyInfo ci = copies.get(victim);
-            byte[] data = new byte[ci.length];
-            System.arraycopy(r, ci.src, data, 0, ci.length);
-            adds.add(new PlacedAdd(ci.dst, data));
+            int[] ci = copies.get(victim);
+            byte[] data = new byte[ci[3]];
+            System.arraycopy(r, ci[1], data, 0, ci[3]);
+            adds.add(new PlacedAdd(ci[2], data));
             removed[victim] = true;
             processed++;
 
@@ -227,8 +235,8 @@ public final class Apply {
         // Step 4: assemble result — copies in topo order, then all adds
         List<PlacedCommand> result = new ArrayList<>();
         for (int i : topoOrder) {
-            CopyInfo ci = copies.get(i);
-            result.add(new PlacedCopy(ci.src, ci.dst, ci.length));
+            int[] ci = copies.get(i);
+            result.add(new PlacedCopy(ci[1], ci[2], ci[3]));
         }
         result.addAll(adds);
         return result;
@@ -268,12 +276,12 @@ public final class Apply {
         int numCopies = 0, numAdds = 0;
         long copyBytes = 0, addBytes = 0;
         for (PlacedCommand cmd : commands) {
-            if (cmd instanceof PlacedCopy c) {
+            if (cmd instanceof PlacedCopy) {
                 numCopies++;
-                copyBytes += c.length();
-            } else if (cmd instanceof PlacedAdd a) {
+                copyBytes += ((PlacedCopy) cmd).length;
+            } else if (cmd instanceof PlacedAdd) {
                 numAdds++;
-                addBytes += a.data().length;
+                addBytes += ((PlacedAdd) cmd).data.length;
             }
         }
         return new PlacedSummary(commands.size(), numCopies, numAdds,

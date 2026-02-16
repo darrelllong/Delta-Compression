@@ -26,8 +26,11 @@ public final class Encoding {
         // Estimate size: header(9) + commands + END(1)
         int est = 10;
         for (PlacedCommand cmd : commands) {
-            if (cmd instanceof PlacedCopy) est += 13;
-            else if (cmd instanceof PlacedAdd a) est += 9 + a.data().length;
+            if (cmd instanceof PlacedCopy) {
+                est += 13;
+            } else if (cmd instanceof PlacedAdd) {
+                est += 9 + ((PlacedAdd) cmd).data.length;
+            }
         }
         byte[] out = new byte[est];
         int pos = 0;
@@ -38,17 +41,19 @@ public final class Encoding {
         putU32BE(out, pos, versionSize); pos += 4;
 
         for (PlacedCommand cmd : commands) {
-            if (cmd instanceof PlacedCopy c) {
+            if (cmd instanceof PlacedCopy) {
+                PlacedCopy c = (PlacedCopy) cmd;
                 out[pos++] = 1;
-                putU32BE(out, pos, c.src()); pos += 4;
-                putU32BE(out, pos, c.dst()); pos += 4;
-                putU32BE(out, pos, c.length()); pos += 4;
-            } else if (cmd instanceof PlacedAdd a) {
+                putU32BE(out, pos, c.src); pos += 4;
+                putU32BE(out, pos, c.dst); pos += 4;
+                putU32BE(out, pos, c.length); pos += 4;
+            } else if (cmd instanceof PlacedAdd) {
+                PlacedAdd a = (PlacedAdd) cmd;
                 out[pos++] = 2;
-                putU32BE(out, pos, a.dst()); pos += 4;
-                putU32BE(out, pos, a.data().length); pos += 4;
-                System.arraycopy(a.data(), 0, out, pos, a.data().length);
-                pos += a.data().length;
+                putU32BE(out, pos, a.dst); pos += 4;
+                putU32BE(out, pos, a.data.length); pos += 4;
+                System.arraycopy(a.data, 0, out, pos, a.data.length);
+                pos += a.data.length;
             }
         }
 
@@ -62,7 +67,7 @@ public final class Encoding {
         return out;
     }
 
-    /** Decode the unified binary delta format. Returns {commands, inplace, versionSize}. */
+    /** Decode the unified binary delta format. */
     public static DecodeResult decodeDelta(byte[] data) {
         if (data.length < 9) throw new IllegalArgumentException("not a delta file");
         for (int i = 0; i < 4; i++) {
@@ -111,7 +116,16 @@ public final class Encoding {
             && (data[4] & FLAG_INPLACE) != 0;
     }
 
-    public record DecodeResult(List<PlacedCommand> commands, boolean inplace, int versionSize) {}
+    public static final class DecodeResult {
+        public final List<PlacedCommand> commands;
+        public final boolean inplace;
+        public final int versionSize;
+        DecodeResult(List<PlacedCommand> commands, boolean inplace, int versionSize) {
+            this.commands = commands;
+            this.inplace = inplace;
+            this.versionSize = versionSize;
+        }
+    }
 
     private static void putU32BE(byte[] buf, int off, int value) {
         buf[off]     = (byte) (value >>> 24);
