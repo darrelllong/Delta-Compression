@@ -26,10 +26,12 @@ std::vector<Command> diff_correcting(
     size_t q,
     size_t buf_cap,
     bool verbose,
-    bool use_splay) {
+    bool use_splay,
+    size_t min_copy) {
 
     std::vector<Command> commands;
     if (v.empty()) return commands;
+    const size_t effective_min = (min_copy > 0) ? min_copy : p;
 
     // ── Checkpointing parameters (Section 8.1, pp. 347-348) ─────────
     size_t num_seeds = (r.size() >= p) ? (r.size() - p + 1) : 0;
@@ -207,6 +209,12 @@ std::vector<Command> diff_correcting(
         size_t ml = bwd + fwd;
         size_t match_end = v_m + ml;
 
+        // Filter: skip matches shorter than --min-copy
+        if (ml < effective_min) {
+            ++v_c;
+            continue;
+        }
+
         // ── Step (6): encode with correction ─────────────────────
         if (v_s <= v_m) {
             // (6a) match is entirely in unencoded suffix (Section 7)
@@ -350,15 +358,16 @@ std::vector<Command> diff(
     size_t p,
     size_t q,
     bool verbose,
-    bool use_splay) {
+    bool use_splay,
+    size_t min_copy) {
 
     switch (algo) {
     case Algorithm::Greedy:
-        return diff_greedy(r, v, p, q, verbose, use_splay);
+        return diff_greedy(r, v, p, q, verbose, use_splay, min_copy);
     case Algorithm::Onepass:
-        return diff_onepass(r, v, p, q, verbose, use_splay);
+        return diff_onepass(r, v, p, q, verbose, use_splay, min_copy);
     case Algorithm::Correcting:
-        return diff_correcting(r, v, p, q, 256, verbose, use_splay);
+        return diff_correcting(r, v, p, q, 256, verbose, use_splay, min_copy);
     }
     __builtin_unreachable();
 }

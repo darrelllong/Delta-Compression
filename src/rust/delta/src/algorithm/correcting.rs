@@ -45,11 +45,13 @@ pub fn diff_correcting(
     buf_cap: usize,
     verbose: bool,
     use_splay: bool,
+    min_copy: usize,
 ) -> Vec<Command> {
     let mut commands = Vec::new();
     if v.is_empty() {
         return commands;
     }
+    let effective_min = if min_copy > 0 { min_copy } else { p };
 
     // ── Checkpointing parameters (Section 8.1, pp. 347-348) ─────────
     let num_seeds = if r.len() >= p { r.len() - p + 1 } else { 0 };
@@ -244,6 +246,12 @@ pub fn diff_correcting(
         let ml = bwd + fwd;
         let match_end = v_m + ml;
 
+        // Filter: skip matches shorter than --min-copy
+        if ml < effective_min {
+            v_c += 1;
+            continue;
+        }
+
         // ── Step (6): encode with correction ─────────────────────
         if v_s <= v_m {
             // (6a) match is entirely in unencoded suffix (Section 7)
@@ -422,5 +430,5 @@ pub fn diff_correcting(
 
 /// Convenience wrapper with default parameters.
 pub fn diff_correcting_default(r: &[u8], v: &[u8]) -> Vec<Command> {
-    diff_correcting(r, v, SEED_LEN, TABLE_SIZE, 256, false, false)
+    diff_correcting(r, v, SEED_LEN, TABLE_SIZE, 256, false, false, 0)
 }

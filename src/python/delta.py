@@ -219,7 +219,8 @@ def _fp_to_index(fp: int, table_size: int) -> int:
 
 def diff_greedy(R: bytes, V: bytes,
                 p: int = SEED_LEN, q: int = TABLE_SIZE,
-                verbose: bool = False) -> List[Command]:
+                verbose: bool = False,
+                min_copy: int = 0) -> List[Command]:
     """Greedy algorithm (Section 3.1, Figure 2).
 
     Uses a chained hash table (Python dict) that stores ALL offsets
@@ -228,6 +229,7 @@ def diff_greedy(R: bytes, V: bytes,
     commands: List[Command] = []
     if not V:
         return commands
+    effective_min = min_copy if min_copy > 0 else p
 
     # Step (1): build hash table mapping fingerprints to R offsets
     H_R: dict = defaultdict(list)
@@ -267,7 +269,7 @@ def diff_greedy(R: bytes, V: bytes,
                 best_len = ml
                 best_rm = r_cand
 
-        if best_len == 0:
+        if best_len < effective_min:
             v_c += 1
             continue
 
@@ -322,7 +324,8 @@ def diff_greedy(R: bytes, V: bytes,
 
 def diff_onepass(R: bytes, V: bytes,
                  p: int = SEED_LEN, q: int = TABLE_SIZE,
-                 verbose: bool = False) -> List[Command]:
+                 verbose: bool = False,
+                 min_copy: int = 0) -> List[Command]:
     """One-pass algorithm (Section 4.1, Figure 3).
 
     The hash table is auto-sized to next_prime(max(q, num_seeds // p)) so
@@ -332,6 +335,7 @@ def diff_onepass(R: bytes, V: bytes,
     commands: List[Command] = []
     if not V:
         return commands
+    effective_min = min_copy if min_copy > 0 else p
 
     # Auto-size hash table: one slot per p-byte chunk of R (floor = q).
     num_seeds = max(0, len(R) - p + 1)
@@ -432,6 +436,12 @@ def diff_onepass(R: bytes, V: bytes,
                and V[v_m + ml] == R[r_m + ml]):
             ml += 1
 
+        # Filter: skip matches shorter than --min-copy
+        if ml < effective_min:
+            v_c += 1
+            r_c += 1
+            continue
+
         # Step (6): emit ADD for unmatched gap, then COPY for match
         if v_s < v_m:
             commands.append(AddCmd(data=V[v_s:v_m]))
@@ -508,7 +518,8 @@ class _BufEntry:
 def diff_correcting(R: bytes, V: bytes,
                     p: int = SEED_LEN, q: int = TABLE_SIZE,
                     buf_cap: int = 256,
-                    verbose: bool = False) -> List[Command]:
+                    verbose: bool = False,
+                    min_copy: int = 0) -> List[Command]:
     """Correcting 1.5-pass algorithm (Section 7, Figure 8) with
     fingerprint-based checkpointing (Section 8).
 
@@ -539,6 +550,7 @@ def diff_correcting(R: bytes, V: bytes,
     commands: List[Command] = []
     if not V:
         return commands
+    effective_min = min_copy if min_copy > 0 else p
 
     # ── Checkpointing parameters (Section 8.1, pp. 347-348) ──────────
     num_seeds = max(0, len(R) - p + 1)
@@ -675,6 +687,11 @@ def diff_correcting(R: bytes, V: bytes,
         r_m = r_offset - bwd
         ml = bwd + fwd
         match_end = v_m + ml
+
+        # Filter: skip matches shorter than --min-copy
+        if ml < effective_min:
+            v_c += 1
+            continue
 
         # ── Step (6): encode with correction ──────────────────────
         if v_s <= v_m:
@@ -1210,7 +1227,7 @@ def cmd_encode(args):
     with mmap_open(args.reference) as R, mmap_open(args.version) as V:
         t0 = time.time()
         commands = algo(R, V, p=args.seed_len, q=args.table_size,
-                        verbose=args.verbose)
+                        verbose=args.verbose, min_copy=args.min_copy)
 
         if args.inplace:
             placed = make_inplace(R, commands, policy=args.policy)
@@ -1304,6 +1321,8 @@ def main():
                      help='Cycle-breaking policy for --inplace (default: localmin)')
     enc.add_argument('--verbose', action='store_true',
                      help='Print diagnostic messages to stderr')
+    enc.add_argument('--min-copy', type=int, default=0,
+                     help='Minimum copy length (0 = use seed length)')
     enc.set_defaults(func=cmd_encode)
 
     # decode

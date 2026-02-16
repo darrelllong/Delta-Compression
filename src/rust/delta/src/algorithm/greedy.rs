@@ -11,11 +11,12 @@ use crate::types::{Command, SEED_LEN, TABLE_SIZE};
 /// Uses a chained hash table (HashMap) or splay tree storing ALL offsets
 /// in R per fingerprint.
 /// Time: O(|V| * |R|) worst case. Space: O(|R|).
-pub fn diff_greedy(r: &[u8], v: &[u8], p: usize, _q: usize, verbose: bool, use_splay: bool) -> Vec<Command> {
+pub fn diff_greedy(r: &[u8], v: &[u8], p: usize, _q: usize, verbose: bool, use_splay: bool, min_copy: usize) -> Vec<Command> {
     let mut commands = Vec::new();
     if v.is_empty() {
         return commands;
     }
+    let effective_min = if min_copy > 0 { min_copy } else { p };
 
     // Step (1): Build lookup structure for R keyed by full fingerprint.
     // Hash table (default) or splay tree (--splay).
@@ -87,7 +88,7 @@ pub fn diff_greedy(r: &[u8], v: &[u8], p: usize, _q: usize, verbose: bool, use_s
             }
         }
 
-        if best_len == 0 {
+        if best_len < effective_min {
             v_c += 1;
             continue;
         }
@@ -165,5 +166,5 @@ pub fn diff_greedy(r: &[u8], v: &[u8], p: usize, _q: usize, verbose: bool, use_s
 
 /// Convenience wrapper with default parameters.
 pub fn diff_greedy_default(r: &[u8], v: &[u8]) -> Vec<Command> {
-    diff_greedy(r, v, SEED_LEN, TABLE_SIZE, false, false)
+    diff_greedy(r, v, SEED_LEN, TABLE_SIZE, false, false, 0)
 }

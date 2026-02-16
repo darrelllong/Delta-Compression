@@ -17,10 +17,12 @@ std::vector<Command> diff_greedy(
     size_t p,
     size_t /*q*/,
     bool verbose,
-    bool use_splay) {
+    bool use_splay,
+    size_t min_copy) {
 
     std::vector<Command> commands;
     if (v.empty()) return commands;
+    const size_t effective_min = (min_copy > 0) ? min_copy : p;
 
     // Step (1): Build lookup structure for R keyed by full fingerprint.
     // Hash table (default) or splay tree (--splay).
@@ -89,7 +91,7 @@ std::vector<Command> diff_greedy(
             }
         }
 
-        if (best_len == 0) {
+        if (best_len < effective_min) {
             ++v_c;
             continue;
         }

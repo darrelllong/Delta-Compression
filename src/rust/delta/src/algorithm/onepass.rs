@@ -16,11 +16,12 @@ use crate::types::{Command, SEED_LEN, TABLE_SIZE};
 /// The hash table is auto-sized to max(q, num_seeds / p) so that large
 /// inputs get one slot per seed-length chunk of R.  TABLE_SIZE acts as a
 /// floor for small files.
-pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool, use_splay: bool) -> Vec<Command> {
+pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool, use_splay: bool, min_copy: usize) -> Vec<Command> {
     let mut commands = Vec::new();
     if v.is_empty() {
         return commands;
     }
+    let effective_min = if min_copy > 0 { min_copy } else { p };
 
     // Auto-size hash table: one slot per p-byte chunk of R (floor = q).
     let num_seeds = if r.len() >= p { r.len() - p + 1 } else { 0 };
@@ -175,6 +176,13 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool, use_s
             ml += 1;
         }
 
+        // Filter: skip matches shorter than --min-copy
+        if ml < effective_min {
+            v_c += 1;
+            r_c += 1;
+            continue;
+        }
+
         // Step (6): encode
         if v_s < v_m {
             commands.push(Command::Add {
@@ -253,5 +261,5 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool, use_s
 
 /// Convenience wrapper with default parameters.
 pub fn diff_onepass_default(r: &[u8], v: &[u8]) -> Vec<Command> {
-    diff_onepass(r, v, SEED_LEN, TABLE_SIZE, false, false)
+    diff_onepass(r, v, SEED_LEN, TABLE_SIZE, false, false, 0)
 }

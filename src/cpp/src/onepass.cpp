@@ -17,10 +17,12 @@ std::vector<Command> diff_onepass(
     size_t p,
     size_t q,
     bool verbose,
-    bool use_splay) {
+    bool use_splay,
+    size_t min_copy) {
 
     std::vector<Command> commands;
     if (v.empty()) return commands;
+    const size_t effective_min = (min_copy > 0) ? min_copy : p;
 
     // Auto-size hash table: one slot per p-byte chunk of R (floor = q).
     size_t num_seeds = (r.size() >= p) ? (r.size() - p + 1) : 0;
@@ -145,6 +147,13 @@ std::vector<Command> diff_onepass(
         while (v_m + ml < v.size() && r_m + ml < r.size()
                && v[v_m + ml] == r[r_m + ml]) {
             ++ml;
+        }
+
+        // Filter: skip matches shorter than --min-copy
+        if (ml < effective_min) {
+            ++v_c;
+            ++r_c;
+            continue;
         }
 
         // Step (6): encode
