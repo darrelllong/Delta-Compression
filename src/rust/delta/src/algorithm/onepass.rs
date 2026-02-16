@@ -1,4 +1,4 @@
-use crate::hash::{fingerprint, next_prime};
+use crate::hash::{fingerprint, next_prime, RollingHash};
 use crate::splay::SplayTree;
 use crate::types::{Command, SEED_LEN, TABLE_SIZE};
 
@@ -21,7 +21,9 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool, use_s
     if v.is_empty() {
         return commands;
     }
-    let effective_min = if min_copy > 0 { min_copy } else { p };
+    // --min-copy raises the seed length so we never fingerprint at a
+    // granularity finer than the minimum copy threshold.
+    let p = if min_copy > 0 { p.max(min_copy) } else { p };
 
     // Auto-size hash table: one slot per p-byte chunk of R (floor = q).
     let num_seeds = if r.len() >= p { r.len() - p + 1 } else { 0 };
@@ -81,6 +83,13 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool, use_s
     let mut v_c: usize = 0;
     let mut v_s: usize = 0;
 
+    // Rolling hashes for O(1) per-position fingerprinting.
+    // Initialized lazily on first use and reinitialized after match jumps.
+    let mut rh_v: Option<RollingHash> = if v.len() >= p { Some(RollingHash::new(v, 0, p)) } else { None };
+    let mut rh_r: Option<RollingHash> = if r.len() >= p { Some(RollingHash::new(r, 0, p)) } else { None };
+    let mut rh_v_pos: usize = 0; // position rh_v currently represents
+    let mut rh_r_pos: usize = 0;
+
     loop {
         // Step (3)
         let can_v = v_c + p <= v.len();
@@ -92,12 +101,39 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool, use_s
         dbg_positions += 1;
 
         let fp_v = if can_v {
-            Some(fingerprint(v, v_c, p))
+            if let Some(ref mut rh) = rh_v {
+                if v_c == rh_v_pos {
+                    // Already at the right position
+                } else if v_c == rh_v_pos + 1 {
+                    rh.roll(v[v_c - 1], v[v_c + p - 1]);
+                    rh_v_pos = v_c;
+                } else {
+                    // Jump — reinitialize
+                    *rh = RollingHash::new(v, v_c, p);
+                    rh_v_pos = v_c;
+                }
+                Some(rh.value())
+            } else {
+                None
+            }
         } else {
             None
         };
         let fp_r = if can_r {
-            Some(fingerprint(r, r_c, p))
+            if let Some(ref mut rh) = rh_r {
+                if r_c == rh_r_pos {
+                    // Already at the right position
+                } else if r_c == rh_r_pos + 1 {
+                    rh.roll(r[r_c - 1], r[r_c + p - 1]);
+                    rh_r_pos = r_c;
+                } else {
+                    *rh = RollingHash::new(r, r_c, p);
+                    rh_r_pos = r_c;
+                }
+                Some(rh.value())
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -177,7 +213,7 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool, use_s
         }
 
         // Filter: skip matches shorter than --min-copy
-        if ml < effective_min {
+        if ml < p {
             v_c += 1;
             r_c += 1;
             continue;

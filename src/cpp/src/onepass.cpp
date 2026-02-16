@@ -22,7 +22,9 @@ std::vector<Command> diff_onepass(
 
     std::vector<Command> commands;
     if (v.empty()) return commands;
-    const size_t effective_min = (min_copy > 0) ? min_copy : p;
+    // --min-copy raises the seed length so we never fingerprint at a
+    // granularity finer than the minimum copy threshold.
+    if (min_copy > 0 && min_copy > p) p = min_copy;
 
     // Auto-size hash table: one slot per p-byte chunk of R (floor = q).
     size_t num_seeds = (r.size() >= p) ? (r.size() - p + 1) : 0;
@@ -94,6 +96,12 @@ std::vector<Command> diff_onepass(
     // Step (2)
     size_t r_c = 0, v_c = 0, v_s = 0;
 
+    // Rolling hashes for O(1) per-position fingerprinting.
+    std::optional<RollingHash> rh_v, rh_r;
+    size_t rh_v_pos = 0, rh_r_pos = 0;
+    if (v.size() >= p) { rh_v.emplace(v, 0, p); rh_v_pos = 0; }
+    if (r.size() >= p) { rh_r.emplace(r, 0, p); rh_r_pos = 0; }
+
     for (;;) {
         // Step (3)
         bool can_v = (v_c + p <= v.size());
@@ -102,8 +110,30 @@ std::vector<Command> diff_onepass(
         ++dbg_positions;
 
         std::optional<uint64_t> fp_v, fp_r;
-        if (can_v) fp_v = fingerprint(v, v_c, p);
-        if (can_r) fp_r = fingerprint(r, r_c, p);
+        if (can_v && rh_v) {
+            if (v_c == rh_v_pos) {
+                // already positioned
+            } else if (v_c == rh_v_pos + 1) {
+                rh_v->roll(v[v_c - 1], v[v_c + p - 1]);
+                rh_v_pos = v_c;
+            } else {
+                rh_v.emplace(v, v_c, p);
+                rh_v_pos = v_c;
+            }
+            fp_v = rh_v->value();
+        }
+        if (can_r && rh_r) {
+            if (r_c == rh_r_pos) {
+                // already positioned
+            } else if (r_c == rh_r_pos + 1) {
+                rh_r->roll(r[r_c - 1], r[r_c + p - 1]);
+                rh_r_pos = r_c;
+            } else {
+                rh_r.emplace(r, r_c, p);
+                rh_r_pos = r_c;
+            }
+            fp_r = rh_r->value();
+        }
 
         // Step (4a): store offsets (retain-existing policy)
         if (fp_v) hput(true, *fp_v, v_c);
@@ -150,7 +180,7 @@ std::vector<Command> diff_onepass(
         }
 
         // Filter: skip matches shorter than --min-copy
-        if (ml < effective_min) {
+        if (ml < p) {
             ++v_c;
             ++r_c;
             continue;

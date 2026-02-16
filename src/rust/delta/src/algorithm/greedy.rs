@@ -16,7 +16,9 @@ pub fn diff_greedy(r: &[u8], v: &[u8], p: usize, _q: usize, verbose: bool, use_s
     if v.is_empty() {
         return commands;
     }
-    let effective_min = if min_copy > 0 { min_copy } else { p };
+    // --min-copy raises the seed length so we never fingerprint at a
+    // granularity finer than the minimum copy threshold.
+    let p = if min_copy > 0 { p.max(min_copy) } else { p };
 
     // Step (1): Build lookup structure for R keyed by full fingerprint.
     // Hash table (default) or splay tree (--splay).
@@ -52,13 +54,32 @@ pub fn diff_greedy(r: &[u8], v: &[u8], p: usize, _q: usize, verbose: bool, use_s
     let mut v_c: usize = 0;
     let mut v_s: usize = 0;
 
+    // Rolling hash for O(1) per-position V fingerprinting.
+    let mut rh_v: Option<RollingHash> = if v.len() >= p { Some(RollingHash::new(v, 0, p)) } else { None };
+    let mut rh_v_pos: usize = 0;
+
     loop {
         // Step (3)
         if v_c + p > v.len() {
             break;
         }
 
-        let fp_v = fingerprint(v, v_c, p);
+        let fp_v = if let Some(ref mut rh) = rh_v {
+            if v_c == rh_v_pos {
+                rh.value()
+            } else if v_c == rh_v_pos + 1 {
+                rh.roll(v[v_c - 1], v[v_c + p - 1]);
+                rh_v_pos = v_c;
+                rh.value()
+            } else {
+                // Jump after match — reinitialize
+                *rh = RollingHash::new(v, v_c, p);
+                rh_v_pos = v_c;
+                rh.value()
+            }
+        } else {
+            break;
+        };
 
         // Steps (4)+(5): find the longest matching substring
         let mut best_rm: Option<usize> = None;
@@ -88,7 +109,7 @@ pub fn diff_greedy(r: &[u8], v: &[u8], p: usize, _q: usize, verbose: bool, use_s
             }
         }
 
-        if best_len < effective_min {
+        if best_len < p {
             v_c += 1;
             continue;
         }

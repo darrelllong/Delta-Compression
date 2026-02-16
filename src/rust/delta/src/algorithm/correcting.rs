@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::hash::{fingerprint, next_prime};
+use crate::hash::{fingerprint, next_prime, RollingHash};
 use crate::splay::SplayTree;
 use crate::types::{Command, SEED_LEN, TABLE_SIZE};
 
@@ -51,7 +51,9 @@ pub fn diff_correcting(
     if v.is_empty() {
         return commands;
     }
-    let effective_min = if min_copy > 0 { min_copy } else { p };
+    // --min-copy raises the seed length so we never fingerprint at a
+    // granularity finer than the minimum copy threshold.
+    let p = if min_copy > 0 { p.max(min_copy) } else { p };
 
     // ── Checkpointing parameters (Section 8.1, pp. 347-348) ─────────
     let num_seeds = if r.len() >= p { r.len() - p + 1 } else { 0 };
@@ -106,8 +108,15 @@ pub fn diff_correcting(
     let mut h_r_ht: Vec<Option<(u64, usize)>> = if !use_splay { vec![None; cap] } else { Vec::new() };
     let mut h_r_sp: SplayTree<(u64, usize)> = SplayTree::new(); // (full_fp, offset)
 
+    let mut rh_r = if num_seeds > 0 { Some(RollingHash::new(r, 0, p)) } else { None };
     for a in 0..num_seeds {
-        let fp = fingerprint(r, a, p);
+        let fp = if a == 0 {
+            rh_r.as_ref().unwrap().value()
+        } else {
+            let rh = rh_r.as_mut().unwrap();
+            rh.roll(r[a - 1], r[a + p - 1]);
+            rh.value()
+        };
         let f = fp % f_size;
         if f % m != k {
             continue; // not a checkpoint seed
@@ -184,6 +193,11 @@ pub fn diff_correcting(
     let mut v_c: usize = 0;
     let mut v_s: usize = 0;
 
+    // Rolling hash for O(1) per-position V fingerprinting.
+    let v_seeds = if v.len() >= p { v.len() - p + 1 } else { 0 };
+    let mut rh_v = if v_seeds > 0 { Some(RollingHash::new(v, 0, p)) } else { None };
+    let mut rh_v_pos: usize = 0;
+
     loop {
         // Step (3)
         if v_c + p > v.len() {
@@ -191,7 +205,21 @@ pub fn diff_correcting(
         }
 
         // Step (4): generate footprint at v_c, apply checkpoint test.
-        let fp_v = fingerprint(v, v_c, p);
+        let fp_v = if let Some(ref mut rh) = rh_v {
+            if v_c == rh_v_pos {
+                rh.value()
+            } else if v_c == rh_v_pos + 1 {
+                rh.roll(v[v_c - 1], v[v_c + p - 1]);
+                rh_v_pos = v_c;
+                rh.value()
+            } else {
+                *rh = RollingHash::new(v, v_c, p);
+                rh_v_pos = v_c;
+                rh.value()
+            }
+        } else {
+            break;
+        };
         let f_v = fp_v % f_size;
         if f_v % m != k {
             v_c += 1;
@@ -247,7 +275,7 @@ pub fn diff_correcting(
         let match_end = v_m + ml;
 
         // Filter: skip matches shorter than --min-copy
-        if ml < effective_min {
+        if ml < p {
             v_c += 1;
             continue;
         }

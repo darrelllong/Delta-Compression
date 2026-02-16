@@ -31,7 +31,9 @@ std::vector<Command> diff_correcting(
 
     std::vector<Command> commands;
     if (v.empty()) return commands;
-    const size_t effective_min = (min_copy > 0) ? min_copy : p;
+    // --min-copy raises the seed length so we never fingerprint at a
+    // granularity finer than the minimum copy threshold.
+    if (min_copy > 0 && min_copy > p) p = min_copy;
 
     // ── Checkpointing parameters (Section 8.1, pp. 347-348) ─────────
     size_t num_seeds = (r.size() >= p) ? (r.size() - p + 1) : 0;
@@ -80,8 +82,16 @@ std::vector<Command> diff_correcting(
         h_r_ht.resize(cap);
     }
 
+    std::optional<RollingHash> rh_build;
+    if (num_seeds > 0) rh_build.emplace(r, 0, p);
     for (size_t a = 0; a < num_seeds; ++a) {
-        uint64_t fp = fingerprint(r, a, p);
+        uint64_t fp;
+        if (a == 0) {
+            fp = rh_build->value();
+        } else {
+            rh_build->roll(r[a - 1], r[a + p - 1]);
+            fp = rh_build->value();
+        }
         uint64_t f = fp % f_size;
         if (f % m != k) continue; // not a checkpoint seed
         ++dbg_build_passed;
@@ -152,12 +162,28 @@ std::vector<Command> diff_correcting(
     size_t v_c = 0;
     size_t v_s = 0;
 
+    // Rolling hash for O(1) per-position V fingerprinting.
+    std::optional<RollingHash> rh_v_scan;
+    size_t rh_v_pos = 0;
+    if (v.size() >= p) { rh_v_scan.emplace(v, 0, p); rh_v_pos = 0; }
+
     for (;;) {
         // Step (3)
         if (v_c + p > v.size()) break;
 
         // Step (4): generate footprint at v_c, apply checkpoint test.
-        uint64_t fp_v = fingerprint(v, v_c, p);
+        uint64_t fp_v;
+        if (v_c == rh_v_pos) {
+            fp_v = rh_v_scan->value();
+        } else if (v_c == rh_v_pos + 1) {
+            rh_v_scan->roll(v[v_c - 1], v[v_c + p - 1]);
+            rh_v_pos = v_c;
+            fp_v = rh_v_scan->value();
+        } else {
+            rh_v_scan.emplace(v, v_c, p);
+            rh_v_pos = v_c;
+            fp_v = rh_v_scan->value();
+        }
         uint64_t f_v = fp_v % f_size;
         if (f_v % m != k) {
             ++v_c;
@@ -210,7 +236,7 @@ std::vector<Command> diff_correcting(
         size_t match_end = v_m + ml;
 
         // Filter: skip matches shorter than --min-copy
-        if (ml < effective_min) {
+        if (ml < p) {
             ++v_c;
             continue;
         }

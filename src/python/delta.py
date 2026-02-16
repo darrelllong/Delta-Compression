@@ -202,6 +202,21 @@ def _fingerprint(data: bytes, offset: int, p: int) -> int:
     return h
 
 
+class _RollingHash:
+    """Rolling Karp-Rabin hash for O(1) incremental fingerprint updates (Eq. 2)."""
+    __slots__ = ('value', '_bp', '_p')
+
+    def __init__(self, data: bytes, offset: int, p: int):
+        self._bp = _get_bp(p)
+        self._p = p
+        self.value = _fingerprint(data, offset, p)
+
+    def roll(self, old_byte: int, new_byte: int):
+        """Slide window: remove old_byte from left, add new_byte to right."""
+        v = (self.value - old_byte * self._bp) % HASH_MOD
+        self.value = (v * HASH_BASE + new_byte) % HASH_MOD
+
+
 def _fp_to_index(fp: int, table_size: int) -> int:
     """Map a full fingerprint to a hash table index (F mod q, Section 2.1.3)."""
     return fp % table_size
@@ -229,13 +244,20 @@ def diff_greedy(R: bytes, V: bytes,
     commands: List[Command] = []
     if not V:
         return commands
-    effective_min = min_copy if min_copy > 0 else p
+    # --min-copy raises the seed length so we never fingerprint at a
+    # granularity finer than the minimum copy threshold.
+    if min_copy > 0 and min_copy > p:
+        p = min_copy
 
     # Step (1): build hash table mapping fingerprints to R offsets
     H_R: dict = defaultdict(list)
-    for a in range(max(0, len(R) - p + 1)):
-        fp = _fingerprint(R, a, p)
-        H_R[fp].append(a)
+    num_seeds = max(0, len(R) - p + 1)
+    if num_seeds > 0:
+        rh = _RollingHash(R, 0, p)
+        H_R[rh.value].append(0)
+        for a in range(1, num_seeds):
+            rh.roll(R[a - 1], R[a + p - 1])
+            H_R[rh.value].append(a)
 
     if verbose:
         print(f"greedy: |R|={len(R):,}, |V|={len(V):,}, seed_len={p}",
@@ -245,12 +267,25 @@ def diff_greedy(R: bytes, V: bytes,
     v_c = 0
     v_s = 0
 
+    # Rolling hash for O(1) per-position V fingerprinting.
+    rh_v = _RollingHash(V, 0, p) if len(V) >= p else None
+    rh_v_pos = 0
+
     while True:
         # Step (3): stop when no full seed remains in V
         if v_c + p > len(V):
             break
 
-        fp_v = _fingerprint(V, v_c, p)
+        if v_c == rh_v_pos:
+            fp_v = rh_v.value
+        elif v_c == rh_v_pos + 1:
+            rh_v.roll(V[v_c - 1], V[v_c + p - 1])
+            rh_v_pos = v_c
+            fp_v = rh_v.value
+        else:
+            rh_v = _RollingHash(V, v_c, p)
+            rh_v_pos = v_c
+            fp_v = rh_v.value
 
         # Steps (4)+(5): find the longest matching substring among all
         # reference offsets that share this footprint.
@@ -269,7 +304,7 @@ def diff_greedy(R: bytes, V: bytes,
                 best_len = ml
                 best_rm = r_cand
 
-        if best_len < effective_min:
+        if best_len < p:
             v_c += 1
             continue
 
@@ -335,7 +370,10 @@ def diff_onepass(R: bytes, V: bytes,
     commands: List[Command] = []
     if not V:
         return commands
-    effective_min = min_copy if min_copy > 0 else p
+    # --min-copy raises the seed length so we never fingerprint at a
+    # granularity finer than the minimum copy threshold.
+    if min_copy > 0 and min_copy > p:
+        p = min_copy
 
     # Auto-size hash table: one slot per p-byte chunk of R (floor = q).
     num_seeds = max(0, len(R) - p + 1)
@@ -386,6 +424,12 @@ def diff_onepass(R: bytes, V: bytes,
     dbg_lookups = 0
     dbg_matches = 0
 
+    # Rolling hashes for O(1) per-position fingerprinting.
+    rh_v = _RollingHash(V, 0, p) if len(V) >= p else None
+    rh_r = _RollingHash(R, 0, p) if len(R) >= p else None
+    rh_v_pos = 0
+    rh_r_pos = 0
+
     while True:
         # Step (3): check if seeds remain in V and/or R
         can_v = v_c + p <= len(V)
@@ -395,8 +439,31 @@ def diff_onepass(R: bytes, V: bytes,
             break
         dbg_positions += 1
 
-        fp_v = _fingerprint(V, v_c, p) if can_v else None
-        fp_r = _fingerprint(R, r_c, p) if can_r else None
+        fp_v = None
+        if can_v and rh_v is not None:
+            if v_c == rh_v_pos:
+                fp_v = rh_v.value
+            elif v_c == rh_v_pos + 1:
+                rh_v.roll(V[v_c - 1], V[v_c + p - 1])
+                rh_v_pos = v_c
+                fp_v = rh_v.value
+            else:
+                rh_v = _RollingHash(V, v_c, p)
+                rh_v_pos = v_c
+                fp_v = rh_v.value
+
+        fp_r = None
+        if can_r and rh_r is not None:
+            if r_c == rh_r_pos:
+                fp_r = rh_r.value
+            elif r_c == rh_r_pos + 1:
+                rh_r.roll(R[r_c - 1], R[r_c + p - 1])
+                rh_r_pos = r_c
+                fp_r = rh_r.value
+            else:
+                rh_r = _RollingHash(R, r_c, p)
+                rh_r_pos = r_c
+                fp_r = rh_r.value
 
         # Step (4a): store offsets (retain-existing policy)
         if fp_v is not None:
@@ -437,7 +504,7 @@ def diff_onepass(R: bytes, V: bytes,
             ml += 1
 
         # Filter: skip matches shorter than --min-copy
-        if ml < effective_min:
+        if ml < p:
             v_c += 1
             r_c += 1
             continue
@@ -550,7 +617,10 @@ def diff_correcting(R: bytes, V: bytes,
     commands: List[Command] = []
     if not V:
         return commands
-    effective_min = min_copy if min_copy > 0 else p
+    # --min-copy raises the seed length so we never fingerprint at a
+    # granularity finer than the minimum copy threshold.
+    if min_copy > 0 and min_copy > p:
+        p = min_copy
 
     # ── Checkpointing parameters (Section 8.1, pp. 347-348) ──────────
     num_seeds = max(0, len(R) - p + 1)
@@ -588,8 +658,13 @@ def diff_correcting(R: bytes, V: bytes,
     # Scan every R position, apply checkpoint test (Eq. 3), store at
     # index i = floor(f / m) where f = fp % |F|.  (Section 8.2, p. 349)
     H_R: list = [None] * C
+    rh_build = _RollingHash(R, 0, p) if num_seeds > 0 else None
     for a in range(num_seeds):
-        fp = _fingerprint(R, a, p)
+        if a == 0:
+            fp = rh_build.value
+        else:
+            rh_build.roll(R[a - 1], R[a + p - 1])
+            fp = rh_build.value
         f = fp % F
         if f % m != k:
             continue                     # not a checkpoint seed
@@ -632,13 +707,26 @@ def diff_correcting(R: bytes, V: bytes,
     v_c = 0
     v_s = 0
 
+    # Rolling hash for O(1) per-position V fingerprinting.
+    rh_v_scan = _RollingHash(V, 0, p) if len(V) >= p else None
+    rh_v_pos = 0
+
     while True:
         # Step (3): if no more seeds in V, finish up.
         if v_c + p > len(V):
             break
 
         # Step (4): generate footprint at v_c, apply checkpoint test.
-        fp_v = _fingerprint(V, v_c, p)
+        if v_c == rh_v_pos:
+            fp_v = rh_v_scan.value
+        elif v_c == rh_v_pos + 1:
+            rh_v_scan.roll(V[v_c - 1], V[v_c + p - 1])
+            rh_v_pos = v_c
+            fp_v = rh_v_scan.value
+        else:
+            rh_v_scan = _RollingHash(V, v_c, p)
+            rh_v_pos = v_c
+            fp_v = rh_v_scan.value
         f_v = fp_v % F
         if f_v % m != k:
             v_c += 1
@@ -689,7 +777,7 @@ def diff_correcting(R: bytes, V: bytes,
         match_end = v_m + ml
 
         # Filter: skip matches shorter than --min-copy
-        if ml < effective_min:
+        if ml < p:
             v_c += 1
             continue
 

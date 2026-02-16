@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <numeric>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -22,7 +23,9 @@ std::vector<Command> diff_greedy(
 
     std::vector<Command> commands;
     if (v.empty()) return commands;
-    const size_t effective_min = (min_copy > 0) ? min_copy : p;
+    // --min-copy raises the seed length so we never fingerprint at a
+    // granularity finer than the minimum copy threshold.
+    if (min_copy > 0 && min_copy > p) p = min_copy;
 
     // Step (1): Build lookup structure for R keyed by full fingerprint.
     // Hash table (default) or splay tree (--splay).
@@ -57,11 +60,27 @@ std::vector<Command> diff_greedy(
     size_t v_c = 0;
     size_t v_s = 0;
 
+    // Rolling hash for O(1) per-position V fingerprinting.
+    std::optional<RollingHash> rh_v_scan;
+    size_t rh_v_pos = 0;
+    if (v.size() >= p) { rh_v_scan.emplace(v, 0, p); rh_v_pos = 0; }
+
     for (;;) {
         // Step (3)
         if (v_c + p > v.size()) break;
 
-        uint64_t fp_v = fingerprint(v, v_c, p);
+        uint64_t fp_v;
+        if (v_c == rh_v_pos) {
+            fp_v = rh_v_scan->value();
+        } else if (v_c == rh_v_pos + 1) {
+            rh_v_scan->roll(v[v_c - 1], v[v_c + p - 1]);
+            rh_v_pos = v_c;
+            fp_v = rh_v_scan->value();
+        } else {
+            rh_v_scan.emplace(v, v_c, p);
+            rh_v_pos = v_c;
+            fp_v = rh_v_scan->value();
+        }
 
         // Steps (4)+(5): find the longest matching substring
         size_t best_len = 0;
@@ -91,7 +110,7 @@ std::vector<Command> diff_greedy(
             }
         }
 
-        if (best_len < effective_min) {
+        if (best_len < p) {
             ++v_c;
             continue;
         }
