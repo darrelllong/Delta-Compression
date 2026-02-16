@@ -162,6 +162,28 @@ delta encode onepass old.bin new.bin delta.bin --verbose
 delta encode correcting old.bin new.bin delta.bin --verbose
 ```
 
+### --min-copy (default: 0)
+
+Minimum match length to emit as a COPY command.  Matches shorter than
+this threshold are skipped and absorbed into surrounding ADD commands.
+When set to 0 (the default), the seed length (`--seed-len`) is used as
+the natural minimum — any match at least as long as a seed is emitted.
+
+This is useful for filtering out short, noisy matches that consume
+overhead in the delta format (each COPY command costs 13 bytes of
+header) without contributing meaningful compression.
+
+```bash
+# Only emit copies of 128+ bytes
+delta encode onepass old.bin new.bin delta.bin --min-copy 128
+
+# Only emit copies of 256+ bytes (aggressive filtering)
+delta encode correcting old.bin new.bin delta.bin --min-copy 256
+```
+
+The flag does not affect the delta format — deltas produced with any
+`--min-copy` value are decoded identically by all three implementations.
+
 ### --splay (Rust and C++ only)
 
 Replace the hash table with a Tarjan-Sleator splay tree for fingerprint
@@ -346,8 +368,8 @@ use delta::{
 let r: &[u8] = &reference_data;
 let v: &[u8] = &version_data;
 
-// Diff (verbose=true prints stats to stderr, use_splay=true for splay tree)
-let commands = diff(Algorithm::Onepass, r, v, 16, 1048573, false, false);
+// Diff (verbose=true prints stats, use_splay=true for splay tree, min_copy=0 for default)
+let commands = diff(Algorithm::Onepass, r, v, 16, 1048573, false, false, 0);
 
 // Standard binary delta
 let placed = place_commands(&commands);
@@ -373,8 +395,8 @@ using namespace delta;
 std::span<const uint8_t> r = reference_data;
 std::span<const uint8_t> v = version_data;
 
-// Diff (verbose=true prints stats to stderr, use_splay=true for splay tree)
-auto commands = diff(Algorithm::Onepass, r, v, SEED_LEN, TABLE_SIZE, false, false);
+// Diff (verbose=true prints stats, use_splay=true for splay tree, min_copy=0 for default)
+auto commands = diff(Algorithm::Onepass, r, v, SEED_LEN, TABLE_SIZE, false, false, 0);
 
 // Standard binary delta
 auto placed = place_commands(commands);
