@@ -67,7 +67,6 @@ pub fn fp_to_index(fp: u64, table_size: usize) -> usize {
 pub struct RollingHash {
     value: u64,
     bp: u64, // HASH_BASE^{p-1} mod HASH_MOD
-    p: usize,
 }
 
 impl RollingHash {
@@ -75,7 +74,7 @@ impl RollingHash {
     pub fn new(data: &[u8], offset: usize, p: usize) -> Self {
         let bp = precompute_bp(p);
         let value = fingerprint(data, offset, p);
-        RollingHash { value, bp, p }
+        RollingHash { value, bp }
     }
 
     /// Current fingerprint value.

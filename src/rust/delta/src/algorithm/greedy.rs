@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::hash::{fingerprint, RollingHash};
+use crate::hash::RollingHash;
 use crate::splay::SplayTree;
 use crate::types::{Command, SEED_LEN, TABLE_SIZE};
 

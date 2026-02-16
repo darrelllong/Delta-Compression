@@ -1,4 +1,4 @@
-use crate::hash::{fingerprint, next_prime, RollingHash};
+use crate::hash::{next_prime, RollingHash};
 use crate::splay::SplayTree;
 use crate::types::{Command, SEED_LEN, TABLE_SIZE};
 
