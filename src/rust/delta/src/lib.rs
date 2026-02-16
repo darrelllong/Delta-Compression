@@ -1,6 +1,7 @@
 pub mod types;
 pub mod hash;
 pub mod encoding;
+pub mod splay;
 pub mod algorithm;
 pub mod apply;
 pub mod inplace;
@@ -12,6 +13,7 @@ pub use types::{
 };
 pub use hash::{fingerprint, fp_to_index, is_prime, is_prime_mr, mod_mersenne, next_prime, precompute_bp, RollingHash};
 pub use encoding::{decode_delta, encode_delta, is_inplace_delta};
+pub use splay::SplayTree;
 pub use algorithm::{diff, diff_default};
 pub use algorithm::greedy::{diff_greedy, diff_greedy_default};
 pub use algorithm::onepass::{diff_onepass, diff_onepass_default};

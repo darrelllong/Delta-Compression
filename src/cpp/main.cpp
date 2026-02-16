@@ -127,6 +127,8 @@ int main(int argc, char** argv) {
     enc->add_option("--policy", enc_policy_str, "Cycle policy (localmin/constant)");
     bool enc_verbose = false;
     enc->add_flag("--verbose", enc_verbose, "Print diagnostics");
+    bool enc_splay = false;
+    enc->add_flag("--splay", enc_splay, "Use splay tree instead of hash table");
 
     // ── decode subcommand ────────────────────────────────────────────
     auto* dec = app.add_subcommand("decode", "Reconstruct version from delta");
@@ -161,7 +163,7 @@ int main(int argc, char** argv) {
         auto v = v_file.span();
 
         auto t0 = std::chrono::steady_clock::now();
-        auto commands = diff(algo, r, v, enc_seed_len, enc_table_size, enc_verbose);
+        auto commands = diff(algo, r, v, enc_seed_len, enc_table_size, enc_verbose, enc_splay);
 
         std::vector<PlacedCommand> placed;
         if (enc_inplace) {
@@ -180,10 +182,12 @@ int main(int argc, char** argv) {
             : static_cast<double>(delta_bytes.size()) / v.size();
 
         if (enc_inplace) {
-            std::printf("Algorithm:    %s + in-place (%s)\n",
-                enc_algo_str.c_str(), enc_policy_str.c_str());
+            std::printf("Algorithm:    %s%s + in-place (%s)\n",
+                enc_algo_str.c_str(), enc_splay ? " [splay]" : "",
+                enc_policy_str.c_str());
         } else {
-            std::printf("Algorithm:    %s\n", enc_algo_str.c_str());
+            std::printf("Algorithm:    %s%s\n",
+                enc_algo_str.c_str(), enc_splay ? " [splay]" : "");
         }
         std::printf("Reference:    %s (%zu bytes)\n", enc_ref.c_str(), r.size());
         std::printf("Version:      %s (%zu bytes)\n", enc_ver.c_str(), v.size());

@@ -222,19 +222,22 @@ def diff_greedy(R: bytes, V: bytes,
                 verbose: bool = False) -> List[Command]:
     """Greedy algorithm (Section 3.1, Figure 2).
 
-    Uses a chained hash table (Python dict) that stores ALL offsets per
-    footprint, so q and verbose are accepted for API consistency with
-    the other algorithms but have no effect.
+    Uses a chained hash table (Python dict) that stores ALL offsets
+    per footprint (Section 3.1).
     """
     commands: List[Command] = []
     if not V:
         return commands
 
-    # Step (1): build chained hash table mapping fingerprints to R offsets
+    # Step (1): build hash table mapping fingerprints to R offsets
     H_R: dict = defaultdict(list)
     for a in range(max(0, len(R) - p + 1)):
         fp = _fingerprint(R, a, p)
         H_R[fp].append(a)
+
+    if verbose:
+        print(f"greedy: |R|={len(R):,}, |V|={len(V):,}, seed_len={p}",
+              file=sys.stderr)
 
     # Step (2): initialize scan pointers
     v_c = 0
@@ -281,6 +284,26 @@ def diff_greedy(R: bytes, V: bytes,
     if v_s < len(V):
         commands.append(AddCmd(data=V[v_s:]))
 
+    if verbose:
+        copy_lens = [c.length for c in commands if isinstance(c, CopyCmd)]
+        total_copy = sum(copy_lens)
+        total_add = sum(len(c.data) for c in commands if isinstance(c, AddCmd))
+        num_copies = len(copy_lens)
+        num_adds = sum(1 for c in commands if isinstance(c, AddCmd))
+        total_out = total_copy + total_add
+        copy_pct = total_copy / total_out * 100 if total_out else 0
+        print(f"  result: {num_copies} copies ({total_copy} bytes), "
+              f"{num_adds} adds ({total_add} bytes)\n"
+              f"  result: copy coverage {copy_pct:.1f}%, output {total_out} bytes",
+              file=sys.stderr)
+        if copy_lens:
+            copy_lens.sort()
+            mean = total_copy / len(copy_lens)
+            median = copy_lens[len(copy_lens) // 2]
+            print(f"  copies: {len(copy_lens)} regions, min={copy_lens[0]} "
+                  f"max={copy_lens[-1]} mean={mean:.1f} median={median} bytes",
+                  file=sys.stderr)
+
     return commands
 
 
@@ -315,14 +338,12 @@ def diff_onepass(R: bytes, V: bytes,
     q = _next_prime(max(q, num_seeds // p))
 
     if verbose:
-        print(f"onepass: hash table q={q:,}, |R|={len(R):,}, "
+        print(f"onepass: q={q:,}, |R|={len(R):,}, "
               f"|V|={len(V):,}, seed_len={p}",
               file=sys.stderr)
 
-    # Step (1): hash tables with version-based logical flushing.
-    # Each slot stores (full_fingerprint, offset, version).
-    # We index by fp % q, but compare full 61-bit fingerprints to avoid
-    # collisions from the table-size reduction.
+    # Step (1): lookup structures with version-based logical flushing.
+    # Each entry stores (fingerprint, offset, version).
     H_V = [None] * q
     H_R = [None] * q
     ver = 0
@@ -427,9 +448,10 @@ def diff_onepass(R: bytes, V: bytes,
         commands.append(AddCmd(data=V[v_s:]))
 
     if verbose:
-        total_copy = sum(c.length for c in commands if isinstance(c, CopyCmd))
+        copy_lens = [c.length for c in commands if isinstance(c, CopyCmd)]
+        total_copy = sum(copy_lens)
         total_add = sum(len(c.data) for c in commands if isinstance(c, AddCmd))
-        num_copies = sum(1 for c in commands if isinstance(c, CopyCmd))
+        num_copies = len(copy_lens)
         num_adds = sum(1 for c in commands if isinstance(c, AddCmd))
         hit_pct = dbg_matches / dbg_lookups * 100 if dbg_lookups else 0
         total_out = total_copy + total_add
@@ -442,6 +464,13 @@ def diff_onepass(R: bytes, V: bytes,
               f"{num_adds:,} adds ({total_add:,} bytes)\n"
               f"  result: copy coverage {copy_pct:.1f}%, output {total_out:,} bytes",
               file=sys.stderr)
+        if copy_lens:
+            copy_lens.sort()
+            mean = total_copy / len(copy_lens)
+            median = copy_lens[len(copy_lens) // 2]
+            print(f"  copies: {len(copy_lens)} regions, min={copy_lens[0]} "
+                  f"max={copy_lens[-1]} mean={mean:.1f} median={median} bytes",
+                  file=sys.stderr)
 
     return commands
 
@@ -709,9 +738,10 @@ def diff_correcting(R: bytes, V: bytes,
         cp_pct = dbg_scan_checkpoints / v_seeds * 100 if v_seeds else 0
         hit_pct = (dbg_scan_match / dbg_scan_checkpoints * 100
                    if dbg_scan_checkpoints else 0)
-        total_copy = sum(c.length for c in commands if isinstance(c, CopyCmd))
+        copy_lens = [c.length for c in commands if isinstance(c, CopyCmd)]
+        total_copy = sum(copy_lens)
         total_add = sum(len(c.data) for c in commands if isinstance(c, AddCmd))
-        num_copies = sum(1 for c in commands if isinstance(c, CopyCmd))
+        num_copies = len(copy_lens)
         num_adds = sum(1 for c in commands if isinstance(c, AddCmd))
         total_out = total_copy + total_add
         copy_pct = total_copy / total_out * 100 if total_out else 0
@@ -725,6 +755,13 @@ def diff_correcting(R: bytes, V: bytes,
               f"{num_adds} adds ({total_add} bytes)\n"
               f"  result: copy coverage {copy_pct:.1f}%, output {total_out} bytes",
               file=sys.stderr)
+        if copy_lens:
+            copy_lens.sort()
+            mean = total_copy / len(copy_lens)
+            median = copy_lens[len(copy_lens) // 2]
+            print(f"  copies: {len(copy_lens)} regions, min={copy_lens[0]} "
+                  f"max={copy_lens[-1]} mean={mean:.1f} median={median} bytes",
+                  file=sys.stderr)
 
     return commands
 

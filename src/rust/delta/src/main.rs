@@ -123,6 +123,10 @@ enum Commands {
         /// Print diagnostic messages to stderr
         #[arg(long)]
         verbose: bool,
+
+        /// Use splay tree instead of hash table
+        #[arg(long)]
+        splay: bool,
     },
 
     /// Reconstruct version from delta
@@ -160,6 +164,7 @@ fn main() {
             inplace,
             policy,
             verbose,
+            splay,
         } => {
             let (_rf, r_mmap) = mmap_open(&reference).unwrap_or_else(|e| {
                 eprintln!("Error reading {}: {}", reference, e);
@@ -175,7 +180,7 @@ fn main() {
 
             let algo: Algorithm = algorithm.into();
             let t0 = Instant::now();
-            let commands = delta::diff(algo, r, v, seed_len, table_size, verbose);
+            let commands = delta::diff(algo, r, v, seed_len, table_size, verbose, splay);
 
             let pol: CyclePolicy = policy.into();
             let placed = if inplace {
@@ -198,11 +203,12 @@ fn main() {
                 delta_bytes.len() as f64 / v.len() as f64
             };
             let algo_name = format!("{:?}", algo).to_lowercase();
+            let splay_tag = if splay { " [splay]" } else { "" };
             if inplace {
                 let pol_name = format!("{:?}", pol).to_lowercase();
-                println!("Algorithm:    {} + in-place ({})", algo_name, pol_name);
+                println!("Algorithm:    {}{} + in-place ({})", algo_name, splay_tag, pol_name);
             } else {
-                println!("Algorithm:    {}", algo_name);
+                println!("Algorithm:    {}{}", algo_name, splay_tag);
             }
             println!("Reference:    {} ({} bytes)", reference, r.len());
             println!("Version:      {} ({} bytes)", version, v.len());

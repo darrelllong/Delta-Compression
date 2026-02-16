@@ -1,4 +1,5 @@
 use crate::hash::{fingerprint, next_prime};
+use crate::splay::SplayTree;
 use crate::types::{Command, SEED_LEN, TABLE_SIZE};
 
 /// One-Pass algorithm (Section 4.1, Figure 3).
@@ -15,7 +16,7 @@ use crate::types::{Command, SEED_LEN, TABLE_SIZE};
 /// The hash table is auto-sized to max(q, num_seeds / p) so that large
 /// inputs get one slot per seed-length chunk of R.  TABLE_SIZE acts as a
 /// floor for small files.
-pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool) -> Vec<Command> {
+pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool, use_splay: bool) -> Vec<Command> {
     let mut commands = Vec::new();
     if v.is_empty() {
         return commands;
@@ -27,15 +28,23 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool) -> Ve
 
     if verbose {
         eprintln!(
-            "onepass: hash table q={}, |R|={}, |V|={}, seed_len={}",
+            "onepass: {}, q={}, |R|={}, |V|={}, seed_len={}",
+            if use_splay { "splay tree" } else { "hash table" },
             q, r.len(), v.len(), p
         );
     }
 
-    // Step (1): hash tables with version-based logical flushing.
-    // Each slot stores (full_fingerprint, offset, version).
-    let mut h_v: Vec<Option<(u64, usize, u64)>> = vec![None; q];
-    let mut h_r: Vec<Option<(u64, usize, u64)>> = vec![None; q];
+    // Step (1): lookup structures with version-based logical flushing.
+    // Each entry stores (offset, version).
+
+    // Hash table path
+    let mut h_v_ht: Vec<Option<(u64, usize, u64)>> = if !use_splay { vec![None; q] } else { Vec::new() };
+    let mut h_r_ht: Vec<Option<(u64, usize, u64)>> = if !use_splay { vec![None; q] } else { Vec::new() };
+
+    // Splay tree path: value is (offset, version)
+    let mut h_v_sp: SplayTree<(usize, u64)> = SplayTree::new();
+    let mut h_r_sp: SplayTree<(usize, u64)> = SplayTree::new();
+
     let mut ver: u64 = 0;
 
     // Debug counters (verbose mode only)
@@ -43,9 +52,9 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool) -> Ve
     let mut dbg_lookups: usize = 0;
     let mut dbg_matches: usize = 0;
 
-    // Inline table access functions to avoid borrow issues
+    // Hash table inline helpers
     #[inline]
-    fn hget(table: &[Option<(u64, usize, u64)>], fp: u64, q: usize, ver: u64) -> Option<usize> {
+    fn ht_get(table: &[Option<(u64, usize, u64)>], fp: u64, q: usize, ver: u64) -> Option<usize> {
         let idx = (fp % q as u64) as usize;
         if let Some((stored_fp, offset, stored_ver)) = table[idx] {
             if stored_ver == ver && stored_fp == fp {
@@ -56,7 +65,7 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool) -> Ve
     }
 
     #[inline]
-    fn hput(table: &mut [Option<(u64, usize, u64)>], fp: u64, off: usize, q: usize, ver: u64) {
+    fn ht_put(table: &mut [Option<(u64, usize, u64)>], fp: u64, off: usize, q: usize, ver: u64) {
         let idx = (fp % q as u64) as usize;
         if let Some((_, _, stored_ver)) = table[idx] {
             if stored_ver == ver {
@@ -94,10 +103,24 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool) -> Ve
 
         // Step (4a): store offsets (retain-existing policy)
         if let Some(fp) = fp_v {
-            hput(&mut h_v, fp, v_c, q, ver);
+            if use_splay {
+                let existing = h_v_sp.find(fp);
+                if existing.is_none() || existing.unwrap().1 != ver {
+                    h_v_sp.insert(fp, (v_c, ver));
+                }
+            } else {
+                ht_put(&mut h_v_ht, fp, v_c, q, ver);
+            }
         }
         if let Some(fp) = fp_r {
-            hput(&mut h_r, fp, r_c, q, ver);
+            if use_splay {
+                let existing = h_r_sp.find(fp);
+                if existing.is_none() || existing.unwrap().1 != ver {
+                    h_r_sp.insert(fp, (r_c, ver));
+                }
+            } else {
+                ht_put(&mut h_r_ht, fp, r_c, q, ver);
+            }
         }
 
         // Step (4b): look for a matching seed in the other table
@@ -106,7 +129,12 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool) -> Ve
         let mut v_m: usize = 0;
 
         if let Some(fp) = fp_r {
-            if let Some(v_cand) = hget(&h_v, fp, q, ver) {
+            let v_cand = if use_splay {
+                h_v_sp.find(fp).and_then(|&mut (off, v)| if v == ver { Some(off) } else { None })
+            } else {
+                ht_get(&h_v_ht, fp, q, ver)
+            };
+            if let Some(v_cand) = v_cand {
                 dbg_lookups += 1;
                 if r[r_c..r_c + p] == v[v_cand..v_cand + p] {
                     r_m = r_c;
@@ -118,7 +146,12 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool) -> Ve
 
         if !match_found {
             if let Some(fp) = fp_v {
-                if let Some(r_cand) = hget(&h_r, fp, q, ver) {
+                let r_cand = if use_splay {
+                    h_r_sp.find(fp).and_then(|&mut (off, v)| if v == ver { Some(off) } else { None })
+                } else {
+                    ht_get(&h_r_ht, fp, q, ver)
+                };
+                if let Some(r_cand) = r_cand {
                     dbg_lookups += 1;
                     if v[v_c..v_c + p] == r[r_cand..r_cand + p] {
                         v_m = v_c;
@@ -168,14 +201,22 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool) -> Ve
     }
 
     if verbose {
+        let mut copy_lens: Vec<usize> = Vec::new();
         let mut total_copy: usize = 0;
         let mut total_add: usize = 0;
         let mut num_copies: usize = 0;
         let mut num_adds: usize = 0;
         for cmd in &commands {
             match cmd {
-                Command::Copy { length, .. } => { total_copy += length; num_copies += 1; }
-                Command::Add { data } => { total_add += data.len(); num_adds += 1; }
+                Command::Copy { length, .. } => {
+                    total_copy += length;
+                    num_copies += 1;
+                    copy_lens.push(*length);
+                }
+                Command::Add { data } => {
+                    total_add += data.len();
+                    num_adds += 1;
+                }
             }
         }
         let hit_pct = if dbg_lookups > 0 { dbg_matches as f64 / dbg_lookups as f64 * 100.0 } else { 0.0 };
@@ -192,6 +233,19 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool) -> Ve
             num_copies, total_copy, num_adds, total_add,
             copy_pct, total_out
         );
+        if !copy_lens.is_empty() {
+            copy_lens.sort();
+            let mean = total_copy as f64 / copy_lens.len() as f64;
+            let median = copy_lens[copy_lens.len() / 2];
+            eprintln!(
+                "  copies: {} regions, min={} max={} mean={:.1} median={} bytes",
+                copy_lens.len(),
+                copy_lens.first().unwrap(),
+                copy_lens.last().unwrap(),
+                mean,
+                median
+            );
+        }
     }
 
     commands
@@ -199,5 +253,5 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool) -> Ve
 
 /// Convenience wrapper with default parameters.
 pub fn diff_onepass_default(r: &[u8], v: &[u8]) -> Vec<Command> {
-    diff_onepass(r, v, SEED_LEN, TABLE_SIZE, false)
+    diff_onepass(r, v, SEED_LEN, TABLE_SIZE, false, false)
 }

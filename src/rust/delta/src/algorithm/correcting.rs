@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 
 use crate::hash::{fingerprint, next_prime};
+use crate::splay::SplayTree;
 use crate::types::{Command, SEED_LEN, TABLE_SIZE};
 
 /// Internal buffer entry tracking which region of V a command encodes.
@@ -43,6 +44,7 @@ pub fn diff_correcting(
     q: usize,
     buf_cap: usize,
     verbose: bool,
+    use_splay: bool,
 ) -> Vec<Command> {
     let mut commands = Vec::new();
     if v.is_empty() {
@@ -79,9 +81,10 @@ pub fn diff_correcting(
         let expected = if m > 0 { num_seeds as u64 / m } else { 0 };
         let occ_est = if cap > 0 { expected * 100 / cap as u64 } else { 0 };
         eprintln!(
-            "correcting: |C|={} |F|={} m={} k={}\n  \
+            "correcting: {}, |C|={} |F|={} m={} k={}\n  \
              checkpoint gap={} bytes, expected fill ~{} (~{}% table occupancy)\n  \
              table memory ~{} MB",
+            if use_splay { "splay tree" } else { "hash table" },
             cap, f_size, m, k,
             m, expected, occ_est,
             cap * 24 / 1_048_576
@@ -97,10 +100,10 @@ pub fn diff_correcting(
     let mut dbg_scan_fp_mismatch: usize = 0;
     let mut dbg_scan_byte_mismatch: usize = 0;
 
-    // ── Step (1): Build hash table for R (first-found policy) ────────
-    // Scan every R position, apply checkpoint test (Eq. 3), store at
-    // index i = floor(f / m) where f = fp % |F|.  (Section 8.2, p. 349)
-    let mut h_r: Vec<Option<(u64, usize)>> = vec![None; cap];
+    // ── Step (1): Build lookup structure for R (first-found policy) ──
+    let mut h_r_ht: Vec<Option<(u64, usize)>> = if !use_splay { vec![None; cap] } else { Vec::new() };
+    let mut h_r_sp: SplayTree<(u64, usize)> = SplayTree::new(); // (full_fp, offset)
+
     for a in 0..num_seeds {
         let fp = fingerprint(r, a, p);
         let f = fp % f_size;
@@ -108,15 +111,26 @@ pub fn diff_correcting(
             continue; // not a checkpoint seed
         }
         dbg_build_passed += 1;
-        let i = (f / m) as usize;
-        if i >= cap {
-            continue; // safety
-        }
-        if h_r[i].is_none() {
-            h_r[i] = Some((fp, a)); // first-found (Section 7 Step 1)
-            dbg_build_stored += 1;
+
+        if use_splay {
+            // insert_or_get implements first-found policy
+            let val = h_r_sp.insert_or_get(fp, (fp, a));
+            if val.1 == a {
+                dbg_build_stored += 1;
+            } else {
+                dbg_build_skipped_collision += 1;
+            }
         } else {
-            dbg_build_skipped_collision += 1;
+            let i = (f / m) as usize;
+            if i >= cap {
+                continue; // safety
+            }
+            if h_r_ht[i].is_none() {
+                h_r_ht[i] = Some((fp, a)); // first-found (Section 7 Step 1)
+                dbg_build_stored += 1;
+            } else {
+                dbg_build_skipped_collision += 1;
+            }
         }
     }
 
@@ -126,8 +140,9 @@ pub fn diff_correcting(
         } else {
             0.0
         };
+        let stored_count = if use_splay { h_r_sp.len() } else { dbg_build_stored };
         let occ_pct = if cap > 0 {
-            dbg_build_stored as f64 / cap as f64 * 100.0
+            stored_count as f64 / cap as f64 * 100.0
         } else {
             0.0
         };
@@ -137,9 +152,20 @@ pub fn diff_correcting(
              build: table occupancy {}/{} ({:.1}%)",
             num_seeds, dbg_build_passed, passed_pct,
             dbg_build_stored, dbg_build_skipped_collision,
-            dbg_build_stored, cap, occ_pct
+            stored_count, cap, occ_pct
         );
     }
+
+    // Lookup helper
+    let lookup_r = |h_r_ht: &[Option<(u64, usize)>], h_r_sp: &mut SplayTree<(u64, usize)>, fp_v: u64, f_v: u64| -> Option<(u64, usize)> {
+        if use_splay {
+            h_r_sp.find(fp_v).copied()
+        } else {
+            let i = (f_v / m) as usize;
+            if i >= cap { return None; }
+            h_r_ht[i]
+        }
+    };
 
     // ── Encoding lookback buffer (Section 5.2) ───────────────────────
     let mut buf: VecDeque<BufEntry> = VecDeque::new();
@@ -170,15 +196,12 @@ pub fn diff_correcting(
             continue; // not a checkpoint — skip
         }
 
-        // Checkpoint passed — look up H_R at index i = floor(f/m).
+        // Checkpoint passed — look up R.
         dbg_scan_checkpoints += 1;
-        let i = (f_v / m) as usize;
-        if i >= cap {
-            v_c += 1;
-            continue;
-        }
 
-        let r_offset = match h_r[i] {
+        let entry = lookup_r(&h_r_ht, &mut h_r_sp, fp_v, f_v);
+
+        let r_offset = match entry {
             Some((stored_fp, offset)) if stored_fp == fp_v => {
                 // Full fingerprint matches — verify bytes.
                 if r[offset..offset + p] != v[v_c..v_c + p] {
@@ -332,6 +355,7 @@ pub fn diff_correcting(
     }
 
     if verbose {
+        let mut copy_lens: Vec<usize> = Vec::new();
         let mut total_copy: usize = 0;
         let mut total_add: usize = 0;
         let mut num_copies: usize = 0;
@@ -341,6 +365,7 @@ pub fn diff_correcting(
                 Command::Copy { length, .. } => {
                     total_copy += length;
                     num_copies += 1;
+                    copy_lens.push(*length);
                 }
                 Command::Add { data } => {
                     total_add += data.len();
@@ -377,6 +402,19 @@ pub fn diff_correcting(
              result: copy coverage {:.1}%, output {} bytes",
             num_copies, total_copy, num_adds, total_add, copy_pct, total_out
         );
+        if !copy_lens.is_empty() {
+            copy_lens.sort();
+            let mean = total_copy as f64 / copy_lens.len() as f64;
+            let median = copy_lens[copy_lens.len() / 2];
+            eprintln!(
+                "  copies: {} regions, min={} max={} mean={:.1} median={} bytes",
+                copy_lens.len(),
+                copy_lens.first().unwrap(),
+                copy_lens.last().unwrap(),
+                mean,
+                median
+            );
+        }
     }
 
     commands
@@ -384,5 +422,5 @@ pub fn diff_correcting(
 
 /// Convenience wrapper with default parameters.
 pub fn diff_correcting_default(r: &[u8], v: &[u8]) -> Vec<Command> {
-    diff_correcting(r, v, SEED_LEN, TABLE_SIZE, 256, false)
+    diff_correcting(r, v, SEED_LEN, TABLE_SIZE, 256, false, false)
 }

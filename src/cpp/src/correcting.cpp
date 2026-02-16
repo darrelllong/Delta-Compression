@@ -1,6 +1,8 @@
 #include "delta/algorithm.h"
 #include "delta/hash.h"
+#include "delta/splay.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <deque>
 #include <optional>
@@ -23,7 +25,8 @@ std::vector<Command> diff_correcting(
     size_t p,
     size_t q,
     size_t buf_cap,
-    bool verbose) {
+    bool verbose,
+    bool use_splay) {
 
     std::vector<Command> commands;
     if (v.empty()) return commands;
@@ -51,9 +54,10 @@ std::vector<Command> diff_correcting(
         uint64_t expected = (m > 0) ? static_cast<uint64_t>(num_seeds) / m : 0;
         uint64_t occ_est = (cap > 0) ? expected * 100 / static_cast<uint64_t>(cap) : 0;
         std::fprintf(stderr,
-            "correcting: |C|=%zu |F|=%llu m=%llu k=%llu\n"
+            "correcting: %s, |C|=%zu |F|=%llu m=%llu k=%llu\n"
             "  checkpoint gap=%llu bytes, expected fill ~%llu (~%llu%% table occupancy)\n"
             "  table memory ~%zu MB\n",
+            use_splay ? "splay tree" : "hash table",
             cap, (unsigned long long)f_size, (unsigned long long)m,
             (unsigned long long)k, (unsigned long long)m,
             (unsigned long long)expected, (unsigned long long)occ_est,
@@ -65,37 +69,70 @@ std::vector<Command> diff_correcting(
     size_t dbg_scan_checkpoints = 0, dbg_scan_match = 0;
     size_t dbg_scan_fp_mismatch = 0, dbg_scan_byte_mismatch = 0;
 
-    // ── Step (1): Build hash table for R (first-found policy) ────────
+    // ── Step (1): Build lookup structure for R (first-found policy) ──
     using HSlot = std::optional<std::pair<uint64_t, size_t>>;
-    std::vector<HSlot> h_r(cap);
+    std::vector<HSlot> h_r_ht;
+    SplayTree<std::pair<uint64_t, size_t>> h_r_sp; // (full_fp, offset)
+
+    if (!use_splay) {
+        h_r_ht.resize(cap);
+    }
+
     for (size_t a = 0; a < num_seeds; ++a) {
         uint64_t fp = fingerprint(r, a, p);
         uint64_t f = fp % f_size;
         if (f % m != k) continue; // not a checkpoint seed
         ++dbg_build_passed;
-        size_t i = static_cast<size_t>(f / m);
-        if (i >= cap) continue; // safety
-        if (!h_r[i].has_value()) {
-            h_r[i] = std::make_pair(fp, a); // first-found (Section 7 Step 1)
-            ++dbg_build_stored;
+
+        if (use_splay) {
+            // insert_or_get implements first-found policy
+            auto& val = h_r_sp.insert_or_get(fp, std::make_pair(fp, a));
+            if (val.second == a) {
+                ++dbg_build_stored;
+            } else {
+                ++dbg_build_skipped_collision;
+            }
         } else {
-            ++dbg_build_skipped_collision;
+            size_t i = static_cast<size_t>(f / m);
+            if (i >= cap) continue; // safety
+            if (!h_r_ht[i].has_value()) {
+                h_r_ht[i] = std::make_pair(fp, a); // first-found (Section 7 Step 1)
+                ++dbg_build_stored;
+            } else {
+                ++dbg_build_skipped_collision;
+            }
         }
     }
 
     if (verbose) {
         double passed_pct = (num_seeds > 0)
             ? static_cast<double>(dbg_build_passed) / num_seeds * 100.0 : 0.0;
+        size_t stored_count = use_splay ? h_r_sp.size() : dbg_build_stored;
         double occ_pct = (cap > 0)
-            ? static_cast<double>(dbg_build_stored) / cap * 100.0 : 0.0;
+            ? static_cast<double>(stored_count) / cap * 100.0 : 0.0;
         std::fprintf(stderr,
             "  build: %zu seeds, %zu passed checkpoint (%.2f%%), "
             "%zu stored, %zu collisions\n"
             "  build: table occupancy %zu/%zu (%.1f%%)\n",
             num_seeds, dbg_build_passed, passed_pct,
             dbg_build_stored, dbg_build_skipped_collision,
-            dbg_build_stored, cap, occ_pct);
+            stored_count, cap, occ_pct);
     }
+
+    // Lookup helper: returns (full_fp, offset) pair if found, nullopt otherwise.
+    auto lookup_r = [&](uint64_t fp_v, uint64_t f_v)
+        -> std::optional<std::pair<uint64_t, size_t>> {
+        if (use_splay) {
+            auto* val = h_r_sp.find(fp_v);
+            if (val) return *val;
+            return std::nullopt;
+        } else {
+            size_t i = static_cast<size_t>(f_v / m);
+            if (i >= cap) return std::nullopt;
+            if (h_r_ht[i].has_value()) return *h_r_ht[i];
+            return std::nullopt;
+        }
+    };
 
     // ── Encoding lookback buffer (Section 5.2) ───────────────────────
     std::deque<BufEntry> buf;
@@ -125,17 +162,14 @@ std::vector<Command> diff_correcting(
             continue; // not a checkpoint — skip
         }
 
-        // Checkpoint passed — look up H_R at index i = floor(f/m).
+        // Checkpoint passed — look up R.
         ++dbg_scan_checkpoints;
-        size_t i = static_cast<size_t>(f_v / m);
-        if (i >= cap) {
-            ++v_c;
-            continue;
-        }
 
+        auto entry = lookup_r(fp_v, f_v);
         size_t r_offset;
-        if (h_r[i].has_value()) {
-            auto& [stored_fp, offset] = *h_r[i];
+
+        if (entry.has_value()) {
+            auto& [stored_fp, offset] = *entry;
             if (stored_fp == fp_v) {
                 // Full fingerprint matches — verify bytes.
                 if (std::memcmp(&r[offset], &v[v_c], p) != 0) {
@@ -266,10 +300,12 @@ std::vector<Command> diff_correcting(
     }
 
     if (verbose) {
+        std::vector<size_t> copy_lens;
         size_t total_copy = 0, total_add = 0, num_copies = 0, num_adds = 0;
         for (const auto& cmd : commands) {
             if (auto* c = std::get_if<CopyCmd>(&cmd)) {
                 total_copy += c->length; ++num_copies;
+                copy_lens.push_back(c->length);
             } else if (auto* a = std::get_if<AddCmd>(&cmd)) {
                 total_add += a->data.size(); ++num_adds;
             }
@@ -292,6 +328,15 @@ std::vector<Command> diff_correcting(
             "  result: %zu copies (%zu bytes), %zu adds (%zu bytes)\n"
             "  result: copy coverage %.1f%%, output %zu bytes\n",
             num_copies, total_copy, num_adds, total_add, copy_pct, total_out);
+        if (!copy_lens.empty()) {
+            std::sort(copy_lens.begin(), copy_lens.end());
+            double mean = static_cast<double>(total_copy) / copy_lens.size();
+            size_t median = copy_lens[copy_lens.size() / 2];
+            std::fprintf(stderr,
+                "  copies: %zu regions, min=%zu max=%zu mean=%.1f median=%zu bytes\n",
+                copy_lens.size(), copy_lens.front(), copy_lens.back(),
+                mean, median);
+        }
     }
 
     return commands;
@@ -304,15 +349,16 @@ std::vector<Command> diff(
     std::span<const uint8_t> v,
     size_t p,
     size_t q,
-    bool verbose) {
+    bool verbose,
+    bool use_splay) {
 
     switch (algo) {
     case Algorithm::Greedy:
-        return diff_greedy(r, v, p, q, verbose);
+        return diff_greedy(r, v, p, q, verbose, use_splay);
     case Algorithm::Onepass:
-        return diff_onepass(r, v, p, q, verbose);
+        return diff_onepass(r, v, p, q, verbose, use_splay);
     case Algorithm::Correcting:
-        return diff_correcting(r, v, p, q, 256, verbose);
+        return diff_correcting(r, v, p, q, 256, verbose, use_splay);
     }
     __builtin_unreachable();
 }

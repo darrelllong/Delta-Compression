@@ -12,11 +12,11 @@ using namespace delta;
 
 using DiffFn = std::vector<Command>(*)(
     std::span<const uint8_t>, std::span<const uint8_t>,
-    size_t, size_t, bool);
+    size_t, size_t, bool, bool);
 
 static std::vector<uint8_t> roundtrip(DiffFn algo_fn,
     std::span<const uint8_t> r, std::span<const uint8_t> v, size_t p) {
-    auto cmds = algo_fn(r, v, p, TABLE_SIZE, false);
+    auto cmds = algo_fn(r, v, p, TABLE_SIZE, false, false);
     auto placed = place_commands(cmds);
     auto delta_bytes = encode_delta(placed, false, output_size(cmds));
     auto [placed2, ip, vs] = decode_delta(delta_bytes);
@@ -28,7 +28,7 @@ static std::vector<uint8_t> roundtrip(DiffFn algo_fn,
 static std::vector<uint8_t> inplace_roundtrip(DiffFn algo_fn,
     std::span<const uint8_t> r, std::span<const uint8_t> v,
     CyclePolicy policy, size_t p) {
-    auto cmds = algo_fn(r, v, p, TABLE_SIZE, false);
+    auto cmds = algo_fn(r, v, p, TABLE_SIZE, false, false);
     auto ip = make_inplace(r, cmds, policy);
     return apply_delta_inplace(r, ip, v.size());
 }
@@ -36,7 +36,7 @@ static std::vector<uint8_t> inplace_roundtrip(DiffFn algo_fn,
 static std::vector<uint8_t> inplace_binary_roundtrip(DiffFn algo_fn,
     std::span<const uint8_t> r, std::span<const uint8_t> v,
     CyclePolicy policy, size_t p) {
-    auto cmds = algo_fn(r, v, p, TABLE_SIZE, false);
+    auto cmds = algo_fn(r, v, p, TABLE_SIZE, false, false);
     auto ip = make_inplace(r, cmds, policy);
     auto delta_bytes = encode_delta(ip, true, v.size());
     auto [ip2, is_ip, vs] = decode_delta(delta_bytes);
@@ -46,8 +46,8 @@ static std::vector<uint8_t> inplace_binary_roundtrip(DiffFn algo_fn,
 // Correcting wrapper to match DiffFn signature
 static std::vector<Command> correcting_wrapper(
     std::span<const uint8_t> r, std::span<const uint8_t> v,
-    size_t p, size_t q, bool /*verbose*/) {
-    return diff_correcting(r, v, p, q, 256, false);
+    size_t p, size_t q, bool /*verbose*/, bool use_splay) {
+    return diff_correcting(r, v, p, q, 256, false, use_splay);
 }
 
 struct AlgoEntry { const char* name; DiffFn fn; };
@@ -81,7 +81,7 @@ TEST_CASE("paper example (Section 2.1.1)", "[integration]") {
                               'B','C','D','E','F','G','H',
                               'Z','D','E','F','G','H','I','J','K','L'};
     for (auto& [name, algo] : all_algos()) {
-        auto result = apply_delta(r, algo(r, v, 2, TABLE_SIZE, false));
+        auto result = apply_delta(r, algo(r, v, 2, TABLE_SIZE, false, false));
         REQUIRE(result == v);
     }
 }
@@ -94,7 +94,7 @@ TEST_CASE("identical strings produce only copies", "[integration]") {
                                  'd','o','g','.'};
     auto data = repeat(base, 10);
     for (auto& [name, algo] : all_algos()) {
-        auto cmds = algo(data, data, 2, TABLE_SIZE, false);
+        auto cmds = algo(data, data, 2, TABLE_SIZE, false, false);
         auto result = apply_delta(data, cmds);
         REQUIRE(result == data);
         for (const auto& cmd : cmds) {
@@ -109,7 +109,7 @@ TEST_CASE("completely different strings", "[integration]") {
     // Reverse
     std::copy(r.rbegin(), r.rend(), v.begin());
     for (auto& [name, algo] : all_algos()) {
-        auto result = apply_delta(r, algo(r, v, 2, TABLE_SIZE, false));
+        auto result = apply_delta(r, algo(r, v, 2, TABLE_SIZE, false, false));
         REQUIRE(result == v);
     }
 }
@@ -118,7 +118,7 @@ TEST_CASE("empty version", "[integration]") {
     std::vector<uint8_t> r = {'h','e','l','l','o'};
     std::vector<uint8_t> v;
     for (auto& [name, algo] : all_algos()) {
-        auto cmds = algo(r, v, 2, TABLE_SIZE, false);
+        auto cmds = algo(r, v, 2, TABLE_SIZE, false, false);
         REQUIRE(cmds.empty());
         REQUIRE(apply_delta(r, cmds).empty());
     }
@@ -128,7 +128,7 @@ TEST_CASE("empty reference", "[integration]") {
     std::vector<uint8_t> r;
     std::vector<uint8_t> v = {'h','e','l','l','o',' ','w','o','r','l','d'};
     for (auto& [name, algo] : all_algos()) {
-        auto result = apply_delta(r, algo(r, v, 2, TABLE_SIZE, false));
+        auto result = apply_delta(r, algo(r, v, 2, TABLE_SIZE, false, false));
         REQUIRE(result == v);
     }
 }
@@ -212,7 +212,7 @@ TEST_CASE("backward extension", "[integration]") {
     v.insert(v.end(), block.begin(), block.end());
     v.insert(v.end(), {'*','*'});
     for (auto& [name, algo] : all_algos()) {
-        auto result = apply_delta(r, algo(r, v, 4, TABLE_SIZE, false));
+        auto result = apply_delta(r, algo(r, v, 4, TABLE_SIZE, false, false));
         REQUIRE(result == v);
     }
 }
@@ -229,7 +229,7 @@ TEST_CASE("transposition", "[integration]") {
     std::vector<uint8_t> v = y;
     v.insert(v.end(), x.begin(), x.end());
     for (auto& [name, algo] : all_algos()) {
-        auto result = apply_delta(r, algo(r, v, 4, TABLE_SIZE, false));
+        auto result = apply_delta(r, algo(r, v, 4, TABLE_SIZE, false, false));
         REQUIRE(result == v);
     }
 }
@@ -344,7 +344,7 @@ TEST_CASE("inplace empty version", "[inplace]") {
     std::vector<uint8_t> r = {'h','e','l','l','o'};
     std::vector<uint8_t> v;
     for (auto& [name, algo] : all_algos()) {
-        auto cmds = algo(r, v, 2, TABLE_SIZE, false);
+        auto cmds = algo(r, v, 2, TABLE_SIZE, false, false);
         auto ip = make_inplace(r, cmds, CyclePolicy::Localmin);
         REQUIRE(apply_delta_inplace(r, ip, 0).empty());
     }
@@ -371,7 +371,7 @@ TEST_CASE("standard not detected as inplace", "[inplace]") {
     auto r = repeat(r_base, 10);
     std::vector<uint8_t> v_base = {'E','F','G','H','A','B','C','D'};
     auto v = repeat(v_base, 10);
-    auto cmds = diff_greedy(r, v, 2, TABLE_SIZE, false);
+    auto cmds = diff_greedy(r, v, 2, TABLE_SIZE, false, false);
     auto placed = place_commands(cmds);
     auto delta_bytes = encode_delta(placed, false, v.size());
     CHECK_FALSE(is_inplace_delta(delta_bytes));
@@ -382,7 +382,7 @@ TEST_CASE("inplace detected", "[inplace]") {
     auto r = repeat(r_base, 10);
     std::vector<uint8_t> v_base = {'E','F','G','H','A','B','C','D'};
     auto v = repeat(v_base, 10);
-    auto cmds = diff_greedy(r, v, 2, TABLE_SIZE, false);
+    auto cmds = diff_greedy(r, v, 2, TABLE_SIZE, false, false);
     auto ip = make_inplace(r, cmds, CyclePolicy::Localmin);
     auto delta_bytes = encode_delta(ip, true, v.size());
     CHECK(is_inplace_delta(delta_bytes));
@@ -561,7 +561,7 @@ TEST_CASE("localmin picks smallest", "[inplace]") {
     for (auto it = blocks.rbegin(); it != blocks.rend(); ++it)
         v.insert(v.end(), it->begin(), it->end());
 
-    auto cmds = diff_greedy(r, v, 4, TABLE_SIZE, false);
+    auto cmds = diff_greedy(r, v, 4, TABLE_SIZE, false, false);
     auto ip_const = make_inplace(r, cmds, CyclePolicy::Constant);
     auto ip_lmin = make_inplace(r, cmds, CyclePolicy::Localmin);
 
@@ -582,7 +582,7 @@ TEST_CASE("correcting checkpointing tiny table", "[correcting]") {
     std::vector<uint8_t> v(r.begin(), r.begin() + 160);
     v.insert(v.end(), {'X','X','X','X','Y','Y','Y','Y'});
     v.insert(v.end(), r.begin() + 160, r.end());
-    auto cmds = diff_correcting(r, v, 16, 7, 256, false);
+    auto cmds = diff_correcting(r, v, 16, 7, 256, false, false);
     auto recovered = apply_delta(r, cmds);
     REQUIRE(recovered == v);
 }
@@ -594,7 +594,7 @@ TEST_CASE("correcting checkpointing various sizes", "[correcting]") {
     v.insert(v.end(), 50, 0xFF);
     v.insert(v.end(), r.begin() + 500, r.end());
     for (size_t q : {size_t{7}, size_t{31}, size_t{101}, size_t{1009}, TABLE_SIZE}) {
-        auto cmds = diff_correcting(r, v, 16, q, 256, false);
+        auto cmds = diff_correcting(r, v, 16, q, 256, false, false);
         auto recovered = apply_delta(r, cmds);
         REQUIRE(recovered == v);
     }

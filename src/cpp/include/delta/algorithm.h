@@ -23,7 +23,8 @@ std::vector<Command> diff_greedy(
     std::span<const uint8_t> v,
     size_t p = SEED_LEN,
     size_t q = TABLE_SIZE,
-    bool verbose = false);
+    bool verbose = false,
+    bool use_splay = false);
 
 /// One-Pass algorithm (Section 4.1, Figure 3).
 ///
@@ -34,7 +35,8 @@ std::vector<Command> diff_onepass(
     std::span<const uint8_t> v,
     size_t p = SEED_LEN,
     size_t q = TABLE_SIZE,
-    bool verbose = false);
+    bool verbose = false,
+    bool use_splay = false);
 
 /// Correcting 1.5-Pass algorithm (Section 7, Figure 8) with
 /// fingerprint-based checkpointing (Section 8).
@@ -46,7 +48,8 @@ std::vector<Command> diff_correcting(
     size_t p = SEED_LEN,
     size_t q = TABLE_SIZE,
     size_t buf_cap = 256,
-    bool verbose = false);
+    bool verbose = false,
+    bool use_splay = false);
 
 /// Dispatcher: call the appropriate algorithm by enum.
 std::vector<Command> diff(
@@ -55,6 +58,7 @@ std::vector<Command> diff(
     std::span<const uint8_t> v,
     size_t p = SEED_LEN,
     size_t q = TABLE_SIZE,
-    bool verbose = false);
+    bool verbose = false,
+    bool use_splay = false);
 
 } // namespace delta
