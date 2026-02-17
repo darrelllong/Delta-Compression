@@ -144,7 +144,7 @@ public final class Correcting {
             }
 
             if (storedFp != fpV) { vC++; continue; }
-            if (!arrayEquals(r, rOffset, v, vC, p)) { vC++; continue; }
+            if (!Diff.arrayEquals(r, rOffset, v, vC, p)) { vC++; continue; }
 
             // Step (5): extend match forwards and backwards
             int fwd = p;
@@ -174,7 +174,7 @@ public final class Correcting {
                         if (!oldest.dummy) commands.add(oldest.cmd);
                     }
                     buf.addLast(new BufEntry(vS, vM,
-                        new AddCmd(Greedy.copyRange(v, vS, vM)), false));
+                        new AddCmd(Diff.copyRange(v, vS, vM)), false));
                 }
                 if (buf.size() >= bufCap) {
                     BufEntry oldest = buf.pollFirst();
@@ -201,7 +201,7 @@ public final class Correcting {
                         if (tail.cmd instanceof AddCmd) {
                             int keep = vM - tail.vStart;
                             if (keep > 0) {
-                                tail.cmd = new AddCmd(Greedy.copyRange(v, tail.vStart, vM));
+                                tail.cmd = new AddCmd(Diff.copyRange(v, tail.vStart, vM));
                                 tail.vEnd = vM;
                             } else {
                                 buf.pollLast();
@@ -235,17 +235,11 @@ public final class Correcting {
             if (!entry.dummy) commands.add(entry.cmd);
         }
         if (vS < v.length) {
-            commands.add(new AddCmd(Greedy.copyRange(v, vS, v.length)));
+            commands.add(new AddCmd(Diff.copyRange(v, vS, v.length)));
         }
 
-        if (verbose) Greedy.printStats(commands);
+        if (verbose) Diff.printStats(commands);
         return commands;
     }
 
-    private static boolean arrayEquals(byte[] a, int aOff, byte[] b, int bOff, int len) {
-        for (int i = 0; i < len; i++) {
-            if (a[aOff + i] != b[bOff + i]) return false;
-        }
-        return true;
-    }
 }

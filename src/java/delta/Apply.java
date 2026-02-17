@@ -1,12 +1,12 @@
 package delta;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Deque;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.PriorityQueue;
 
 import static delta.Types.*;
 
@@ -163,18 +163,23 @@ public final class Apply {
         }
 
         // Step 3: topological sort with cycle breaking (Kahn's algorithm)
+        // Priority queue keyed on copy length — always process the smallest
+        // ready copy first, giving a deterministic topological ordering.
         boolean[] removed = new boolean[n];
         List<Integer> topoOrder = new ArrayList<>();
 
-        Deque<Integer> queue = new ArrayDeque<>();
+        // Min-heap: compare by (copy_length, index) for deterministic ordering.
+        PriorityQueue<int[]> heap = new PriorityQueue<>(
+            Comparator.<int[]>comparingInt(e -> e[0]).thenComparingInt(e -> e[1]));
         for (int i = 0; i < n; i++) {
-            if (inDeg[i] == 0) queue.add(i);
+            if (inDeg[i] == 0) heap.add(new int[]{copies.get(i)[3], i});
         }
 
         int processed = 0;
         while (processed < n) {
-            while (!queue.isEmpty()) {
-                int v = queue.poll();
+            while (!heap.isEmpty()) {
+                int[] entry = heap.poll();
+                int v = entry[1];
                 if (removed[v]) continue;
                 removed[v] = true;
                 topoOrder.add(v);
@@ -182,7 +187,7 @@ public final class Apply {
                 for (int w : adj.get(v)) {
                     if (!removed[w]) {
                         inDeg[w]--;
-                        if (inDeg[w] == 0) queue.add(w);
+                        if (inDeg[w] == 0) heap.add(new int[]{copies.get(w)[3], w});
                     }
                 }
             }
@@ -227,7 +232,7 @@ public final class Apply {
             for (int w : adj.get(victim)) {
                 if (!removed[w]) {
                     inDeg[w]--;
-                    if (inDeg[w] == 0) queue.add(w);
+                    if (inDeg[w] == 0) heap.add(new int[]{copies.get(w)[3], w});
                 }
             }
         }

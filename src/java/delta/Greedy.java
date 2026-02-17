@@ -81,7 +81,7 @@ public final class Greedy {
             List<Integer> offsets = useSplay ? hrSp.find(fpV) : hrHt.get(fpV);
             if (offsets != null) {
                 for (int rCand : offsets) {
-                    if (!arrayEquals(r, rCand, v, vC, p)) continue;
+                    if (!Diff.arrayEquals(r, rCand, v, vC, p)) continue;
                     int ml = p;
                     while (vC + ml < v.length && rCand + ml < r.length
                            && v[vC + ml] == r[rCand + ml]) {
@@ -98,7 +98,7 @@ public final class Greedy {
 
             // Step (6): encode
             if (vS < vC) {
-                commands.add(new AddCmd(copyRange(v, vS, vC)));
+                commands.add(new AddCmd(Diff.copyRange(v, vS, vC)));
             }
             commands.add(new CopyCmd(bestRm, bestLen));
             vS = vC + bestLen;
@@ -109,53 +109,11 @@ public final class Greedy {
 
         // Step (8): trailing add
         if (vS < v.length) {
-            commands.add(new AddCmd(copyRange(v, vS, v.length)));
+            commands.add(new AddCmd(Diff.copyRange(v, vS, v.length)));
         }
 
-        if (verbose) printStats(commands);
+        if (verbose) Diff.printStats(commands);
         return commands;
     }
 
-    private static boolean arrayEquals(byte[] a, int aOff, byte[] b, int bOff, int len) {
-        for (int i = 0; i < len; i++) {
-            if (a[aOff + i] != b[bOff + i]) return false;
-        }
-        return true;
-    }
-
-    static byte[] copyRange(byte[] data, int from, int to) {
-        byte[] result = new byte[to - from];
-        System.arraycopy(data, from, result, 0, to - from);
-        return result;
-    }
-
-    static void printStats(List<Command> commands) {
-        List<Integer> copyLens = new ArrayList<>();
-        long totalCopy = 0, totalAdd = 0;
-        int numCopies = 0, numAdds = 0;
-        for (Command cmd : commands) {
-            if (cmd instanceof CopyCmd) {
-                CopyCmd c = (CopyCmd) cmd;
-                totalCopy += c.length;
-                numCopies++;
-                copyLens.add(c.length);
-            } else if (cmd instanceof AddCmd) {
-                AddCmd a = (AddCmd) cmd;
-                totalAdd += a.data.length;
-                numAdds++;
-            }
-        }
-        long totalOut = totalCopy + totalAdd;
-        double copyPct = totalOut > 0 ? totalCopy * 100.0 / totalOut : 0;
-        System.err.printf("  result: %d copies (%d bytes), %d adds (%d bytes)%n" +
-            "  result: copy coverage %.1f%%, output %d bytes%n",
-            numCopies, totalCopy, numAdds, totalAdd, copyPct, totalOut);
-        if (!copyLens.isEmpty()) {
-            copyLens.sort(null);
-            double mean = totalCopy / (double) copyLens.size();
-            int median = copyLens.get(copyLens.size() / 2);
-            System.err.printf("  copies: %d regions, min=%d max=%d mean=%.1f median=%d bytes%n",
-                copyLens.size(), copyLens.get(0), copyLens.get(copyLens.size() - 1), mean, median);
-        }
-    }
 }
