@@ -75,70 +75,12 @@ ov_push(offset_vec_t *ov, size_t offset)
 	ov->offsets[ov->len++] = offset;
 }
 
-/* ── Verbose stats helper (shared pattern) ─────────────────────────── */
-
-static void
-print_copy_stats(const delta_commands_t *cmds)
-{
-	size_t *lens = NULL;
-	size_t nlens = 0, lens_cap = 0;
-	size_t total_copy = 0, total_add = 0;
-	size_t num_copies = 0, num_adds = 0;
-	size_t total_out, i, j;
-	double copy_pct;
-
-	for (i = 0; i < cmds->len; i++) {
-		if (cmds->data[i].tag == CMD_COPY) {
-			size_t l = cmds->data[i].copy.length;
-			total_copy += l;
-			num_copies++;
-			if (nlens == lens_cap) {
-				lens_cap = lens_cap ? lens_cap * 2 : 16;
-				lens = realloc(lens, lens_cap * sizeof(*lens));
-			}
-			lens[nlens++] = l;
-		} else {
-			total_add += cmds->data[i].add.length;
-			num_adds++;
-		}
-	}
-	total_out = total_copy + total_add;
-	copy_pct = total_out > 0 ? (double)total_copy / total_out * 100.0 : 0.0;
-	fprintf(stderr,
-	        "  result: %zu copies (%zu bytes), %zu adds (%zu bytes)\n"
-	        "  result: copy coverage %.1f%%, output %zu bytes\n",
-	        num_copies, total_copy, num_adds, total_add,
-	        copy_pct, total_out);
-
-	if (nlens > 0) {
-		double mean = (double)total_copy / nlens;
-		size_t median;
-		/* Insertion sort for median */
-		for (i = 1; i < nlens; i++) {
-			size_t key = lens[i];
-			j = i;
-			while (j > 0 && lens[j - 1] > key) {
-				lens[j] = lens[j - 1];
-				j--;
-			}
-			lens[j] = key;
-		}
-		median = lens[nlens / 2];
-		fprintf(stderr,
-		        "  copies: %zu regions, min=%zu max=%zu "
-		        "mean=%.1f median=%zu bytes\n",
-		        nlens, lens[0], lens[nlens - 1], mean, median);
-	}
-	free(lens);
-}
-
 /* ── Greedy algorithm ──────────────────────────────────────────────── */
 
 delta_commands_t
 delta_diff_greedy(const uint8_t *r, size_t r_len,
                   const uint8_t *v, size_t v_len,
-                  size_t p, size_t q, bool verbose,
-                  bool use_splay, size_t min_copy)
+                  const delta_diff_options_t *opts)
 {
 	delta_commands_t commands;
 	greedy_htable_t ht;
@@ -149,7 +91,10 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 	size_t v_c, v_s;
 	size_t num_seeds;
 
-	(void)q;  /* greedy ignores table size */
+	size_t p = opts->p;
+	bool verbose = opts->verbose;
+	bool use_splay = opts->use_splay;
+	size_t min_copy = opts->min_copy;
 
 	delta_commands_init(&commands);
 	if (v_len == 0) return commands;
@@ -309,7 +254,7 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 	}
 
 	if (verbose)
-		print_copy_stats(&commands);
+		delta_print_command_stats(&commands);
 
 	/* Cleanup */
 	if (use_splay) {

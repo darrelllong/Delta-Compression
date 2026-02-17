@@ -95,6 +95,30 @@ pub enum CyclePolicy {
     Constant,
 }
 
+/// Options for differencing algorithms.
+#[derive(Clone, Debug)]
+pub struct DiffOptions {
+    pub p: usize,
+    pub q: usize,
+    pub buf_cap: usize,
+    pub verbose: bool,
+    pub use_splay: bool,
+    pub min_copy: usize,
+}
+
+impl Default for DiffOptions {
+    fn default() -> Self {
+        Self {
+            p: SEED_LEN,
+            q: TABLE_SIZE,
+            buf_cap: 256,
+            verbose: false,
+            use_splay: false,
+            min_copy: 0,
+        }
+    }
+}
+
 // ============================================================================
 // Error type
 // ============================================================================

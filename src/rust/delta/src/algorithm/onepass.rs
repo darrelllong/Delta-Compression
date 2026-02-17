@@ -1,6 +1,6 @@
 use crate::hash::{next_prime, RollingHash};
 use crate::splay::SplayTree;
-use crate::types::{Command, SEED_LEN, TABLE_SIZE};
+use crate::types::{Command, DiffOptions};
 
 /// One-Pass algorithm (Section 4.1, Figure 3).
 ///
@@ -16,7 +16,13 @@ use crate::types::{Command, SEED_LEN, TABLE_SIZE};
 /// The hash table is auto-sized to max(q, num_seeds / p) so that large
 /// inputs get one slot per seed-length chunk of R.  TABLE_SIZE acts as a
 /// floor for small files.
-pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool, use_splay: bool, min_copy: usize) -> Vec<Command> {
+pub fn diff_onepass(r: &[u8], v: &[u8], opts: &DiffOptions) -> Vec<Command> {
+    let p = opts.p;
+    let q = opts.q;
+    let verbose = opts.verbose;
+    let use_splay = opts.use_splay;
+    let min_copy = opts.min_copy;
+
     let mut commands = Vec::new();
     if v.is_empty() {
         return commands;
@@ -245,51 +251,13 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool, use_s
     }
 
     if verbose {
-        let mut copy_lens: Vec<usize> = Vec::new();
-        let mut total_copy: usize = 0;
-        let mut total_add: usize = 0;
-        let mut num_copies: usize = 0;
-        let mut num_adds: usize = 0;
-        for cmd in &commands {
-            match cmd {
-                Command::Copy { length, .. } => {
-                    total_copy += length;
-                    num_copies += 1;
-                    copy_lens.push(*length);
-                }
-                Command::Add { data } => {
-                    total_add += data.len();
-                    num_adds += 1;
-                }
-            }
-        }
         let hit_pct = if dbg_lookups > 0 { dbg_matches as f64 / dbg_lookups as f64 * 100.0 } else { 0.0 };
-        let total_out = total_copy + total_add;
-        let copy_pct = if total_out > 0 { total_copy as f64 / total_out as f64 * 100.0 } else { 0.0 };
         eprintln!(
             "  scan: {} positions, {} lookups, {} matches (flushes)\n  \
              scan: hit rate {:.1}% (of lookups)",
             dbg_positions, dbg_lookups, dbg_matches, hit_pct
         );
-        eprintln!(
-            "  result: {} copies ({} bytes), {} adds ({} bytes)\n  \
-             result: copy coverage {:.1}%, output {} bytes",
-            num_copies, total_copy, num_adds, total_add,
-            copy_pct, total_out
-        );
-        if !copy_lens.is_empty() {
-            copy_lens.sort();
-            let mean = total_copy as f64 / copy_lens.len() as f64;
-            let median = copy_lens[copy_lens.len() / 2];
-            eprintln!(
-                "  copies: {} regions, min={} max={} mean={:.1} median={} bytes",
-                copy_lens.len(),
-                copy_lens.first().unwrap(),
-                copy_lens.last().unwrap(),
-                mean,
-                median
-            );
-        }
+        super::print_command_stats(&commands);
     }
 
     commands
@@ -297,5 +265,5 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool, use_s
 
 /// Convenience wrapper with default parameters.
 pub fn diff_onepass_default(r: &[u8], v: &[u8]) -> Vec<Command> {
-    diff_onepass(r, v, SEED_LEN, TABLE_SIZE, false, false, 0)
+    diff_onepass(r, v, &DiffOptions::default())
 }

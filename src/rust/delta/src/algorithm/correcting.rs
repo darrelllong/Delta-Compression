@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use crate::hash::{fingerprint, next_prime, RollingHash};
 use crate::splay::SplayTree;
-use crate::types::{Command, SEED_LEN, TABLE_SIZE};
+use crate::types::{Command, DiffOptions};
 
 /// Internal buffer entry tracking which region of V a command encodes.
 struct BufEntry {
@@ -40,13 +40,15 @@ struct BufEntry {
 pub fn diff_correcting(
     r: &[u8],
     v: &[u8],
-    p: usize,
-    q: usize,
-    buf_cap: usize,
-    verbose: bool,
-    use_splay: bool,
-    min_copy: usize,
+    opts: &DiffOptions,
 ) -> Vec<Command> {
+    let p = opts.p;
+    let q = opts.q;
+    let buf_cap = opts.buf_cap;
+    let verbose = opts.verbose;
+    let use_splay = opts.use_splay;
+    let min_copy = opts.min_copy;
+
     let mut commands = Vec::new();
     if v.is_empty() {
         return commands;
@@ -391,24 +393,6 @@ pub fn diff_correcting(
     }
 
     if verbose {
-        let mut copy_lens: Vec<usize> = Vec::new();
-        let mut total_copy: usize = 0;
-        let mut total_add: usize = 0;
-        let mut num_copies: usize = 0;
-        let mut num_adds: usize = 0;
-        for cmd in &commands {
-            match cmd {
-                Command::Copy { length, .. } => {
-                    total_copy += length;
-                    num_copies += 1;
-                    copy_lens.push(*length);
-                }
-                Command::Add { data } => {
-                    total_add += data.len();
-                    num_adds += 1;
-                }
-            }
-        }
         let v_seeds = if v.len() >= p { v.len() - p + 1 } else { 0 };
         let cp_pct = if v_seeds > 0 {
             dbg_scan_checkpoints as f64 / v_seeds as f64 * 100.0
@@ -420,12 +404,6 @@ pub fn diff_correcting(
         } else {
             0.0
         };
-        let total_out = total_copy + total_add;
-        let copy_pct = if total_out > 0 {
-            total_copy as f64 / total_out as f64 * 100.0
-        } else {
-            0.0
-        };
         eprintln!(
             "  scan: {} V positions, {} checkpoints ({:.3}%), {} matches\n  \
              scan: hit rate {:.1}% (of checkpoints), \
@@ -433,24 +411,7 @@ pub fn diff_correcting(
             v_seeds, dbg_scan_checkpoints, cp_pct, dbg_scan_match,
             hit_pct, dbg_scan_fp_mismatch, dbg_scan_byte_mismatch
         );
-        eprintln!(
-            "  result: {} copies ({} bytes), {} adds ({} bytes)\n  \
-             result: copy coverage {:.1}%, output {} bytes",
-            num_copies, total_copy, num_adds, total_add, copy_pct, total_out
-        );
-        if !copy_lens.is_empty() {
-            copy_lens.sort();
-            let mean = total_copy as f64 / copy_lens.len() as f64;
-            let median = copy_lens[copy_lens.len() / 2];
-            eprintln!(
-                "  copies: {} regions, min={} max={} mean={:.1} median={} bytes",
-                copy_lens.len(),
-                copy_lens.first().unwrap(),
-                copy_lens.last().unwrap(),
-                mean,
-                median
-            );
-        }
+        super::print_command_stats(&commands);
     }
 
     commands
@@ -458,5 +419,5 @@ pub fn diff_correcting(
 
 /// Convenience wrapper with default parameters.
 pub fn diff_correcting_default(r: &[u8], v: &[u8]) -> Vec<Command> {
-    diff_correcting(r, v, SEED_LEN, TABLE_SIZE, 256, false, false, 0)
+    diff_correcting(r, v, &DiffOptions::default())
 }

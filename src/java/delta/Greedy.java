@@ -17,10 +17,14 @@ import static delta.Types.*;
 public final class Greedy {
     private Greedy() {}
 
-    public static List<Command> diff(byte[] r, byte[] v, int p, int q,
-                                     boolean verbose, boolean useSplay, int minCopy) {
+    public static List<Command> diff(byte[] r, byte[] v, DiffOptions opts) {
         List<Command> commands = new ArrayList<>();
         if (v.length == 0) return commands;
+
+        int p = opts.p;
+        boolean verbose = opts.verbose;
+        boolean useSplay = opts.useSplay;
+        int minCopy = opts.minCopy;
 
         if (minCopy > 0) p = Math.max(p, minCopy);
 

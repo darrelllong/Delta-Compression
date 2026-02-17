@@ -14,11 +14,13 @@ namespace delta {
 std::vector<Command> diff_onepass(
     std::span<const uint8_t> r,
     std::span<const uint8_t> v,
-    size_t p,
-    size_t q,
-    bool verbose,
-    bool use_splay,
-    size_t min_copy) {
+    const DiffOptions& opts) {
+
+    auto p = opts.p;
+    auto q = opts.q;
+    bool verbose = opts.verbose;
+    bool use_splay = opts.use_splay;
+    size_t min_copy = opts.min_copy;
 
     std::vector<Command> commands;
     if (v.empty()) return commands;
@@ -207,38 +209,13 @@ std::vector<Command> diff_onepass(
     }
 
     if (verbose) {
-        std::vector<size_t> copy_lens;
-        size_t total_copy = 0, total_add = 0, num_copies = 0, num_adds = 0;
-        for (const auto& cmd : commands) {
-            if (auto* c = std::get_if<CopyCmd>(&cmd)) {
-                total_copy += c->length; ++num_copies;
-                copy_lens.push_back(c->length);
-            } else if (auto* a = std::get_if<AddCmd>(&cmd)) {
-                total_add += a->data.size(); ++num_adds;
-            }
-        }
         double hit_pct = dbg_lookups > 0
             ? static_cast<double>(dbg_matches) / dbg_lookups * 100.0 : 0.0;
-        size_t total_out = total_copy + total_add;
-        double copy_pct = total_out > 0
-            ? static_cast<double>(total_copy) / total_out * 100.0 : 0.0;
         std::fprintf(stderr,
             "  scan: %zu positions, %zu lookups, %zu matches (flushes)\n"
             "  scan: hit rate %.1f%% (of lookups)\n",
             dbg_positions, dbg_lookups, dbg_matches, hit_pct);
-        std::fprintf(stderr,
-            "  result: %zu copies (%zu bytes), %zu adds (%zu bytes)\n"
-            "  result: copy coverage %.1f%%, output %zu bytes\n",
-            num_copies, total_copy, num_adds, total_add, copy_pct, total_out);
-        if (!copy_lens.empty()) {
-            std::sort(copy_lens.begin(), copy_lens.end());
-            double mean = static_cast<double>(total_copy) / copy_lens.size();
-            size_t median = copy_lens[copy_lens.size() / 2];
-            std::fprintf(stderr,
-                "  copies: %zu regions, min=%zu max=%zu mean=%.1f median=%zu bytes\n",
-                copy_lens.size(), copy_lens.front(), copy_lens.back(),
-                mean, median);
-        }
+        print_command_stats(commands);
     }
 
     return commands;

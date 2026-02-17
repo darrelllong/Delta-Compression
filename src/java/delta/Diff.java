@@ -58,21 +58,20 @@ public final class Diff {
     }
 
     public static List<Command> diff(Algorithm algo, byte[] r, byte[] v,
-                                     int p, int q, boolean verbose,
-                                     boolean useSplay, int minCopy) {
+                                     DiffOptions opts) {
         switch (algo) {
             case GREEDY:
-                return Greedy.diff(r, v, p, q, verbose, useSplay, minCopy);
+                return Greedy.diff(r, v, opts);
             case ONEPASS:
-                return Onepass.diff(r, v, p, q, verbose, useSplay, minCopy);
+                return Onepass.diff(r, v, opts);
             case CORRECTING:
-                return Correcting.diff(r, v, p, q, 256, verbose, useSplay, minCopy);
+                return Correcting.diff(r, v, opts);
             default:
                 throw new IllegalArgumentException("unknown algorithm: " + algo);
         }
     }
 
     public static List<Command> diffDefault(Algorithm algo, byte[] r, byte[] v) {
-        return diff(algo, r, v, SEED_LEN, TABLE_SIZE, false, false, 0);
+        return diff(algo, r, v, new DiffOptions());
     }
 }

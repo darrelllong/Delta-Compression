@@ -165,7 +165,13 @@ int main(int argc, char** argv) {
         auto v = v_file.span();
 
         auto t0 = std::chrono::steady_clock::now();
-        auto commands = diff(algo, r, v, enc_seed_len, enc_table_size, enc_verbose, enc_splay, enc_min_copy);
+        DiffOptions opts;
+        opts.p = enc_seed_len;
+        opts.q = enc_table_size;
+        opts.verbose = enc_verbose;
+        opts.use_splay = enc_splay;
+        opts.min_copy = enc_min_copy;
+        auto commands = diff(algo, r, v, opts);
 
         std::vector<PlacedCommand> placed;
         if (enc_inplace) {

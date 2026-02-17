@@ -217,10 +217,16 @@ main(int argc, char **argv)
 		struct timespec t0, t1;
 		clock_gettime(CLOCK_MONOTONIC, &t0);
 
+		delta_diff_options_t diff_opts = DELTA_DIFF_OPTIONS_DEFAULT;
+		diff_opts.p = seed_len;
+		diff_opts.q = table_size;
+		diff_opts.verbose = verbose_flag;
+		diff_opts.use_splay = splay;
+		diff_opts.min_copy = min_copy_val;
+
 		delta_commands_t cmds = delta_diff(
 			algo, r_file.data, r_file.size,
-			v_file.data, v_file.size,
-			seed_len, table_size, verbose_flag, splay, min_copy_val);
+			v_file.data, v_file.size, &diff_opts);
 
 		delta_placed_commands_t placed;
 		if (inplace)

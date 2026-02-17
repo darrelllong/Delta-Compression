@@ -76,21 +76,12 @@ typedef struct {
 	size_t offset;
 } corr_splay_val_t;
 
-/* Forward decl */
-static void print_copy_stats(const delta_commands_t *cmds,
-                             size_t dbg_scan_checkpoints,
-                             size_t dbg_scan_match,
-                             size_t dbg_scan_fp_mismatch,
-                             size_t dbg_scan_byte_mismatch,
-                             size_t v_len, size_t p);
-
 /* ── Correcting algorithm ──────────────────────────────────────────── */
 
 delta_commands_t
 delta_diff_correcting(const uint8_t *r, size_t r_len,
                       const uint8_t *v, size_t v_len,
-                      size_t p, size_t q, size_t buf_cap,
-                      bool verbose, bool use_splay, size_t min_copy)
+                      const delta_diff_options_t *opts)
 {
 	delta_commands_t commands;
 	size_t num_seeds;
@@ -105,6 +96,13 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 	size_t dbg_build_skipped = 0;
 	size_t dbg_scan_checkpoints = 0, dbg_scan_match = 0;
 	size_t dbg_scan_fp_mismatch = 0, dbg_scan_byte_mismatch = 0;
+
+	size_t p = opts->p;
+	size_t q = opts->q;
+	size_t buf_cap = opts->buf_cap;
+	bool verbose = opts->verbose;
+	bool use_splay = opts->use_splay;
+	size_t min_copy = opts->min_copy;
 
 	/* Hash table path */
 	corr_slot_t *h_r_ht = NULL;
@@ -469,10 +467,22 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 		delta_commands_push(&commands, cmd);
 	}
 
-	if (verbose)
-		print_copy_stats(&commands, dbg_scan_checkpoints,
-		                 dbg_scan_match, dbg_scan_fp_mismatch,
-		                 dbg_scan_byte_mismatch, v_len, p);
+	if (verbose) {
+		size_t v_seeds = (v_len >= p) ? (v_len - p + 1) : 0;
+		double cp_pct = v_seeds > 0
+		    ? (double)dbg_scan_checkpoints / v_seeds * 100.0 : 0.0;
+		double hit_pct = dbg_scan_checkpoints > 0
+		    ? (double)dbg_scan_match / dbg_scan_checkpoints * 100.0
+		    : 0.0;
+		fprintf(stderr,
+		        "  scan: %zu V positions, %zu checkpoints (%.3f%%), "
+		        "%zu matches\n"
+		        "  scan: hit rate %.1f%% (of checkpoints), "
+		        "fp collisions %zu, byte mismatches %zu\n",
+		        v_seeds, dbg_scan_checkpoints, cp_pct, dbg_scan_match,
+		        hit_pct, dbg_scan_fp_mismatch, dbg_scan_byte_mismatch);
+		delta_print_command_stats(&commands);
+	}
 
 	/* Cleanup */
 	if (use_splay)
@@ -489,19 +499,15 @@ delta_commands_t
 delta_diff(delta_algorithm_t algo,
            const uint8_t *r, size_t r_len,
            const uint8_t *v, size_t v_len,
-           size_t p, size_t q, bool verbose, bool use_splay,
-           size_t min_copy)
+           const delta_diff_options_t *opts)
 {
 	switch (algo) {
 	case ALGO_GREEDY:
-		return delta_diff_greedy(r, r_len, v, v_len, p, q,
-		                         verbose, use_splay, min_copy);
+		return delta_diff_greedy(r, r_len, v, v_len, opts);
 	case ALGO_ONEPASS:
-		return delta_diff_onepass(r, r_len, v, v_len, p, q,
-		                          verbose, use_splay, min_copy);
+		return delta_diff_onepass(r, r_len, v, v_len, opts);
 	case ALGO_CORRECTING:
-		return delta_diff_correcting(r, r_len, v, v_len, p, q, 256,
-		                              verbose, use_splay, min_copy);
+		return delta_diff_correcting(r, r_len, v, v_len, opts);
 	}
 	/* unreachable */
 	{
@@ -511,20 +517,17 @@ delta_diff(delta_algorithm_t algo,
 	}
 }
 
-/* ── Verbose stats ─────────────────────────────────────────────────── */
+/* ── Shared verbose stats ──────────────────────────────────────────── */
 
-static void
-print_copy_stats(const delta_commands_t *cmds,
-                 size_t dbg_scan_checkpoints, size_t dbg_scan_match,
-                 size_t dbg_scan_fp_mismatch, size_t dbg_scan_byte_mismatch,
-                 size_t v_len, size_t p)
+void
+delta_print_command_stats(const delta_commands_t *cmds)
 {
 	size_t *lens = NULL;
 	size_t nlens = 0, lens_cap = 0;
 	size_t total_copy = 0, total_add = 0;
 	size_t num_copies = 0, num_adds = 0;
-	size_t total_out, v_seeds, i, j;
-	double cp_pct, hit_pct, copy_pct;
+	size_t total_out, i, j;
+	double copy_pct;
 
 	for (i = 0; i < cmds->len; i++) {
 		if (cmds->data[i].tag == CMD_COPY) {
@@ -541,21 +544,9 @@ print_copy_stats(const delta_commands_t *cmds,
 			num_adds++;
 		}
 	}
-	v_seeds = (v_len >= p) ? (v_len - p + 1) : 0;
-	cp_pct = v_seeds > 0
-	    ? (double)dbg_scan_checkpoints / v_seeds * 100.0 : 0.0;
-	hit_pct = dbg_scan_checkpoints > 0
-	    ? (double)dbg_scan_match / dbg_scan_checkpoints * 100.0 : 0.0;
 	total_out = total_copy + total_add;
 	copy_pct = total_out > 0
 	    ? (double)total_copy / total_out * 100.0 : 0.0;
-	fprintf(stderr,
-	        "  scan: %zu V positions, %zu checkpoints (%.3f%%), "
-	        "%zu matches\n"
-	        "  scan: hit rate %.1f%% (of checkpoints), "
-	        "fp collisions %zu, byte mismatches %zu\n",
-	        v_seeds, dbg_scan_checkpoints, cp_pct, dbg_scan_match,
-	        hit_pct, dbg_scan_fp_mismatch, dbg_scan_byte_mismatch);
 	fprintf(stderr,
 	        "  result: %zu copies (%zu bytes), %zu adds (%zu bytes)\n"
 	        "  result: copy coverage %.1f%%, output %zu bytes\n",

@@ -120,6 +120,16 @@ TABLE_SIZE = 1048573  # hash table capacity (largest prime < 2^20)
 HASH_BASE = 263      # small prime, avoids b=256 which makes low bits depend only on last byte
 HASH_MOD = (1 << 61) - 1  # Mersenne prime 2^61-1: ~2.3 * 10^18
 
+
+@dataclass
+class DiffOptions:
+    """Options for differencing algorithms."""
+    p: int = SEED_LEN
+    q: int = TABLE_SIZE
+    buf_cap: int = 256
+    verbose: bool = False
+    min_copy: int = 0
+
 # ── Primality testing ─────────────────────────────────────────────────────
 
 
@@ -223,6 +233,28 @@ def _fp_to_index(fp: int, table_size: int) -> int:
     return fp % table_size
 
 
+def _print_command_stats(commands: List[Command]) -> None:
+    """Print shared verbose statistics for diff algorithm output."""
+    copy_lens = [c.length for c in commands if isinstance(c, CopyCmd)]
+    total_copy = sum(copy_lens)
+    total_add = sum(len(c.data) for c in commands if isinstance(c, AddCmd))
+    num_copies = len(copy_lens)
+    num_adds = sum(1 for c in commands if isinstance(c, AddCmd))
+    total_out = total_copy + total_add
+    copy_pct = total_copy / total_out * 100 if total_out else 0
+    print(f"  result: {num_copies} copies ({total_copy} bytes), "
+          f"{num_adds} adds ({total_add} bytes)\n"
+          f"  result: copy coverage {copy_pct:.1f}%, output {total_out} bytes",
+          file=sys.stderr)
+    if copy_lens:
+        copy_lens.sort()
+        mean = total_copy / len(copy_lens)
+        median = copy_lens[len(copy_lens) // 2]
+        print(f"  copies: {len(copy_lens)} regions, min={copy_lens[0]} "
+              f"max={copy_lens[-1]} mean={mean:.1f} median={median} bytes",
+              file=sys.stderr)
+
+
 # ============================================================================
 # Greedy Algorithm (Section 3.1, Figure 2)
 #
@@ -236,12 +268,15 @@ def _fp_to_index(fp: int, table_size: int) -> int:
 def diff_greedy(R: bytes, V: bytes,
                 p: int = SEED_LEN, q: int = TABLE_SIZE,
                 verbose: bool = False,
-                min_copy: int = 0) -> List[Command]:
+                min_copy: int = 0,
+                opts: 'DiffOptions' = None) -> List[Command]:
     """Greedy algorithm (Section 3.1, Figure 2).
 
     Uses a chained hash table (Python dict) that stores ALL offsets
     per footprint (Section 3.1).
     """
+    if opts is not None:
+        p, q, verbose, min_copy = opts.p, opts.q, opts.verbose, opts.min_copy
     commands: List[Command] = []
     if not V:
         return commands
@@ -323,24 +358,7 @@ def diff_greedy(R: bytes, V: bytes,
         commands.append(AddCmd(data=V[v_s:]))
 
     if verbose:
-        copy_lens = [c.length for c in commands if isinstance(c, CopyCmd)]
-        total_copy = sum(copy_lens)
-        total_add = sum(len(c.data) for c in commands if isinstance(c, AddCmd))
-        num_copies = len(copy_lens)
-        num_adds = sum(1 for c in commands if isinstance(c, AddCmd))
-        total_out = total_copy + total_add
-        copy_pct = total_copy / total_out * 100 if total_out else 0
-        print(f"  result: {num_copies} copies ({total_copy} bytes), "
-              f"{num_adds} adds ({total_add} bytes)\n"
-              f"  result: copy coverage {copy_pct:.1f}%, output {total_out} bytes",
-              file=sys.stderr)
-        if copy_lens:
-            copy_lens.sort()
-            mean = total_copy / len(copy_lens)
-            median = copy_lens[len(copy_lens) // 2]
-            print(f"  copies: {len(copy_lens)} regions, min={copy_lens[0]} "
-                  f"max={copy_lens[-1]} mean={mean:.1f} median={median} bytes",
-                  file=sys.stderr)
+        _print_command_stats(commands)
 
     return commands
 
@@ -361,13 +379,16 @@ def diff_greedy(R: bytes, V: bytes,
 def diff_onepass(R: bytes, V: bytes,
                  p: int = SEED_LEN, q: int = TABLE_SIZE,
                  verbose: bool = False,
-                 min_copy: int = 0) -> List[Command]:
+                 min_copy: int = 0,
+                 opts: 'DiffOptions' = None) -> List[Command]:
     """One-pass algorithm (Section 4.1, Figure 3).
 
     The hash table is auto-sized to next_prime(max(q, num_seeds // p)) so
     that large inputs get one slot per seed-length chunk of R.  TABLE_SIZE
     acts as a floor for small files.
     """
+    if opts is not None:
+        p, q, verbose, min_copy = opts.p, opts.q, opts.verbose, opts.min_copy
     commands: List[Command] = []
     if not V:
         return commands
@@ -526,29 +547,12 @@ def diff_onepass(R: bytes, V: bytes,
         commands.append(AddCmd(data=V[v_s:]))
 
     if verbose:
-        copy_lens = [c.length for c in commands if isinstance(c, CopyCmd)]
-        total_copy = sum(copy_lens)
-        total_add = sum(len(c.data) for c in commands if isinstance(c, AddCmd))
-        num_copies = len(copy_lens)
-        num_adds = sum(1 for c in commands if isinstance(c, AddCmd))
         hit_pct = dbg_matches / dbg_lookups * 100 if dbg_lookups else 0
-        total_out = total_copy + total_add
-        copy_pct = total_copy / total_out * 100 if total_out else 0
         print(f"  scan: {dbg_positions:,} positions, {dbg_lookups:,} lookups, "
               f"{dbg_matches:,} matches (flushes)\n"
               f"  scan: hit rate {hit_pct:.1f}% (of lookups)",
               file=sys.stderr)
-        print(f"  result: {num_copies:,} copies ({total_copy:,} bytes), "
-              f"{num_adds:,} adds ({total_add:,} bytes)\n"
-              f"  result: copy coverage {copy_pct:.1f}%, output {total_out:,} bytes",
-              file=sys.stderr)
-        if copy_lens:
-            copy_lens.sort()
-            mean = total_copy / len(copy_lens)
-            median = copy_lens[len(copy_lens) // 2]
-            print(f"  copies: {len(copy_lens)} regions, min={copy_lens[0]} "
-                  f"max={copy_lens[-1]} mean={mean:.1f} median={median} bytes",
-                  file=sys.stderr)
+        _print_command_stats(commands)
 
     return commands
 
@@ -587,7 +591,8 @@ def diff_correcting(R: bytes, V: bytes,
                     p: int = SEED_LEN, q: int = TABLE_SIZE,
                     buf_cap: int = 256,
                     verbose: bool = False,
-                    min_copy: int = 0) -> List[Command]:
+                    min_copy: int = 0,
+                    opts: 'DiffOptions' = None) -> List[Command]:
     """Correcting 1.5-pass algorithm (Section 7, Figure 8) with
     fingerprint-based checkpointing (Section 8).
 
@@ -615,6 +620,8 @@ def diff_correcting(R: bytes, V: bytes,
     Backward extension (Section 8.2, p. 349) recovers true match starts
     that fall between checkpoint positions.
     """
+    if opts is not None:
+        p, q, buf_cap, verbose, min_copy = opts.p, opts.q, opts.buf_cap, opts.verbose, opts.min_copy
     commands: List[Command] = []
     if not V:
         return commands
@@ -844,30 +851,13 @@ def diff_correcting(R: bytes, V: bytes,
         cp_pct = dbg_scan_checkpoints / v_seeds * 100 if v_seeds else 0
         hit_pct = (dbg_scan_match / dbg_scan_checkpoints * 100
                    if dbg_scan_checkpoints else 0)
-        copy_lens = [c.length for c in commands if isinstance(c, CopyCmd)]
-        total_copy = sum(copy_lens)
-        total_add = sum(len(c.data) for c in commands if isinstance(c, AddCmd))
-        num_copies = len(copy_lens)
-        num_adds = sum(1 for c in commands if isinstance(c, AddCmd))
-        total_out = total_copy + total_add
-        copy_pct = total_copy / total_out * 100 if total_out else 0
         print(f"  scan: {v_seeds} V positions, {dbg_scan_checkpoints} checkpoints "
               f"({cp_pct:.3f}%), {dbg_scan_match} matches\n"
               f"  scan: hit rate {hit_pct:.1f}% (of checkpoints), "
               f"fp collisions {dbg_scan_fp_miss}, "
               f"byte mismatches {dbg_scan_byte_miss}",
               file=sys.stderr)
-        print(f"  result: {num_copies} copies ({total_copy} bytes), "
-              f"{num_adds} adds ({total_add} bytes)\n"
-              f"  result: copy coverage {copy_pct:.1f}%, output {total_out} bytes",
-              file=sys.stderr)
-        if copy_lens:
-            copy_lens.sort()
-            mean = total_copy / len(copy_lens)
-            median = copy_lens[len(copy_lens) // 2]
-            print(f"  copies: {len(copy_lens)} regions, min={copy_lens[0]} "
-                  f"max={copy_lens[-1]} mean={mean:.1f} median={median} bytes",
-                  file=sys.stderr)
+        _print_command_stats(commands)
 
     return commands
 
