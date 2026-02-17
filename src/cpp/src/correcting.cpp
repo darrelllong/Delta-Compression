@@ -22,12 +22,14 @@ struct BufEntry {
 std::vector<Command> diff_correcting(
     std::span<const uint8_t> r,
     std::span<const uint8_t> v,
-    size_t p,
-    size_t q,
-    size_t buf_cap,
-    bool verbose,
-    bool use_splay,
-    size_t min_copy) {
+    const DiffOptions& opts) {
+
+    auto p = opts.p;
+    auto q = opts.q;
+    size_t buf_cap = opts.buf_cap;
+    bool verbose = opts.verbose;
+    bool use_splay = opts.use_splay;
+    size_t min_copy = opts.min_copy;
 
     std::vector<Command> commands;
     if (v.empty()) return commands;
@@ -334,43 +336,18 @@ std::vector<Command> diff_correcting(
     }
 
     if (verbose) {
-        std::vector<size_t> copy_lens;
-        size_t total_copy = 0, total_add = 0, num_copies = 0, num_adds = 0;
-        for (const auto& cmd : commands) {
-            if (auto* c = std::get_if<CopyCmd>(&cmd)) {
-                total_copy += c->length; ++num_copies;
-                copy_lens.push_back(c->length);
-            } else if (auto* a = std::get_if<AddCmd>(&cmd)) {
-                total_add += a->data.size(); ++num_adds;
-            }
-        }
         size_t v_seeds = (v.size() >= p) ? (v.size() - p + 1) : 0;
         double cp_pct = (v_seeds > 0)
             ? static_cast<double>(dbg_scan_checkpoints) / v_seeds * 100.0 : 0.0;
         double hit_pct = (dbg_scan_checkpoints > 0)
             ? static_cast<double>(dbg_scan_match) / dbg_scan_checkpoints * 100.0 : 0.0;
-        size_t total_out = total_copy + total_add;
-        double copy_pct = (total_out > 0)
-            ? static_cast<double>(total_copy) / total_out * 100.0 : 0.0;
         std::fprintf(stderr,
             "  scan: %zu V positions, %zu checkpoints (%.3f%%), %zu matches\n"
             "  scan: hit rate %.1f%% (of checkpoints), "
             "fp collisions %zu, byte mismatches %zu\n",
             v_seeds, dbg_scan_checkpoints, cp_pct, dbg_scan_match,
             hit_pct, dbg_scan_fp_mismatch, dbg_scan_byte_mismatch);
-        std::fprintf(stderr,
-            "  result: %zu copies (%zu bytes), %zu adds (%zu bytes)\n"
-            "  result: copy coverage %.1f%%, output %zu bytes\n",
-            num_copies, total_copy, num_adds, total_add, copy_pct, total_out);
-        if (!copy_lens.empty()) {
-            std::sort(copy_lens.begin(), copy_lens.end());
-            double mean = static_cast<double>(total_copy) / copy_lens.size();
-            size_t median = copy_lens[copy_lens.size() / 2];
-            std::fprintf(stderr,
-                "  copies: %zu regions, min=%zu max=%zu mean=%.1f median=%zu bytes\n",
-                copy_lens.size(), copy_lens.front(), copy_lens.back(),
-                mean, median);
-        }
+        print_command_stats(commands);
     }
 
     return commands;
@@ -381,21 +358,47 @@ std::vector<Command> diff(
     Algorithm algo,
     std::span<const uint8_t> r,
     std::span<const uint8_t> v,
-    size_t p,
-    size_t q,
-    bool verbose,
-    bool use_splay,
-    size_t min_copy) {
+    const DiffOptions& opts) {
 
     switch (algo) {
     case Algorithm::Greedy:
-        return diff_greedy(r, v, p, q, verbose, use_splay, min_copy);
+        return diff_greedy(r, v, opts);
     case Algorithm::Onepass:
-        return diff_onepass(r, v, p, q, verbose, use_splay, min_copy);
+        return diff_onepass(r, v, opts);
     case Algorithm::Correcting:
-        return diff_correcting(r, v, p, q, 256, verbose, use_splay, min_copy);
+        return diff_correcting(r, v, opts);
     }
     __builtin_unreachable();
+}
+
+/// Shared verbose stats: result summary + copy length distribution.
+void print_command_stats(const std::vector<Command>& commands) {
+    std::vector<size_t> copy_lens;
+    size_t total_copy = 0, total_add = 0, num_copies = 0, num_adds = 0;
+    for (const auto& cmd : commands) {
+        if (auto* c = std::get_if<CopyCmd>(&cmd)) {
+            total_copy += c->length; ++num_copies;
+            copy_lens.push_back(c->length);
+        } else if (auto* a = std::get_if<AddCmd>(&cmd)) {
+            total_add += a->data.size(); ++num_adds;
+        }
+    }
+    size_t total_out = total_copy + total_add;
+    double copy_pct = total_out > 0
+        ? static_cast<double>(total_copy) / total_out * 100.0 : 0.0;
+    std::fprintf(stderr,
+        "  result: %zu copies (%zu bytes), %zu adds (%zu bytes)\n"
+        "  result: copy coverage %.1f%%, output %zu bytes\n",
+        num_copies, total_copy, num_adds, total_add, copy_pct, total_out);
+    if (!copy_lens.empty()) {
+        std::sort(copy_lens.begin(), copy_lens.end());
+        double mean = static_cast<double>(total_copy) / copy_lens.size();
+        size_t median = copy_lens[copy_lens.size() / 2];
+        std::fprintf(stderr,
+            "  copies: %zu regions, min=%zu max=%zu mean=%.1f median=%zu bytes\n",
+            copy_lens.size(), copy_lens.front(), copy_lens.back(),
+            mean, median);
+    }
 }
 
 } // namespace delta

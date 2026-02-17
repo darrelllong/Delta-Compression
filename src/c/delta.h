@@ -156,30 +156,47 @@ void     delta_splay_clear(delta_splay_t *t);
 void     delta_splay_free(delta_splay_t *t);
 
 /* ====================================================================
+ * Diff options — replaces positional parameter lists
+ * ==================================================================== */
+
+typedef struct {
+	size_t p;
+	size_t q;
+	size_t buf_cap;
+	bool   verbose;
+	bool   use_splay;
+	size_t min_copy;
+} delta_diff_options_t;
+
+#define DELTA_DIFF_OPTIONS_DEFAULT \
+	{ DELTA_SEED_LEN, DELTA_TABLE_SIZE, 256, false, false, 0 }
+
+/* ====================================================================
  * Differencing algorithms
  * ==================================================================== */
+
+void delta_print_command_stats(const delta_commands_t *cmds);
 
 delta_commands_t delta_diff_greedy(
 	const uint8_t *r, size_t r_len,
 	const uint8_t *v, size_t v_len,
-	size_t p, size_t q, bool verbose, bool use_splay, size_t min_copy);
+	const delta_diff_options_t *opts);
 
 delta_commands_t delta_diff_onepass(
 	const uint8_t *r, size_t r_len,
 	const uint8_t *v, size_t v_len,
-	size_t p, size_t q, bool verbose, bool use_splay, size_t min_copy);
+	const delta_diff_options_t *opts);
 
 delta_commands_t delta_diff_correcting(
 	const uint8_t *r, size_t r_len,
 	const uint8_t *v, size_t v_len,
-	size_t p, size_t q, size_t buf_cap,
-	bool verbose, bool use_splay, size_t min_copy);
+	const delta_diff_options_t *opts);
 
 delta_commands_t delta_diff(
 	delta_algorithm_t algo,
 	const uint8_t *r, size_t r_len,
 	const uint8_t *v, size_t v_len,
-	size_t p, size_t q, bool verbose, bool use_splay, size_t min_copy);
+	const delta_diff_options_t *opts);
 
 /* ====================================================================
  * Binary delta format encode/decode

@@ -27,18 +27,12 @@ typedef struct {
 	bool     occupied;
 } op_slot_t;
 
-/* Forward decl for verbose stats */
-static void print_copy_stats(const delta_commands_t *cmds,
-                             size_t dbg_positions, size_t dbg_lookups,
-                             size_t dbg_matches);
-
 /* ── One-pass algorithm ────────────────────────────────────────────── */
 
 delta_commands_t
 delta_diff_onepass(const uint8_t *r, size_t r_len,
                    const uint8_t *v, size_t v_len,
-                   size_t p, size_t q, bool verbose,
-                   bool use_splay, size_t min_copy)
+                   const delta_diff_options_t *opts)
 {
 	delta_commands_t commands;
 	size_t num_seeds;
@@ -48,6 +42,12 @@ delta_diff_onepass(const uint8_t *r, size_t r_len,
 	int rh_v_valid = 0, rh_r_valid = 0;
 	size_t rh_v_pos = 0, rh_r_pos = 0;
 	size_t dbg_positions = 0, dbg_lookups = 0, dbg_matches = 0;
+
+	size_t p = opts->p;
+	size_t q = opts->q;
+	bool verbose = opts->verbose;
+	bool use_splay = opts->use_splay;
+	size_t min_copy = opts->min_copy;
 
 	/* Hash table path */
 	op_slot_t *h_v_ht = NULL, *h_r_ht = NULL;
@@ -303,9 +303,15 @@ skip_r_store:;
 		delta_commands_push(&commands, cmd);
 	}
 
-	if (verbose)
-		print_copy_stats(&commands, dbg_positions, dbg_lookups,
-		                 dbg_matches);
+	if (verbose) {
+		double hit_pct = dbg_lookups > 0
+		    ? (double)dbg_matches / dbg_lookups * 100.0 : 0.0;
+		fprintf(stderr,
+		        "  scan: %zu positions, %zu lookups, %zu matches (flushes)\n"
+		        "  scan: hit rate %.1f%% (of lookups)\n",
+		        dbg_positions, dbg_lookups, dbg_matches, hit_pct);
+		delta_print_command_stats(&commands);
+	}
 
 	/* Cleanup */
 	if (use_splay) {
@@ -319,67 +325,3 @@ skip_r_store:;
 	return commands;
 }
 
-/* ── Verbose stats ─────────────────────────────────────────────────── */
-
-static void
-print_copy_stats(const delta_commands_t *cmds,
-                 size_t dbg_positions, size_t dbg_lookups,
-                 size_t dbg_matches)
-{
-	size_t *lens = NULL;
-	size_t nlens = 0, lens_cap = 0;
-	size_t total_copy = 0, total_add = 0;
-	size_t num_copies = 0, num_adds = 0;
-	size_t total_out, i, j;
-	double hit_pct, copy_pct;
-
-	for (i = 0; i < cmds->len; i++) {
-		if (cmds->data[i].tag == CMD_COPY) {
-			size_t l = cmds->data[i].copy.length;
-			total_copy += l;
-			num_copies++;
-			if (nlens == lens_cap) {
-				lens_cap = lens_cap ? lens_cap * 2 : 16;
-				lens = realloc(lens, lens_cap * sizeof(*lens));
-			}
-			lens[nlens++] = l;
-		} else {
-			total_add += cmds->data[i].add.length;
-			num_adds++;
-		}
-	}
-	hit_pct = dbg_lookups > 0
-	    ? (double)dbg_matches / dbg_lookups * 100.0 : 0.0;
-	total_out = total_copy + total_add;
-	copy_pct = total_out > 0
-	    ? (double)total_copy / total_out * 100.0 : 0.0;
-	fprintf(stderr,
-	        "  scan: %zu positions, %zu lookups, %zu matches (flushes)\n"
-	        "  scan: hit rate %.1f%% (of lookups)\n",
-	        dbg_positions, dbg_lookups, dbg_matches, hit_pct);
-	fprintf(stderr,
-	        "  result: %zu copies (%zu bytes), %zu adds (%zu bytes)\n"
-	        "  result: copy coverage %.1f%%, output %zu bytes\n",
-	        num_copies, total_copy, num_adds, total_add,
-	        copy_pct, total_out);
-
-	if (nlens > 0) {
-		double mean = (double)total_copy / nlens;
-		size_t median;
-		for (i = 1; i < nlens; i++) {
-			size_t key = lens[i];
-			j = i;
-			while (j > 0 && lens[j - 1] > key) {
-				lens[j] = lens[j - 1];
-				j--;
-			}
-			lens[j] = key;
-		}
-		median = lens[nlens / 2];
-		fprintf(stderr,
-		        "  copies: %zu regions, min=%zu max=%zu "
-		        "mean=%.1f median=%zu bytes\n",
-		        nlens, lens[0], lens[nlens - 1], mean, median);
-	}
-	free(lens);
-}

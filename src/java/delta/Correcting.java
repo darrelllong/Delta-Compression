@@ -32,11 +32,16 @@ public final class Correcting {
         }
     }
 
-    public static List<Command> diff(byte[] r, byte[] v, int p, int q,
-                                     int bufCap, boolean verbose,
-                                     boolean useSplay, int minCopy) {
+    public static List<Command> diff(byte[] r, byte[] v, DiffOptions opts) {
         List<Command> commands = new ArrayList<>();
         if (v.length == 0) return commands;
+
+        int p = opts.p;
+        int q = opts.q;
+        int bufCap = opts.bufCap;
+        boolean verbose = opts.verbose;
+        boolean useSplay = opts.useSplay;
+        int minCopy = opts.minCopy;
 
         if (minCopy > 0) p = Math.max(p, minCopy);
 

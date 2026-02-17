@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use memmap2::{Mmap, MmapMut};
 
 use delta::{
-    Algorithm, CyclePolicy,
+    Algorithm, CyclePolicy, DiffOptions,
     apply_placed_inplace_to, apply_placed_to,
     decode_delta, encode_delta,
     make_inplace, place_commands,
@@ -185,7 +185,15 @@ fn main() {
 
             let algo: Algorithm = algorithm.into();
             let t0 = Instant::now();
-            let commands = delta::diff(algo, r, v, seed_len, table_size, verbose, splay, min_copy);
+            let opts = DiffOptions {
+                p: seed_len,
+                q: table_size,
+                verbose,
+                use_splay: splay,
+                min_copy,
+                ..DiffOptions::default()
+            };
+            let commands = delta::diff(algo, r, v, &opts);
 
             let pol: CyclePolicy = policy.into();
             let placed = if inplace {

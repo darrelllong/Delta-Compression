@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::hash::RollingHash;
 use crate::splay::SplayTree;
-use crate::types::{Command, SEED_LEN, TABLE_SIZE};
+use crate::types::{Command, DiffOptions};
 
 /// Greedy algorithm (Section 3.1, Figure 2).
 ///
@@ -11,7 +11,12 @@ use crate::types::{Command, SEED_LEN, TABLE_SIZE};
 /// Uses a chained hash table (HashMap) or splay tree storing ALL offsets
 /// in R per fingerprint.
 /// Time: O(|V| * |R|) worst case. Space: O(|R|).
-pub fn diff_greedy(r: &[u8], v: &[u8], p: usize, _q: usize, verbose: bool, use_splay: bool, min_copy: usize) -> Vec<Command> {
+pub fn diff_greedy(r: &[u8], v: &[u8], opts: &DiffOptions) -> Vec<Command> {
+    let p = opts.p;
+    let verbose = opts.verbose;
+    let use_splay = opts.use_splay;
+    let min_copy = opts.min_copy;
+
     let mut commands = Vec::new();
     if v.is_empty() {
         return commands;
@@ -138,48 +143,7 @@ pub fn diff_greedy(r: &[u8], v: &[u8], p: usize, _q: usize, verbose: bool, use_s
     }
 
     if verbose {
-        let mut copy_lens: Vec<usize> = Vec::new();
-        let mut total_copy: usize = 0;
-        let mut total_add: usize = 0;
-        let mut num_copies: usize = 0;
-        let mut num_adds: usize = 0;
-        for cmd in &commands {
-            match cmd {
-                Command::Copy { length, .. } => {
-                    total_copy += length;
-                    num_copies += 1;
-                    copy_lens.push(*length);
-                }
-                Command::Add { data } => {
-                    total_add += data.len();
-                    num_adds += 1;
-                }
-            }
-        }
-        let total_out = total_copy + total_add;
-        let copy_pct = if total_out > 0 {
-            total_copy as f64 / total_out as f64 * 100.0
-        } else {
-            0.0
-        };
-        eprintln!(
-            "  result: {} copies ({} bytes), {} adds ({} bytes)\n  \
-             result: copy coverage {:.1}%, output {} bytes",
-            num_copies, total_copy, num_adds, total_add, copy_pct, total_out
-        );
-        if !copy_lens.is_empty() {
-            copy_lens.sort();
-            let mean = total_copy as f64 / copy_lens.len() as f64;
-            let median = copy_lens[copy_lens.len() / 2];
-            eprintln!(
-                "  copies: {} regions, min={} max={} mean={:.1} median={} bytes",
-                copy_lens.len(),
-                copy_lens.first().unwrap(),
-                copy_lens.last().unwrap(),
-                mean,
-                median
-            );
-        }
+        super::print_command_stats(&commands);
     }
 
     commands
@@ -187,5 +151,5 @@ pub fn diff_greedy(r: &[u8], v: &[u8], p: usize, _q: usize, verbose: bool, use_s
 
 /// Convenience wrapper with default parameters.
 pub fn diff_greedy_default(r: &[u8], v: &[u8]) -> Vec<Command> {
-    diff_greedy(r, v, SEED_LEN, TABLE_SIZE, false, false, 0)
+    diff_greedy(r, v, &DiffOptions::default())
 }

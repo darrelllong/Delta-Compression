@@ -1,15 +1,19 @@
 use delta::{
     apply_delta, apply_delta_inplace, decode_delta, diff_correcting, diff_greedy, diff_onepass,
     encode_delta, is_inplace_delta, is_prime, make_inplace, next_prime, output_size,
-    place_commands, Command, CyclePolicy, PlacedCommand, TABLE_SIZE,
+    place_commands, Command, CyclePolicy, DiffOptions, PlacedCommand, TABLE_SIZE,
 };
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
-type DiffFn = fn(&[u8], &[u8], usize, usize, bool, bool, usize) -> Vec<Command>;
+type DiffFn = fn(&[u8], &[u8], &DiffOptions) -> Vec<Command>;
+
+fn opts(p: usize) -> DiffOptions {
+    DiffOptions { p, ..DiffOptions::default() }
+}
 
 fn roundtrip(algo_fn: DiffFn, r: &[u8], v: &[u8], p: usize) -> Vec<u8> {
-    let cmds = algo_fn(r, v, p, TABLE_SIZE, false, false, 0);
+    let cmds = algo_fn(r, v, &opts(p));
     let placed = place_commands(&cmds);
     let delta = encode_delta(&placed, false, output_size(&cmds));
     let (placed2, _, _) = decode_delta(&delta).unwrap();
@@ -26,7 +30,7 @@ fn inplace_roundtrip(
     policy: CyclePolicy,
     p: usize,
 ) -> Vec<u8> {
-    let cmds = algo_fn(r, v, p, TABLE_SIZE, false, false, 0);
+    let cmds = algo_fn(r, v, &opts(p));
     let ip = make_inplace(r, &cmds, policy);
     apply_delta_inplace(r, &ip, v.len())
 }
@@ -38,7 +42,7 @@ fn inplace_binary_roundtrip(
     policy: CyclePolicy,
     p: usize,
 ) -> Vec<u8> {
-    let cmds = algo_fn(r, v, p, TABLE_SIZE, false, false, 0);
+    let cmds = algo_fn(r, v, &opts(p));
     let ip = make_inplace(r, &cmds, policy);
     let delta = encode_delta(&ip, true, v.len());
     let (ip2, _, vs) = decode_delta(&delta).unwrap();
@@ -49,13 +53,8 @@ fn all_algos() -> Vec<(&'static str, DiffFn)> {
     vec![
         ("greedy", diff_greedy as DiffFn),
         ("onepass", diff_onepass as DiffFn),
-        ("correcting", correcting_wrapper as DiffFn),
+        ("correcting", diff_correcting as DiffFn),
     ]
-}
-
-// Wrapper to match DiffFn signature (correcting has extra buf_cap param)
-fn correcting_wrapper(r: &[u8], v: &[u8], p: usize, q: usize, _verbose: bool, use_splay: bool, min_copy: usize) -> Vec<Command> {
-    diff_correcting(r, v, p, q, 256, false, use_splay, min_copy)
 }
 
 fn all_policies() -> Vec<(&'static str, CyclePolicy)> {
@@ -73,7 +72,7 @@ fn test_paper_example() {
     let r = b"ABCDEFGHIJKLMNOP";
     let v = b"QWIJKLMNOBCDEFGHZDEFGHIJKL";
     for (name, algo) in all_algos() {
-        assert_eq!(apply_delta(r, &algo(r, v, 2, TABLE_SIZE, false, false, 0)), v, "failed for {}", name);
+        assert_eq!(apply_delta(r, &algo(r, v, &opts(2))), v, "failed for {}", name);
     }
 }
 
@@ -87,7 +86,7 @@ fn test_identical() {
         .copied()
         .collect();
     for (name, algo) in all_algos() {
-        let cmds = algo(&data, &data, 2, TABLE_SIZE, false, false, 0);
+        let cmds = algo(&data, &data, &opts(2));
         assert_eq!(apply_delta(&data, &cmds), data, "failed for {}", name);
         assert!(
             cmds.iter()
@@ -103,7 +102,7 @@ fn test_completely_different() {
     let r: Vec<u8> = (0..=255u8).cycle().take(512).collect();
     let v: Vec<u8> = (0..=255u8).rev().cycle().take(512).collect();
     for (name, algo) in all_algos() {
-        assert_eq!(apply_delta(&r, &algo(&r, &v, 2, TABLE_SIZE, false, false, 0)), v, "failed for {}", name);
+        assert_eq!(apply_delta(&r, &algo(&r, &v, &opts(2))), v, "failed for {}", name);
     }
 }
 
@@ -111,7 +110,7 @@ fn test_completely_different() {
 #[test]
 fn test_empty_version() {
     for (name, algo) in all_algos() {
-        let cmds = algo(b"hello", b"", 2, TABLE_SIZE, false, false, 0);
+        let cmds = algo(b"hello", b"", &opts(2));
         assert!(cmds.is_empty(), "{}: should be empty", name);
         assert_eq!(apply_delta(b"hello", &cmds), b"", "failed for {}", name);
     }
@@ -122,7 +121,7 @@ fn test_empty_version() {
 fn test_empty_reference() {
     let v = b"hello world";
     for (name, algo) in all_algos() {
-        assert_eq!(apply_delta(b"", &algo(b"", v, 2, TABLE_SIZE, false, false, 0)), v, "failed for {}", name);
+        assert_eq!(apply_delta(b"", &algo(b"", v, &opts(2))), v, "failed for {}", name);
     }
 }
 
@@ -247,7 +246,7 @@ fn test_backward_extension() {
     v.extend_from_slice(&block);
     v.extend_from_slice(b"**");
     for (name, algo) in all_algos() {
-        assert_eq!(apply_delta(&r, &algo(&r, &v, 4, TABLE_SIZE, false, false, 0)), v, "failed for {}", name);
+        assert_eq!(apply_delta(&r, &algo(&r, &v, &opts(4))), v, "failed for {}", name);
     }
 }
 
@@ -271,7 +270,7 @@ fn test_transposition() {
     let mut v = y;
     v.extend_from_slice(&x);
     for (name, algo) in all_algos() {
-        assert_eq!(apply_delta(&r, &algo(&r, &v, 4, TABLE_SIZE, false, false, 0)), v, "failed for {}", name);
+        assert_eq!(apply_delta(&r, &algo(&r, &v, &opts(4))), v, "failed for {}", name);
     }
 }
 
@@ -428,7 +427,7 @@ fn test_inplace_identical() {
 #[test]
 fn test_inplace_empty_version() {
     for (_, algo) in all_algos() {
-        let cmds = algo(b"hello", b"", 2, TABLE_SIZE, false, false, 0);
+        let cmds = algo(b"hello", b"", &opts(2));
         let ip = make_inplace(b"hello", &cmds, CyclePolicy::Localmin);
         assert_eq!(apply_delta_inplace(b"hello", &ip, 0), b"");
     }
@@ -468,7 +467,7 @@ fn test_standard_not_detected_as_inplace() {
         .take(8 * 10)
         .copied()
         .collect();
-    let cmds = diff_greedy(&r, &v, 2, TABLE_SIZE, false, false, 0);
+    let cmds = diff_greedy(&r, &v, &opts(2));
     let placed = place_commands(&cmds);
     let delta = encode_delta(&placed, false, v.len());
     assert!(!is_inplace_delta(&delta));
@@ -488,7 +487,7 @@ fn test_inplace_detected() {
         .take(8 * 10)
         .copied()
         .collect();
-    let cmds = diff_greedy(&r, &v, 2, TABLE_SIZE, false, false, 0);
+    let cmds = diff_greedy(&r, &v, &opts(2));
     let ip = make_inplace(&r, &cmds, CyclePolicy::Localmin);
     let delta = encode_delta(&ip, true, v.len());
     assert!(is_inplace_delta(&delta));
@@ -730,7 +729,7 @@ fn test_localmin_picks_smallest() {
     let r = blocks_ref(&blocks);
     let v: Vec<u8> = blocks.iter().rev().flat_map(|b| b.iter().copied()).collect();
 
-    let cmds = diff_greedy(&r, &v, 4, TABLE_SIZE, false, false, 0);
+    let cmds = diff_greedy(&r, &v, &opts(4));
     let ip_const = make_inplace(&r, &cmds, CyclePolicy::Constant);
     let ip_lmin = make_inplace(&r, &cmds, CyclePolicy::Localmin);
 
@@ -765,7 +764,7 @@ fn test_correcting_checkpointing_tiny_table() {
     let mut v = r[..160].to_vec();
     v.extend_from_slice(b"XXXXYYYY");
     v.extend_from_slice(&r[160..]);
-    let cmds = diff_correcting(&r, &v, 16, 7, 256, false, false, 0);
+    let cmds = diff_correcting(&r, &v, &DiffOptions { p: 16, q: 7, ..DiffOptions::default() });
     let recovered = apply_delta(&r, &cmds);
     assert_eq!(recovered, v);
 }
@@ -778,7 +777,7 @@ fn test_correcting_checkpointing_various_sizes() {
     v.extend_from_slice(&[0xFFu8; 50]);
     v.extend_from_slice(&r[500..]);
     for q in [7, 31, 101, 1009, TABLE_SIZE] {
-        let cmds = diff_correcting(&r, &v, 16, q, 256, false, false, 0);
+        let cmds = diff_correcting(&r, &v, &DiffOptions { p: 16, q, ..DiffOptions::default() });
         let recovered = apply_delta(&r, &cmds);
         assert_eq!(recovered, v, "failed with q={}", q);
     }

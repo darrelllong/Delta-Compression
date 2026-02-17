@@ -22,7 +22,19 @@ import static delta.Types.*;
 public final class Delta {
 
     public static void main(String[] args) {
-        if (args.length < 1) { usage(); return; }
+        try {
+            run(args);
+        } catch (IllegalArgumentException e) {
+            System.err.println(e.getMessage());
+            System.exit(1);
+        } catch (IOException e) {
+            System.err.println(e.getMessage());
+            System.exit(1);
+        }
+    }
+
+    private static void run(String[] args) throws IOException {
+        if (args.length < 1) usage();
 
         String cmd = args[0];
         if ("encode".equals(cmd)) {
@@ -37,52 +49,46 @@ public final class Delta {
     }
 
     private static void usage() {
-        System.err.println("Usage:");
-        System.err.println("  java delta.Delta encode <algorithm> <ref> <ver> <delta> [options]");
-        System.err.println("  java delta.Delta decode <ref> <delta> <output>");
-        System.err.println("  java delta.Delta info <delta>");
-        System.err.println();
-        System.err.println("Algorithms: greedy, onepass, correcting");
-        System.err.println("Options: --seed-len N, --table-size N, --inplace, --policy P,");
-        System.err.println("         --verbose, --splay, --min-copy N");
-        System.exit(1);
+        throw new IllegalArgumentException(
+            "Usage:\n" +
+            "  java delta.Delta encode <algorithm> <ref> <ver> <delta> [options]\n" +
+            "  java delta.Delta decode <ref> <delta> <output>\n" +
+            "  java delta.Delta info <delta>\n\n" +
+            "Algorithms: greedy, onepass, correcting\n" +
+            "Options: --seed-len N, --table-size N, --inplace, --policy P,\n" +
+            "         --verbose, --splay, --min-copy N");
     }
 
-    private static void encode(String[] args) {
-        if (args.length < 5) { usage(); return; }
+    private static void encode(String[] args) throws IOException {
+        if (args.length < 5) usage();
 
         Algorithm algo = parseAlgorithm(args[1]);
         String refPath = args[2];
         String verPath = args[3];
         String deltaPath = args[4];
 
-        int seedLen = SEED_LEN;
-        int tableSize = TABLE_SIZE;
+        DiffOptions opts = new DiffOptions();
         boolean inplace = false;
         CyclePolicy policy = CyclePolicy.LOCALMIN;
-        boolean verbose = false;
-        boolean splay = false;
-        int minCopy = 0;
 
         for (int i = 5; i < args.length; i++) {
             String opt = args[i];
             if ("--seed-len".equals(opt)) {
-                seedLen = Integer.parseInt(args[++i]);
+                opts.p = Integer.parseInt(args[++i]);
             } else if ("--table-size".equals(opt)) {
-                tableSize = Integer.parseInt(args[++i]);
+                opts.q = Integer.parseInt(args[++i]);
             } else if ("--inplace".equals(opt)) {
                 inplace = true;
             } else if ("--policy".equals(opt)) {
                 policy = parsePolicy(args[++i]);
             } else if ("--verbose".equals(opt)) {
-                verbose = true;
+                opts.verbose = true;
             } else if ("--splay".equals(opt)) {
-                splay = true;
+                opts.useSplay = true;
             } else if ("--min-copy".equals(opt)) {
-                minCopy = Integer.parseInt(args[++i]);
+                opts.minCopy = Integer.parseInt(args[++i]);
             } else {
-                System.err.println("Unknown option: " + opt);
-                System.exit(1);
+                throw new IllegalArgumentException("Unknown option: " + opt);
             }
         }
 
@@ -90,8 +96,7 @@ public final class Delta {
         byte[] v = readFile(verPath);
 
         long t0 = System.nanoTime();
-        List<Command> commands = Diff.diff(algo, r, v, seedLen, tableSize,
-                                           verbose, splay, minCopy);
+        List<Command> commands = Diff.diff(algo, r, v, opts);
 
         List<PlacedCommand> placed = inplace
             ? Apply.makeInplace(r, commands, policy)
@@ -104,7 +109,7 @@ public final class Delta {
         PlacedSummary stats = Apply.placedSummary(placed);
         double ratio = v.length > 0 ? (double) deltaBytes.length / v.length : 0;
         String algoName = algo.name().toLowerCase();
-        String splayTag = splay ? " [splay]" : "";
+        String splayTag = opts.useSplay ? " [splay]" : "";
         if (inplace) {
             System.out.printf("Algorithm:    %s%s + in-place (%s)%n",
                 algoName, splayTag, policy.name().toLowerCase());
@@ -121,8 +126,8 @@ public final class Delta {
         System.out.printf("Time:         %.3fs%n", elapsed / 1e9);
     }
 
-    private static void decode(String[] args) {
-        if (args.length < 4) { usage(); return; }
+    private static void decode(String[] args) throws IOException {
+        if (args.length < 4) usage();
 
         String refPath = args[1];
         String deltaPath = args[2];
@@ -153,8 +158,8 @@ public final class Delta {
         System.out.printf("Time:         %.3fs%n", elapsed / 1e9);
     }
 
-    private static void info(String[] args) {
-        if (args.length < 2) { usage(); return; }
+    private static void info(String[] args) throws IOException {
+        if (args.length < 2) usage();
 
         String deltaPath = args[1];
         byte[] deltaBytes = readFile(deltaPath);
@@ -176,35 +181,20 @@ public final class Delta {
         if ("greedy".equalsIgnoreCase(s)) return Algorithm.GREEDY;
         if ("onepass".equalsIgnoreCase(s)) return Algorithm.ONEPASS;
         if ("correcting".equalsIgnoreCase(s)) return Algorithm.CORRECTING;
-        System.err.println("Unknown algorithm: " + s);
-        System.exit(1);
-        return null;
+        throw new IllegalArgumentException("Unknown algorithm: " + s);
     }
 
     private static CyclePolicy parsePolicy(String s) {
         if ("localmin".equalsIgnoreCase(s)) return CyclePolicy.LOCALMIN;
         if ("constant".equalsIgnoreCase(s)) return CyclePolicy.CONSTANT;
-        System.err.println("Unknown policy: " + s);
-        System.exit(1);
-        return null;
+        throw new IllegalArgumentException("Unknown policy: " + s);
     }
 
-    private static byte[] readFile(String path) {
-        try {
-            return Files.readAllBytes(Path.of(path));
-        } catch (IOException e) {
-            System.err.printf("Error reading %s: %s%n", path, e.getMessage());
-            System.exit(1);
-            return null;
-        }
+    private static byte[] readFile(String path) throws IOException {
+        return Files.readAllBytes(Path.of(path));
     }
 
-    private static void writeFile(String path, byte[] data) {
-        try {
-            Files.write(Path.of(path), data);
-        } catch (IOException e) {
-            System.err.printf("Error writing %s: %s%n", path, e.getMessage());
-            System.exit(1);
-        }
+    private static void writeFile(String path, byte[] data) throws IOException {
+        Files.write(Path.of(path), data);
     }
 }

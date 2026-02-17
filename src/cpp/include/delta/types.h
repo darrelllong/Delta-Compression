@@ -100,4 +100,17 @@ struct DeltaSummary {
 DeltaSummary delta_summary(const std::vector<Command>& commands);
 DeltaSummary placed_summary(const std::vector<PlacedCommand>& commands);
 
+// ============================================================================
+// Diff options — replaces positional parameter lists
+// ============================================================================
+
+struct DiffOptions {
+    size_t p = SEED_LEN;
+    size_t q = TABLE_SIZE;
+    size_t buf_cap = 256;
+    bool verbose = false;
+    bool use_splay = false;
+    size_t min_copy = 0;
+};
+
 } // namespace delta

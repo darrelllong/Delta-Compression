@@ -44,6 +44,17 @@ public final class Types {
         public PlacedAdd(int dst, byte[] data) { this.dst = dst; this.data = data; }
     }
 
+    // ── Diff options ──
+
+    public static final class DiffOptions {
+        public int p = SEED_LEN;
+        public int q = TABLE_SIZE;
+        public int bufCap = 256;
+        public boolean verbose = false;
+        public boolean useSplay = false;
+        public int minCopy = 0;
+    }
+
     // ── Statistics ──
 
     public static final class PlacedSummary {

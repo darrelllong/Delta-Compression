@@ -4,3 +4,13 @@ __pycache__/
 .claude/
 target/
 build/
+
+# C build artifacts
+src/c/*.o
+src/c/delta
+
+# Java compiled classes
+src/java/out/
+
+# C++ alternate builds
+src/cpp/build-release/

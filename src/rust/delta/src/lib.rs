@@ -8,7 +8,7 @@ pub mod inplace;
 
 // Re-exports for convenience
 pub use types::{
-    Algorithm, Command, CyclePolicy, DeltaError, DeltaSummary, PlacedCommand,
+    Algorithm, Command, CyclePolicy, DeltaError, DeltaSummary, DiffOptions, PlacedCommand,
     DELTA_FLAG_INPLACE, DELTA_MAGIC, HASH_BASE, HASH_MOD, SEED_LEN, TABLE_SIZE,
 };
 pub use hash::{fingerprint, fp_to_index, is_prime, is_prime_mr, mod_mersenne, next_prime, precompute_bp, RollingHash};
