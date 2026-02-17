@@ -9,7 +9,9 @@ pub mod inplace;
 // Re-exports for convenience
 pub use types::{
     Algorithm, Command, CyclePolicy, DeltaError, DeltaSummary, DiffOptions, PlacedCommand,
-    DELTA_FLAG_INPLACE, DELTA_MAGIC, HASH_BASE, HASH_MOD, SEED_LEN, TABLE_SIZE,
+    DELTA_ADD_HEADER, DELTA_BUF_CAP, DELTA_CMD_ADD, DELTA_CMD_COPY, DELTA_CMD_END,
+    DELTA_COPY_PAYLOAD, DELTA_FLAG_INPLACE, DELTA_HEADER_SIZE, DELTA_MAGIC, DELTA_U32_SIZE,
+    HASH_BASE, HASH_MOD, SEED_LEN, TABLE_SIZE,
 };
 pub use hash::{fingerprint, fp_to_index, is_prime, is_prime_mr, mod_mersenne, next_prime, precompute_bp, RollingHash};
 pub use encoding::{decode_delta, encode_delta, is_inplace_delta};

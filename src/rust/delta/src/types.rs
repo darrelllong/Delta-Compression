@@ -19,6 +19,14 @@ pub const HASH_BASE: u64 = 263;
 pub const HASH_MOD: u64 = (1 << 61) - 1; // Mersenne prime 2^61-1
 pub const DELTA_MAGIC: &[u8; 4] = b"DLT\x01";
 pub const DELTA_FLAG_INPLACE: u8 = 0x01;
+pub const DELTA_CMD_END: u8 = 0;
+pub const DELTA_CMD_COPY: u8 = 1;
+pub const DELTA_CMD_ADD: u8 = 2;
+pub const DELTA_HEADER_SIZE: usize = 9; // magic(4) + flags(1) + version_size(4)
+pub const DELTA_U32_SIZE: usize = 4;
+pub const DELTA_COPY_PAYLOAD: usize = 12; // src(4) + dst(4) + len(4)
+pub const DELTA_ADD_HEADER: usize = 8; // dst(4) + len(4)
+pub const DELTA_BUF_CAP: usize = 256;
 
 // ============================================================================
 // Delta Commands (Section 2.1.1)
@@ -111,7 +119,7 @@ impl Default for DiffOptions {
         Self {
             p: SEED_LEN,
             q: TABLE_SIZE,
-            buf_cap: 256,
+            buf_cap: DELTA_BUF_CAP,
             verbose: false,
             use_splay: false,
             min_copy: 0,

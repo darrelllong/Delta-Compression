@@ -119,6 +119,7 @@ TABLE_SIZE = 1048573  # hash table capacity (largest prime < 2^20)
                       # Section 8: correcting uses checkpointing to fit any |R|
 HASH_BASE = 263      # small prime, avoids b=256 which makes low bits depend only on last byte
 HASH_MOD = (1 << 61) - 1  # Mersenne prime 2^61-1: ~2.3 * 10^18
+DELTA_BUF_CAP = 256       # lookback buffer capacity for correcting algorithm
 
 
 @dataclass
@@ -126,7 +127,7 @@ class DiffOptions:
     """Options for differencing algorithms."""
     p: int = SEED_LEN
     q: int = TABLE_SIZE
-    buf_cap: int = 256
+    buf_cap: int = DELTA_BUF_CAP
     verbose: bool = False
     min_copy: int = 0
 
@@ -589,7 +590,7 @@ class _BufEntry:
 
 def diff_correcting(R: bytes, V: bytes,
                     p: int = SEED_LEN, q: int = TABLE_SIZE,
-                    buf_cap: int = 256,
+                    buf_cap: int = DELTA_BUF_CAP,
                     verbose: bool = False,
                     min_copy: int = 0,
                     opts: 'DiffOptions' = None) -> List[Command]:
@@ -902,6 +903,13 @@ def place_commands(commands: List[Command]) -> List[PlacedCommand]:
 
 DELTA_MAGIC = b'DLT\x01'
 DELTA_FLAG_INPLACE = 0x01
+DELTA_CMD_END = 0
+DELTA_CMD_COPY = 1
+DELTA_CMD_ADD = 2
+DELTA_HEADER_SIZE = 9   # magic(4) + flags(1) + version_size(4)
+DELTA_U32_SIZE = 4
+DELTA_COPY_PAYLOAD = 12 # src(4) + dst(4) + len(4)
+DELTA_ADD_HEADER = 8    # dst(4) + len(4)
 
 
 def encode_delta(commands: List[PlacedCommand], *,
@@ -914,14 +922,14 @@ def encode_delta(commands: List[PlacedCommand], *,
 
     for cmd in commands:
         if isinstance(cmd, PlacedCopy):
-            out.append(1)
+            out.append(DELTA_CMD_COPY)
             out.extend(struct.pack('>III', cmd.src, cmd.dst, cmd.length))
         elif isinstance(cmd, PlacedAdd):
-            out.append(2)
+            out.append(DELTA_CMD_ADD)
             out.extend(struct.pack('>II', cmd.dst, len(cmd.data)))
             out.extend(cmd.data)
 
-    out.append(0)  # END
+    out.append(DELTA_CMD_END)
     return bytes(out)
 
 
@@ -930,26 +938,26 @@ def decode_delta(data: bytes):
 
     Returns (commands, inplace, version_size).
     """
-    if len(data) < 9 or data[:4] != DELTA_MAGIC:
+    if len(data) < DELTA_HEADER_SIZE or data[:len(DELTA_MAGIC)] != DELTA_MAGIC:
         raise ValueError("Not a delta file")
 
-    inplace = bool(data[4] & DELTA_FLAG_INPLACE)
-    version_size = struct.unpack_from('>I', data, 5)[0]
-    pos = 9
+    inplace = bool(data[len(DELTA_MAGIC)] & DELTA_FLAG_INPLACE)
+    version_size = struct.unpack_from('>I', data, len(DELTA_MAGIC) + 1)[0]
+    pos = DELTA_HEADER_SIZE
     commands: List[PlacedCommand] = []
 
     while pos < len(data):
         t = data[pos]
         pos += 1
-        if t == 0:
+        if t == DELTA_CMD_END:
             break
-        elif t == 1:  # COPY
+        elif t == DELTA_CMD_COPY:
             src, dst, length = struct.unpack_from('>III', data, pos)
-            pos += 12
+            pos += DELTA_COPY_PAYLOAD
             commands.append(PlacedCopy(src=src, dst=dst, length=length))
-        elif t == 2:  # ADD
+        elif t == DELTA_CMD_ADD:
             dst, length = struct.unpack_from('>II', data, pos)
-            pos += 8
+            pos += DELTA_ADD_HEADER
             commands.append(PlacedAdd(dst=dst, data=data[pos:pos + length]))
             pos += length
 
@@ -958,7 +966,9 @@ def decode_delta(data: bytes):
 
 def is_inplace_delta(data: bytes) -> bool:
     """Check if binary data is an in-place delta."""
-    return len(data) >= 5 and data[:4] == DELTA_MAGIC and bool(data[4] & DELTA_FLAG_INPLACE)
+    return (len(data) >= len(DELTA_MAGIC) + 1
+            and data[:len(DELTA_MAGIC)] == DELTA_MAGIC
+            and bool(data[len(DELTA_MAGIC)] & DELTA_FLAG_INPLACE))
 
 
 # ============================================================================

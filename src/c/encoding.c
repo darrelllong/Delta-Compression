@@ -24,7 +24,7 @@ write_u32_be(uint8_t **p, uint32_t val)
 	(*p)[1] = (uint8_t)(val >> 16);
 	(*p)[2] = (uint8_t)(val >> 8);
 	(*p)[3] = (uint8_t)(val);
-	*p += 4;
+	*p += DELTA_U32_SIZE;
 }
 
 static uint32_t
@@ -40,8 +40,8 @@ delta_buffer_t
 delta_encode(const delta_placed_commands_t *cmds, bool inplace,
              size_t version_size)
 {
-	/* Estimate size: header(9) + per-cmd overhead */
-	size_t est = 9 + cmds->len * 14 + 1;
+	/* Estimate size: header + per-cmd overhead */
+	size_t est = DELTA_HEADER_SIZE + cmds->len * 14 + 1;
 	size_t i;
 	uint8_t *buf, *p;
 
@@ -53,7 +53,8 @@ delta_encode(const delta_placed_commands_t *cmds, bool inplace,
 	p = buf;
 
 	/* Header */
-	memcpy(p, DELTA_MAGIC, 4); p += 4;
+	memcpy(p, DELTA_MAGIC, sizeof(DELTA_MAGIC));
+	p += sizeof(DELTA_MAGIC);
 	*p++ = inplace ? DELTA_FLAG_INPLACE : 0;
 	write_u32_be(&p, (uint32_t)version_size);
 
@@ -61,12 +62,12 @@ delta_encode(const delta_placed_commands_t *cmds, bool inplace,
 	for (i = 0; i < cmds->len; i++) {
 		const delta_placed_command_t *cmd = &cmds->data[i];
 		if (cmd->tag == PCMD_COPY) {
-			*p++ = 1;
+			*p++ = DELTA_CMD_COPY;
 			write_u32_be(&p, (uint32_t)cmd->copy.src);
 			write_u32_be(&p, (uint32_t)cmd->copy.dst);
 			write_u32_be(&p, (uint32_t)cmd->copy.length);
 		} else {
-			*p++ = 2;
+			*p++ = DELTA_CMD_ADD;
 			write_u32_be(&p, (uint32_t)cmd->add.dst);
 			write_u32_be(&p, (uint32_t)cmd->add.length);
 			memcpy(p, cmd->add.data, cmd->add.length);
@@ -74,7 +75,7 @@ delta_encode(const delta_placed_commands_t *cmds, bool inplace,
 		}
 	}
 
-	*p++ = 0;  /* END */
+	*p++ = DELTA_CMD_END;
 
 	delta_buffer_t result;
 	result.data = buf;
@@ -94,40 +95,41 @@ delta_decode(const uint8_t *data, size_t len)
 	result.inplace = false;
 	result.version_size = 0;
 
-	if (len < 9 || memcmp(data, DELTA_MAGIC, 4) != 0) {
+	if (len < DELTA_HEADER_SIZE
+	    || memcmp(data, DELTA_MAGIC, sizeof(DELTA_MAGIC)) != 0) {
 		fprintf(stderr, "delta_decode: not a delta file\n");
 		exit(1);
 	}
 
-	result.inplace = (data[4] & DELTA_FLAG_INPLACE) != 0;
-	result.version_size = read_u32_be(&data[5]);
-	pos = 9;
+	result.inplace = (data[sizeof(DELTA_MAGIC)] & DELTA_FLAG_INPLACE) != 0;
+	result.version_size = read_u32_be(&data[sizeof(DELTA_MAGIC) + 1]);
+	pos = DELTA_HEADER_SIZE;
 
 	while (pos < len) {
 		uint8_t t = data[pos++];
 		delta_placed_command_t cmd;
 
-		if (t == 0) /* END */
+		if (t == DELTA_CMD_END)
 			return result;
 
-		if (t == 1) { /* COPY */
-			if (pos + 12 > len) {
+		if (t == DELTA_CMD_COPY) {
+			if (pos + DELTA_COPY_PAYLOAD > len) {
 				fprintf(stderr, "delta_decode: truncated COPY\n");
 				exit(1);
 			}
 			cmd.tag = PCMD_COPY;
-			cmd.copy.src = read_u32_be(&data[pos]); pos += 4;
-			cmd.copy.dst = read_u32_be(&data[pos]); pos += 4;
-			cmd.copy.length = read_u32_be(&data[pos]); pos += 4;
-		} else if (t == 2) { /* ADD */
+			cmd.copy.src = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
+			cmd.copy.dst = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
+			cmd.copy.length = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
+		} else if (t == DELTA_CMD_ADD) {
 			size_t dlen;
-			if (pos + 8 > len) {
+			if (pos + DELTA_ADD_HEADER > len) {
 				fprintf(stderr, "delta_decode: truncated ADD\n");
 				exit(1);
 			}
 			cmd.tag = PCMD_ADD;
-			cmd.add.dst = read_u32_be(&data[pos]); pos += 4;
-			dlen = read_u32_be(&data[pos]); pos += 4;
+			cmd.add.dst = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
+			dlen = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
 			cmd.add.length = dlen;
 			if (pos + dlen > len) {
 				fprintf(stderr, "delta_decode: truncated ADD data\n");
