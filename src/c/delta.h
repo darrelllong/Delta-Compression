@@ -34,6 +34,48 @@
 
 static const uint8_t DELTA_MAGIC[4] = {'D', 'L', 'T', 0x01};
 
+/* ── Checked allocation helpers ───────────────────────────────────── */
+
+#include <stdio.h>
+#include <stdlib.h>
+
+static inline void *
+delta_realloc(void *ptr, size_t size)
+{
+	void *p = realloc(ptr, size);
+	if (!p && size > 0) {
+		fprintf(stderr, "delta: out of memory (realloc %zu bytes)\n",
+		        size);
+		abort();
+	}
+	return p;
+}
+
+static inline void *
+delta_malloc(size_t size)
+{
+	void *p = malloc(size);
+	if (!p && size > 0) {
+		fprintf(stderr, "delta: out of memory (malloc %zu bytes)\n",
+		        size);
+		abort();
+	}
+	return p;
+}
+
+static inline void *
+delta_calloc(size_t count, size_t size)
+{
+	void *p = calloc(count, size);
+	if (!p && count > 0 && size > 0) {
+		fprintf(stderr,
+		        "delta: out of memory (calloc %zu x %zu bytes)\n",
+		        count, size);
+		abort();
+	}
+	return p;
+}
+
 /* ====================================================================
  * Enums
  * ==================================================================== */
@@ -126,6 +168,9 @@ void     delta_rh_init(delta_rolling_hash_t *rh, const uint8_t *data,
                        size_t offset, size_t p);
 void     delta_rh_roll(delta_rolling_hash_t *rh, uint8_t old_byte,
                        uint8_t new_byte);
+uint64_t delta_rh_advance(delta_rolling_hash_t *rh, int *valid,
+                          size_t *rh_pos, const uint8_t *data,
+                          size_t target, size_t p);
 
 /* ====================================================================
  * Primality (for hash table auto-sizing)
@@ -152,6 +197,7 @@ typedef struct {
 	delta_splay_node_t *root;
 	size_t size;
 	size_t value_size;
+	void (*value_free)(void *value);  /* optional destructor for values */
 } delta_splay_t;
 
 void     delta_splay_init(delta_splay_t *t, size_t value_size);
@@ -164,20 +210,49 @@ void     delta_splay_clear(delta_splay_t *t);
 void     delta_splay_free(delta_splay_t *t);
 
 /* ====================================================================
+ * Option flags — bitset for on/off options (cf. Sleator & Tarjan set.h)
+ * ==================================================================== */
+
+typedef uint64_t delta_flags_t;
+
+typedef enum {
+	DELTA_OPT_VERBOSE = 0,
+	DELTA_OPT_SPLAY   = 1,
+	DELTA_OPT_INPLACE = 2
+} delta_opt_flag_t;
+
+static inline bool
+delta_flag_get(delta_flags_t s, delta_opt_flag_t f)
+{
+	return (s >> f) & 1;
+}
+
+static inline delta_flags_t
+delta_flag_set(delta_flags_t s, delta_opt_flag_t f)
+{
+	return s | (1ULL << f);
+}
+
+static inline delta_flags_t
+delta_flag_clear(delta_flags_t s, delta_opt_flag_t f)
+{
+	return s & ~(1ULL << f);
+}
+
+/* ====================================================================
  * Diff options — replaces positional parameter lists
  * ==================================================================== */
 
 typedef struct {
-	size_t p;
-	size_t q;
-	size_t buf_cap;
-	bool   verbose;
-	bool   use_splay;
-	size_t min_copy;
+	size_t        p;
+	size_t        q;
+	size_t        buf_cap;
+	delta_flags_t flags;
+	size_t        min_copy;
 } delta_diff_options_t;
 
 #define DELTA_DIFF_OPTIONS_DEFAULT \
-	{ DELTA_SEED_LEN, DELTA_TABLE_SIZE, DELTA_BUF_CAP, false, false, 0 }
+	{ DELTA_SEED_LEN, DELTA_TABLE_SIZE, DELTA_BUF_CAP, 0, 0 }
 
 /* ====================================================================
  * Differencing algorithms

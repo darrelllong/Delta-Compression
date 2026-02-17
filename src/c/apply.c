@@ -22,7 +22,7 @@ delta_commands_push(delta_commands_t *c, delta_command_t cmd)
 {
 	if (c->len == c->cap) {
 		c->cap = c->cap ? c->cap * 2 : 16;
-		c->data = realloc(c->data, c->cap * sizeof(*c->data));
+		c->data = delta_realloc(c->data, c->cap * sizeof(*c->data));
 	}
 	c->data[c->len++] = cmd;
 }
@@ -53,7 +53,7 @@ delta_placed_commands_push(delta_placed_commands_t *c,
 {
 	if (c->len == c->cap) {
 		c->cap = c->cap ? c->cap * 2 : 16;
-		c->data = realloc(c->data, c->cap * sizeof(*c->data));
+		c->data = delta_realloc(c->data, c->cap * sizeof(*c->data));
 	}
 	c->data[c->len++] = cmd;
 }
@@ -149,7 +149,7 @@ delta_place_commands(const delta_commands_t *cmds)
 			pc.tag = PCMD_ADD;
 			pc.add.dst = dst;
 			pc.add.length = cmd->add.length;
-			pc.add.data = malloc(cmd->add.length);
+			pc.add.data = delta_malloc(cmd->add.length);
 			memcpy(pc.add.data, cmd->add.data, cmd->add.length);
 			dst += cmd->add.length;
 		}
@@ -171,7 +171,7 @@ delta_unplace_commands(const delta_placed_commands_t *placed)
 	if (placed->len == 0) return cmds;
 
 	/* Sort indices by destination offset. */
-	indices = malloc(placed->len * sizeof(*indices));
+	indices = delta_malloc(placed->len * sizeof(*indices));
 	for (i = 0; i < placed->len; i++) indices[i] = i;
 
 	/* Insertion sort by dst (qsort needs a comparator that can access
@@ -208,7 +208,7 @@ delta_unplace_commands(const delta_placed_commands_t *placed)
 		} else {
 			cmd.tag = CMD_ADD;
 			cmd.add.length = pc->add.length;
-			cmd.add.data = malloc(pc->add.length);
+			cmd.add.data = delta_malloc(pc->add.length);
 			memcpy(cmd.add.data, pc->add.data, pc->add.length);
 		}
 		delta_commands_push(&cmds, cmd);
@@ -267,7 +267,7 @@ delta_apply_delta_inplace(const uint8_t *r, size_t r_len,
                           size_t version_size)
 {
 	size_t buf_size = r_len > version_size ? r_len : version_size;
-	uint8_t *buf = calloc(buf_size, 1);
+	uint8_t *buf = delta_calloc(buf_size, 1);
 	memcpy(buf, r, r_len);
 	delta_apply_placed_inplace(cmds, buf);
 	/* Truncate to version_size by returning buf; caller knows the size. */

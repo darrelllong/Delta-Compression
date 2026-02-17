@@ -21,7 +21,7 @@
 static delta_splay_node_t *
 node_alloc(uint64_t key, const void *value, size_t value_size)
 {
-	delta_splay_node_t *n = malloc(sizeof(*n) + value_size);
+	delta_splay_node_t *n = delta_malloc(sizeof(*n) + value_size);
 	n->key = key;
 	n->left = NULL;
 	n->right = NULL;
@@ -92,6 +92,7 @@ delta_splay_init(delta_splay_t *t, size_t value_size)
 	t->root = NULL;
 	t->size = 0;
 	t->value_size = value_size;
+	t->value_free = NULL;
 }
 
 void *
@@ -164,18 +165,20 @@ delta_splay_insert(delta_splay_t *t, uint64_t key, const void *value)
 }
 
 static void
-destroy(delta_splay_node_t *n)
+destroy(delta_splay_node_t *n, void (*value_free)(void *))
 {
 	if (!n) return;
-	destroy(n->left);
-	destroy(n->right);
+	destroy(n->left, value_free);
+	destroy(n->right, value_free);
+	if (value_free)
+		value_free(n->value);
 	free(n);
 }
 
 void
 delta_splay_clear(delta_splay_t *t)
 {
-	destroy(t->root);
+	destroy(t->root, t->value_free);
 	t->root = NULL;
 	t->size = 0;
 }

@@ -174,10 +174,8 @@ main(int argc, char **argv)
 
 		size_t seed_len = DELTA_SEED_LEN;
 		size_t table_size = DELTA_TABLE_SIZE;
-		bool inplace = false;
+		delta_flags_t flags = 0;
 		delta_cycle_policy_t policy = POLICY_LOCALMIN;
-		bool verbose_flag = false;
-		bool splay = false;
 		size_t min_copy_val = 0;
 		const char *policy_str = "localmin";
 
@@ -199,14 +197,14 @@ main(int argc, char **argv)
 			switch (opt) {
 			case 's': seed_len = (size_t)atol(optarg); break;
 			case 't': table_size = (size_t)atol(optarg); break;
-			case 'i': inplace = true; break;
+			case 'i': flags = delta_flag_set(flags, DELTA_OPT_INPLACE); break;
 			case 'p':
 				policy_str = optarg;
 				if (strcmp(optarg, "constant") == 0)
 					policy = POLICY_CONSTANT;
 				break;
-			case 'v': verbose_flag = true; break;
-			case 'y': splay = true; break;
+			case 'v': flags = delta_flag_set(flags, DELTA_OPT_VERBOSE); break;
+			case 'y': flags = delta_flag_set(flags, DELTA_OPT_SPLAY); break;
 			case 'm': min_copy_val = (size_t)atol(optarg); break;
 			default: usage();
 			}
@@ -221,9 +219,11 @@ main(int argc, char **argv)
 		delta_diff_options_t diff_opts = DELTA_DIFF_OPTIONS_DEFAULT;
 		diff_opts.p = seed_len;
 		diff_opts.q = table_size;
-		diff_opts.verbose = verbose_flag;
-		diff_opts.use_splay = splay;
+		diff_opts.flags = flags;
 		diff_opts.min_copy = min_copy_val;
+
+		bool inplace = delta_flag_get(flags, DELTA_OPT_INPLACE);
+		bool splay = delta_flag_get(flags, DELTA_OPT_SPLAY);
 
 		delta_commands_t cmds = delta_diff(
 			algo, r_file.data, r_file.size,

@@ -49,7 +49,7 @@ delta_encode(const delta_placed_commands_t *cmds, bool inplace,
 		if (cmds->data[i].tag == PCMD_ADD)
 			est += cmds->data[i].add.length;
 
-	buf = malloc(est);
+	buf = delta_malloc(est);
 	p = buf;
 
 	/* Header */
@@ -135,7 +135,7 @@ delta_decode(const uint8_t *data, size_t len)
 				fprintf(stderr, "delta_decode: truncated ADD data\n");
 				exit(1);
 			}
-			cmd.add.data = malloc(dlen);
+			cmd.add.data = delta_malloc(dlen);
 			memcpy(cmd.add.data, &data[pos], dlen);
 			pos += dlen;
 		} else {

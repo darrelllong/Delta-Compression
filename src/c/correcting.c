@@ -100,8 +100,8 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 	size_t p = opts->p;
 	size_t q = opts->q;
 	size_t buf_cap = opts->buf_cap;
-	bool verbose = opts->verbose;
-	bool use_splay = opts->use_splay;
+	bool verbose = delta_flag_get(opts->flags, DELTA_OPT_VERBOSE);
+	bool use_splay = delta_flag_get(opts->flags, DELTA_OPT_SPLAY);
 	size_t min_copy = opts->min_copy;
 
 	/* Hash table path */
@@ -153,7 +153,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 	if (use_splay) {
 		delta_splay_init(&h_r_sp, sizeof(corr_splay_val_t));
 	} else {
-		h_r_ht = calloc(cap, sizeof(*h_r_ht));
+		h_r_ht = delta_calloc(cap, sizeof(*h_r_ht));
 	}
 
 	if (num_seeds > 0) {
@@ -233,18 +233,8 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 		if (v_c + p > v_len) break;
 
 		/* Step (4): generate fingerprint, apply checkpoint test */
-		if (rh_v_valid && v_c == rh_v_pos) {
-			fp_v = rh_v.value;
-		} else if (rh_v_valid && v_c == rh_v_pos + 1) {
-			delta_rh_roll(&rh_v, v[v_c - 1], v[v_c + p - 1]);
-			rh_v_pos = v_c;
-			fp_v = rh_v.value;
-		} else {
-			delta_rh_init(&rh_v, v, v_c, p);
-			rh_v_valid = 1;
-			rh_v_pos = v_c;
-			fp_v = rh_v.value;
-		}
+		fp_v = delta_rh_advance(&rh_v, &rh_v_valid, &rh_v_pos,
+		                        v, v_c, p);
 
 		f_v = fp_v % f_size;
 		if (f_v % m != k) {
@@ -333,12 +323,12 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 					free(oldest);
 				}
 				{
-					buf_entry_t *e = malloc(sizeof(*e));
+					buf_entry_t *e = delta_malloc(sizeof(*e));
 					e->v_start = v_s;
 					e->v_end = v_m_val;
 					e->cmd.tag = CMD_ADD;
 					e->cmd.add.length = v_m_val - v_s;
-					e->cmd.add.data = malloc(e->cmd.add.length);
+					e->cmd.add.data = delta_malloc(e->cmd.add.length);
 					memcpy(e->cmd.add.data, &v[v_s],
 					       e->cmd.add.length);
 					e->dummy = false;
@@ -355,7 +345,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 				free(oldest);
 			}
 			{
-				buf_entry_t *e = malloc(sizeof(*e));
+				buf_entry_t *e = delta_malloc(sizeof(*e));
 				e->v_start = v_m_val;
 				e->v_end = match_end;
 				e->cmd.tag = CMD_COPY;
@@ -395,7 +385,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 					if (tail->cmd.tag == CMD_ADD) {
 						size_t keep = v_m_val - tail->v_start;
 						if (keep > 0) {
-							uint8_t *newdata = malloc(keep);
+							uint8_t *newdata = delta_malloc(keep);
 							memcpy(newdata,
 							       &v[tail->v_start],
 							       keep);
@@ -431,7 +421,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 						free(oldest);
 					}
 					{
-						buf_entry_t *e = malloc(sizeof(*e));
+						buf_entry_t *e = delta_malloc(sizeof(*e));
 						e->v_start = effective_start;
 						e->v_end = match_end;
 						e->cmd.tag = CMD_COPY;
@@ -462,7 +452,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 		delta_command_t cmd;
 		cmd.tag = CMD_ADD;
 		cmd.add.length = v_len - v_s;
-		cmd.add.data = malloc(cmd.add.length);
+		cmd.add.data = delta_malloc(cmd.add.length);
 		memcpy(cmd.add.data, &v[v_s], cmd.add.length);
 		delta_commands_push(&commands, cmd);
 	}
@@ -536,7 +526,7 @@ delta_print_command_stats(const delta_commands_t *cmds)
 			num_copies++;
 			if (nlens == lens_cap) {
 				lens_cap = lens_cap ? lens_cap * 2 : 16;
-				lens = realloc(lens, lens_cap * sizeof(*lens));
+				lens = delta_realloc(lens, lens_cap * sizeof(*lens));
 			}
 			lens[nlens++] = l;
 		} else {

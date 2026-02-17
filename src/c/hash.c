@@ -76,6 +76,25 @@ delta_rh_roll(delta_rolling_hash_t *rh, uint8_t old_byte, uint8_t new_byte)
 	                               new_byte);
 }
 
+/* ── Rolling hash advance helper ───────────────────────────────────── */
+
+uint64_t
+delta_rh_advance(delta_rolling_hash_t *rh, int *valid, size_t *rh_pos,
+                 const uint8_t *data, size_t target, size_t p)
+{
+	if (*valid && target == *rh_pos) {
+		/* already positioned */
+	} else if (*valid && target == *rh_pos + 1) {
+		delta_rh_roll(rh, data[target - 1], data[target + p - 1]);
+		*rh_pos = target;
+	} else {
+		delta_rh_init(rh, data, target, p);
+		*valid = 1;
+		*rh_pos = target;
+	}
+	return rh->value;
+}
+
 /* ── Primality testing ─────────────────────────────────────────────── */
 
 static uint64_t
