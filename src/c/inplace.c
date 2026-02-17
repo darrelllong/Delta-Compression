@@ -28,7 +28,7 @@ find_cycle(size_t **adj, size_t *adj_len, const bool *removed,
 	size_t path_len, path_cap;
 
 	*cycle_len = 0;
-	visited_step = malloc(n * sizeof(*visited_step));
+	visited_step = delta_malloc(n * sizeof(*visited_step));
 
 	for (start = 0; start < n; start++) {
 		size_t i;
@@ -48,7 +48,7 @@ find_cycle(size_t **adj, size_t *adj_len, const bool *removed,
 				/* Found a cycle starting at visited_step[c] */
 				size_t cstart = visited_step[c];
 				*cycle_len = path_len - cstart;
-				size_t *result = malloc(*cycle_len * sizeof(*result));
+				size_t *result = delta_malloc(*cycle_len * sizeof(*result));
 				memcpy(result, &path[cstart],
 				       *cycle_len * sizeof(*result));
 				free(path);
@@ -60,7 +60,7 @@ find_cycle(size_t **adj, size_t *adj_len, const bool *removed,
 			/* push c onto path */
 			if (path_len == path_cap) {
 				path_cap = path_cap ? path_cap * 2 : 16;
-				path = realloc(path, path_cap * sizeof(*path));
+				path = delta_realloc(path, path_cap * sizeof(*path));
 			}
 			path[path_len++] = c;
 			step++;
@@ -122,7 +122,7 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 		if (cmd->tag == CMD_COPY) {
 			if (n_copies == n_copies_cap) {
 				n_copies_cap = n_copies_cap ? n_copies_cap * 2 : 16;
-				copies = realloc(copies,
+				copies = delta_realloc(copies,
 				                 n_copies_cap * sizeof(*copies));
 			}
 			copies[n_copies].idx = n_copies;
@@ -134,15 +134,15 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 		} else {
 			if (n_adds == n_adds_cap) {
 				n_adds_cap = n_adds_cap ? n_adds_cap * 2 : 16;
-				add_dsts = realloc(add_dsts,
+				add_dsts = delta_realloc(add_dsts,
 				                   n_adds_cap * sizeof(*add_dsts));
-				add_datas = realloc(add_datas,
+				add_datas = delta_realloc(add_datas,
 				                    n_adds_cap * sizeof(*add_datas));
-				add_lens = realloc(add_lens,
+				add_lens = delta_realloc(add_lens,
 				                   n_adds_cap * sizeof(*add_lens));
 			}
 			add_dsts[n_adds] = write_pos;
-			add_datas[n_adds] = malloc(cmd->add.length);
+			add_datas[n_adds] = delta_malloc(cmd->add.length);
 			memcpy(add_datas[n_adds], cmd->add.data, cmd->add.length);
 			add_lens[n_adds] = cmd->add.length;
 			n_adds++;
@@ -165,16 +165,16 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 	}
 
 	/* Step 2: build CRWI digraph */
-	adj = calloc(n, sizeof(*adj));
-	adj_len = calloc(n, sizeof(*adj_len));
-	adj_cap = calloc(n, sizeof(*adj_cap));
-	in_deg = calloc(n, sizeof(*in_deg));
+	adj = delta_calloc(n, sizeof(*adj));
+	adj_len = delta_calloc(n, sizeof(*adj_len));
+	adj_cap = delta_calloc(n, sizeof(*adj_cap));
+	in_deg = delta_calloc(n, sizeof(*in_deg));
 
 	/* O(n log n + E) sweep-line: sort writes by start, then for each read
 	 * interval binary-search into the sorted writes to find overlaps. */
 	{
-		size_t *write_sorted = malloc(n * sizeof(*write_sorted));
-		size_t *write_starts = malloc(n * sizeof(*write_starts));
+		size_t *write_sorted = delta_malloc(n * sizeof(*write_sorted));
+		size_t *write_starts = delta_malloc(n * sizeof(*write_starts));
 		for (i = 0; i < n; i++) write_sorted[i] = i;
 
 		/* Sort write_sorted by dst (insertion sort for simplicity;
@@ -211,7 +211,7 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 					if (adj_len[i] == adj_cap[i]) {
 						adj_cap[i] = adj_cap[i]
 						    ? adj_cap[i] * 2 : 4;
-						adj[i] = realloc(adj[i],
+						adj[i] = delta_realloc(adj[i],
 						    adj_cap[i] *
 						    sizeof(*adj[i]));
 					}
@@ -227,13 +227,13 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 	/* Step 3: topological sort with cycle breaking (Kahn's algorithm)
 	 * Priority queue (min-heap) keyed on copy length — always process
 	 * the smallest ready copy first for deterministic ordering. */
-	removed = calloc(n, sizeof(*removed));
-	topo_order = malloc(n * sizeof(*topo_order));
+	removed = delta_calloc(n, sizeof(*removed));
+	topo_order = delta_malloc(n * sizeof(*topo_order));
 
 	/* Min-heap entries: (copy_length, vertex_index) */
 	typedef struct { size_t len; size_t idx; } heap_entry_t;
 	size_t heap_len = 0, heap_cap = n + 1;
-	heap_entry_t *heap = malloc(heap_cap * sizeof(*heap));
+	heap_entry_t *heap = delta_malloc(heap_cap * sizeof(*heap));
 
 	/* Heap helpers (0-based indexing) */
 	#define HEAP_PARENT(i) (((i) - 1) / 2)
@@ -245,7 +245,7 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 	#define HEAP_PUSH(e) do {                              \
 		if (heap_len == heap_cap) {                    \
 			heap_cap *= 2;                         \
-			heap = realloc(heap,                   \
+			heap = delta_realloc(heap,                   \
 			    heap_cap * sizeof(*heap));          \
 		}                                              \
 		heap[heap_len] = (e);                          \
@@ -345,15 +345,15 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 			/* Convert victim: copy -> add (materialize) */
 			if (n_adds == n_adds_cap) {
 				n_adds_cap = n_adds_cap ? n_adds_cap * 2 : 16;
-				add_dsts = realloc(add_dsts,
+				add_dsts = delta_realloc(add_dsts,
 				                   n_adds_cap * sizeof(*add_dsts));
-				add_datas = realloc(add_datas,
+				add_datas = delta_realloc(add_datas,
 				                    n_adds_cap * sizeof(*add_datas));
-				add_lens = realloc(add_lens,
+				add_lens = delta_realloc(add_lens,
 				                   n_adds_cap * sizeof(*add_lens));
 			}
 			add_dsts[n_adds] = copies[victim].dst;
-			add_datas[n_adds] = malloc(copies[victim].length);
+			add_datas[n_adds] = delta_malloc(copies[victim].length);
 			memcpy(add_datas[n_adds],
 			       &r[copies[victim].src], copies[victim].length);
 			add_lens[n_adds] = copies[victim].length;

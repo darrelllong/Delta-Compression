@@ -45,8 +45,8 @@ delta_diff_onepass(const uint8_t *r, size_t r_len,
 
 	size_t p = opts->p;
 	size_t q = opts->q;
-	bool verbose = opts->verbose;
-	bool use_splay = opts->use_splay;
+	bool verbose = delta_flag_get(opts->flags, DELTA_OPT_VERBOSE);
+	bool use_splay = delta_flag_get(opts->flags, DELTA_OPT_SPLAY);
 	size_t min_copy = opts->min_copy;
 
 	/* Hash table path */
@@ -76,8 +76,8 @@ delta_diff_onepass(const uint8_t *r, size_t r_len,
 		delta_splay_init(&h_v_sp, sizeof(op_splay_val_t));
 		delta_splay_init(&h_r_sp, sizeof(op_splay_val_t));
 	} else {
-		h_v_ht = calloc(q, sizeof(*h_v_ht));
-		h_r_ht = calloc(q, sizeof(*h_r_ht));
+		h_v_ht = delta_calloc(q, sizeof(*h_v_ht));
+		h_r_ht = delta_calloc(q, sizeof(*h_r_ht));
 	}
 
 	/* Step (2): initialize scan pointers */
@@ -108,41 +108,14 @@ delta_diff_onepass(const uint8_t *r, size_t r_len,
 		dbg_positions++;
 
 		/* Compute fingerprints */
-		if (can_v && rh_v_valid) {
-			if (v_c == rh_v_pos) {
-				/* already positioned */
-			} else if (v_c == rh_v_pos + 1) {
-				delta_rh_roll(&rh_v, v[v_c - 1], v[v_c + p - 1]);
-				rh_v_pos = v_c;
-			} else {
-				delta_rh_init(&rh_v, v, v_c, p);
-				rh_v_pos = v_c;
-			}
-			fp_v = rh_v.value;
-			have_fp_v = 1;
-		} else if (can_v) {
-			delta_rh_init(&rh_v, v, v_c, p);
-			rh_v_valid = 1; rh_v_pos = v_c;
-			fp_v = rh_v.value;
+		if (can_v) {
+			fp_v = delta_rh_advance(&rh_v, &rh_v_valid, &rh_v_pos,
+			                        v, v_c, p);
 			have_fp_v = 1;
 		}
-
-		if (can_r && rh_r_valid) {
-			if (r_c == rh_r_pos) {
-				/* already positioned */
-			} else if (r_c == rh_r_pos + 1) {
-				delta_rh_roll(&rh_r, r[r_c - 1], r[r_c + p - 1]);
-				rh_r_pos = r_c;
-			} else {
-				delta_rh_init(&rh_r, r, r_c, p);
-				rh_r_pos = r_c;
-			}
-			fp_r = rh_r.value;
-			have_fp_r = 1;
-		} else if (can_r) {
-			delta_rh_init(&rh_r, r, r_c, p);
-			rh_r_valid = 1; rh_r_pos = r_c;
-			fp_r = rh_r.value;
+		if (can_r) {
+			fp_r = delta_rh_advance(&rh_r, &rh_r_valid, &rh_r_pos,
+			                        r, r_c, p);
 			have_fp_r = 1;
 		}
 
@@ -273,7 +246,7 @@ skip_r_store:;
 				delta_command_t cmd;
 				cmd.tag = CMD_ADD;
 				cmd.add.length = v_m - v_s;
-				cmd.add.data = malloc(cmd.add.length);
+				cmd.add.data = delta_malloc(cmd.add.length);
 				memcpy(cmd.add.data, &v[v_s], cmd.add.length);
 				delta_commands_push(&commands, cmd);
 			}
@@ -298,7 +271,7 @@ skip_r_store:;
 		delta_command_t cmd;
 		cmd.tag = CMD_ADD;
 		cmd.add.length = v_len - v_s;
-		cmd.add.data = malloc(cmd.add.length);
+		cmd.add.data = delta_malloc(cmd.add.length);
 		memcpy(cmd.add.data, &v[v_s], cmd.add.length);
 		delta_commands_push(&commands, cmd);
 	}

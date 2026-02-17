@@ -28,14 +28,14 @@ static void
 ght_init(greedy_htable_t *ht, size_t nbuckets)
 {
 	ht->nbuckets = nbuckets;
-	ht->buckets = calloc(nbuckets, sizeof(*ht->buckets));
+	ht->buckets = delta_calloc(nbuckets, sizeof(*ht->buckets));
 }
 
 static void
 ght_insert(greedy_htable_t *ht, uint64_t fp, size_t offset)
 {
 	size_t idx = (size_t)(fp % (uint64_t)ht->nbuckets);
-	greedy_entry_t *e = malloc(sizeof(*e));
+	greedy_entry_t *e = delta_malloc(sizeof(*e));
 	e->fp = fp;
 	e->offset = offset;
 	e->next = ht->buckets[idx];
@@ -66,11 +66,18 @@ typedef struct {
 } offset_vec_t;
 
 static void
+ov_free(void *value)
+{
+	offset_vec_t *ov = value;
+	free(ov->offsets);
+}
+
+static void
 ov_push(offset_vec_t *ov, size_t offset)
 {
 	if (ov->len == ov->cap) {
 		ov->cap = ov->cap ? ov->cap * 2 : 4;
-		ov->offsets = realloc(ov->offsets, ov->cap * sizeof(*ov->offsets));
+		ov->offsets = delta_realloc(ov->offsets, ov->cap * sizeof(*ov->offsets));
 	}
 	ov->offsets[ov->len++] = offset;
 }
@@ -92,8 +99,8 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 	size_t num_seeds;
 
 	size_t p = opts->p;
-	bool verbose = opts->verbose;
-	bool use_splay = opts->use_splay;
+	bool verbose = delta_flag_get(opts->flags, DELTA_OPT_VERBOSE);
+	bool use_splay = delta_flag_get(opts->flags, DELTA_OPT_SPLAY);
 	size_t min_copy = opts->min_copy;
 
 	delta_commands_init(&commands);
@@ -107,6 +114,7 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 	/* Step (1): Build lookup structure for R */
 	if (use_splay) {
 		delta_splay_init(&splay, sizeof(offset_vec_t));
+		splay.value_free = ov_free;
 		if (num_seeds > 0) {
 			size_t a;
 			offset_vec_t empty = {NULL, 0, 0};
@@ -162,18 +170,8 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 		if (v_c + p > v_len) break;
 
 		/* Compute V fingerprint at v_c */
-		if (rh_v_valid && v_c == rh_v_pos) {
-			fp_v = rh_v.value;
-		} else if (rh_v_valid && v_c == rh_v_pos + 1) {
-			delta_rh_roll(&rh_v, v[v_c - 1], v[v_c + p - 1]);
-			rh_v_pos = v_c;
-			fp_v = rh_v.value;
-		} else {
-			delta_rh_init(&rh_v, v, v_c, p);
-			rh_v_valid = 1;
-			rh_v_pos = v_c;
-			fp_v = rh_v.value;
-		}
+		fp_v = delta_rh_advance(&rh_v, &rh_v_valid, &rh_v_pos,
+		                        v, v_c, p);
 
 		/* Steps (4)+(5): find longest match */
 		if (use_splay) {
@@ -226,7 +224,7 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 			delta_command_t cmd;
 			cmd.tag = CMD_ADD;
 			cmd.add.length = v_c - v_s;
-			cmd.add.data = malloc(cmd.add.length);
+			cmd.add.data = delta_malloc(cmd.add.length);
 			memcpy(cmd.add.data, &v[v_s], cmd.add.length);
 			delta_commands_push(&commands, cmd);
 		}
@@ -248,7 +246,7 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 		delta_command_t cmd;
 		cmd.tag = CMD_ADD;
 		cmd.add.length = v_len - v_s;
-		cmd.add.data = malloc(cmd.add.length);
+		cmd.add.data = delta_malloc(cmd.add.length);
 		memcpy(cmd.add.data, &v[v_s], cmd.add.length);
 		delta_commands_push(&commands, cmd);
 	}
@@ -258,10 +256,6 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 
 	/* Cleanup */
 	if (use_splay) {
-		/* Free offset vectors inside splay nodes before clearing */
-		/* We can't easily walk the splay tree to free inner vecs,
-		 * so we accept the leak for now — greedy+splay is rare.
-		 * A production version would use an arena allocator. */
 		delta_splay_free(&splay);
 	} else {
 		ght_free(&ht);
