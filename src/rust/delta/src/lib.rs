@@ -23,7 +23,7 @@ pub use algorithm::correcting::{diff_correcting, diff_correcting_default};
 pub use apply::{
     apply_delta, apply_delta_inplace, apply_delta_to,
     apply_placed_inplace_to, apply_placed_to,
-    output_size, place_commands,
+    output_size, place_commands, unplace_commands,
 };
 pub use inplace::make_inplace;
 pub use types::{delta_summary, placed_summary};

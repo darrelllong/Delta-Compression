@@ -144,6 +144,15 @@ int main(int argc, char** argv) {
     std::string info_delta;
     inf->add_option("delta_file", info_delta, "Delta file")->required();
 
+    // ── inplace subcommand ──────────────────────────────────────────
+    auto* inp = app.add_subcommand("inplace", "Convert standard delta to in-place delta");
+    std::string inp_ref, inp_delta_in, inp_delta_out;
+    inp->add_option("reference", inp_ref, "Reference file")->required();
+    inp->add_option("delta_in", inp_delta_in, "Input (standard) delta file")->required();
+    inp->add_option("delta_out", inp_delta_out, "Output (in-place) delta file")->required();
+    std::string inp_policy_str = "localmin";
+    inp->add_option("--policy", inp_policy_str, "Cycle policy (localmin/constant)");
+
     CLI11_PARSE(app, argc, argv);
 
     if (enc->parsed()) {
@@ -245,6 +254,41 @@ int main(int argc, char** argv) {
         std::printf("  Copies:     %zu (%zu bytes)\n", stats.num_copies, stats.copy_bytes);
         std::printf("  Adds:       %zu (%zu bytes)\n", stats.num_adds, stats.add_bytes);
         std::printf("Output size:  %zu bytes\n", stats.total_output_bytes);
+
+    } else if (inp->parsed()) {
+        CyclePolicy pol = CyclePolicy::Localmin;
+        if (inp_policy_str == "constant") pol = CyclePolicy::Constant;
+
+        auto r_file = MappedFile::open_read(inp_ref);
+        auto r = r_file.span();
+        auto delta_bytes = read_file(inp_delta_in);
+
+        auto [placed, is_ip, version_size] = decode_delta(delta_bytes);
+
+        if (is_ip) {
+            write_file(inp_delta_out, delta_bytes);
+            std::printf("Delta is already in-place format; copied unchanged.\n");
+            return 0;
+        }
+
+        auto t0 = std::chrono::steady_clock::now();
+        auto commands = unplace_commands(placed);
+        auto ip_placed = make_inplace(r, commands, pol);
+        auto t1 = std::chrono::steady_clock::now();
+        double elapsed = std::chrono::duration<double>(t1 - t0).count();
+
+        auto ip_delta = encode_delta(ip_placed, true, version_size);
+        write_file(inp_delta_out, ip_delta);
+
+        auto stats = placed_summary(ip_placed);
+        std::printf("Reference:    %s (%zu bytes)\n", inp_ref.c_str(), r.size());
+        std::printf("Input delta:  %s (%zu bytes)\n", inp_delta_in.c_str(), delta_bytes.size());
+        std::printf("Output delta: %s (%zu bytes)\n", inp_delta_out.c_str(), ip_delta.size());
+        std::printf("Format:       in-place (%s)\n", inp_policy_str.c_str());
+        std::printf("Commands:     %zu copies, %zu adds\n", stats.num_copies, stats.num_adds);
+        std::printf("Copy bytes:   %zu\n", stats.copy_bytes);
+        std::printf("Add bytes:    %zu\n", stats.add_bytes);
+        std::printf("Time:         %.3fs\n", elapsed);
     }
 
     return 0;

@@ -236,6 +236,8 @@ size_t delta_output_size(const delta_commands_t *cmds);
 
 delta_placed_commands_t delta_place_commands(const delta_commands_t *cmds);
 
+delta_commands_t delta_unplace_commands(const delta_placed_commands_t *placed);
+
 size_t delta_apply_placed(const uint8_t *r,
                           const delta_placed_commands_t *cmds,
                           uint8_t *out);
