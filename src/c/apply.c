@@ -160,15 +160,6 @@ delta_place_commands(const delta_commands_t *cmds)
 
 /* ── Unplace: convert placed commands back to algorithm commands ────── */
 
-static int
-cmp_dst(const void *a, const void *b)
-{
-	const size_t ia = *(const size_t *)a;
-	const size_t ib = *(const size_t *)b;
-	/* indices into a global placed array — compared by dst */
-	return (ia > ib) - (ia < ib);  /* placeholder, overridden below */
-}
-
 delta_commands_t
 delta_unplace_commands(const delta_placed_commands_t *placed)
 {
