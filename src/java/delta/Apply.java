@@ -150,12 +150,29 @@ public final class Apply {
         int[] inDeg = new int[n];
         for (int i = 0; i < n; i++) adj.add(new ArrayList<>());
 
+        // O(n log n + E) sweep-line: sort writes by start, then for each read
+        // interval binary-search into the sorted writes to find overlaps.
+        Integer[] writeSorted = new Integer[n];
+        for (int i = 0; i < n; i++) writeSorted[i] = i;
+        Arrays.sort(writeSorted, Comparator.comparingInt(a -> copies.get(a)[2]));
+        int[] writeStarts = new int[n];
+        for (int k = 0; k < n; k++) writeStarts[k] = copies.get(writeSorted[k])[2];
+
         for (int i = 0; i < n; i++) {
             int si = copies.get(i)[1], li = copies.get(i)[3];
-            for (int j = 0; j < n; j++) {
+            int readEnd = si + li;
+            // Binary search: find first writeStarts[k] >= readEnd
+            int lo = 0, hi = n;
+            while (lo < hi) {
+                int mid = lo + (hi - lo) / 2;
+                if (writeStarts[mid] < readEnd) lo = mid + 1;
+                else hi = mid;
+            }
+            for (int k = 0; k < lo; k++) {
+                int j = writeSorted[k];
                 if (i == j) continue;
                 int dj = copies.get(j)[2], lj = copies.get(j)[3];
-                if (si < dj + lj && dj < si + li) {
+                if (dj + lj > si) {
                     adj.get(i).add(j);
                     inDeg[j]++;
                 }

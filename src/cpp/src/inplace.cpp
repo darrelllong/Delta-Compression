@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <numeric>
 #include <queue>
 #include <unordered_map>
 
@@ -85,12 +86,24 @@ std::vector<PlacedCommand> make_inplace(
     std::vector<std::vector<size_t>> adj(n);
     std::vector<size_t> in_deg(n, 0);
 
+    // O(n log n + E) sweep-line: sort writes by start, then for each read
+    // interval binary-search into the sorted writes to find overlaps.
+    std::vector<size_t> write_sorted(n);
+    std::iota(write_sorted.begin(), write_sorted.end(), 0);
+    std::sort(write_sorted.begin(), write_sorted.end(),
+        [&](size_t a, size_t b) { return copy_info[a].dst < copy_info[b].dst; });
+    std::vector<size_t> write_starts(n);
+    for (size_t k = 0; k < n; ++k) write_starts[k] = copy_info[write_sorted[k]].dst;
+
     for (size_t i = 0; i < n; ++i) {
-        for (size_t j = 0; j < n; ++j) {
+        size_t read_end = copy_info[i].src + copy_info[i].length;
+        // Find first write whose start >= read_end
+        auto hi_it = std::lower_bound(write_starts.begin(), write_starts.end(), read_end);
+        size_t hi = static_cast<size_t>(hi_it - write_starts.begin());
+        for (size_t k = 0; k < hi; ++k) {
+            size_t j = write_sorted[k];
             if (i == j) continue;
-            // Edge i -> j: i's read [src_i, src_i+len_i) overlaps j's write [dst_j, dst_j+len_j)
-            if (copy_info[i].src < copy_info[j].dst + copy_info[j].length
-                && copy_info[j].dst < copy_info[i].src + copy_info[i].length) {
+            if (copy_info[j].dst + copy_info[j].length > copy_info[i].src) {
                 adj[i].push_back(j);
                 ++in_deg[j];
             }

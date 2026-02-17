@@ -170,22 +170,58 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 	adj_cap = calloc(n, sizeof(*adj_cap));
 	in_deg = calloc(n, sizeof(*in_deg));
 
-	for (i = 0; i < n; i++) {
-		for (j = 0; j < n; j++) {
-			if (i == j) continue;
-			/* Edge i->j: i reads from [src_i, src_i+len_i),
-			 * j writes to [dst_j, dst_j+len_j) — overlap? */
-			if (copies[i].src < copies[j].dst + copies[j].length &&
-			    copies[j].dst < copies[i].src + copies[i].length) {
-				if (adj_len[i] == adj_cap[i]) {
-					adj_cap[i] = adj_cap[i] ? adj_cap[i] * 2 : 4;
-					adj[i] = realloc(adj[i],
-					                 adj_cap[i] * sizeof(*adj[i]));
+	/* O(n log n + E) sweep-line: sort writes by start, then for each read
+	 * interval binary-search into the sorted writes to find overlaps. */
+	{
+		size_t *write_sorted = malloc(n * sizeof(*write_sorted));
+		size_t *write_starts = malloc(n * sizeof(*write_starts));
+		for (i = 0; i < n; i++) write_sorted[i] = i;
+
+		/* Sort write_sorted by dst (insertion sort for simplicity;
+		 * qsort would need a global or thread-local for copies ptr) */
+		for (i = 1; i < n; i++) {
+			size_t tmp = write_sorted[i];
+			size_t key = copies[tmp].dst;
+			j = i;
+			while (j > 0 && copies[write_sorted[j - 1]].dst > key) {
+				write_sorted[j] = write_sorted[j - 1];
+				j--;
+			}
+			write_sorted[j] = tmp;
+		}
+		for (i = 0; i < n; i++)
+			write_starts[i] = copies[write_sorted[i]].dst;
+
+		for (i = 0; i < n; i++) {
+			size_t read_end = copies[i].src + copies[i].length;
+			/* Binary search: find first write_starts[k] >= read_end */
+			size_t lo = 0, hi = n;
+			while (lo < hi) {
+				size_t mid = lo + (hi - lo) / 2;
+				if (write_starts[mid] < read_end)
+					lo = mid + 1;
+				else
+					hi = mid;
+			}
+			for (j = 0; j < lo; j++) {
+				size_t jj = write_sorted[j];
+				if (i == jj) continue;
+				if (copies[jj].dst + copies[jj].length >
+				    copies[i].src) {
+					if (adj_len[i] == adj_cap[i]) {
+						adj_cap[i] = adj_cap[i]
+						    ? adj_cap[i] * 2 : 4;
+						adj[i] = realloc(adj[i],
+						    adj_cap[i] *
+						    sizeof(*adj[i]));
+					}
+					adj[i][adj_len[i]++] = jj;
+					in_deg[jj]++;
 				}
-				adj[i][adj_len[i]++] = j;
-				in_deg[j]++;
 			}
 		}
+		free(write_sorted);
+		free(write_starts);
 	}
 
 	/* Step 3: topological sort with cycle breaking (Kahn's algorithm)

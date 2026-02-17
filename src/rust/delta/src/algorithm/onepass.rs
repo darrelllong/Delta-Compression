@@ -2,6 +2,21 @@ use crate::hash::{next_prime, RollingHash};
 use crate::splay::SplayTree;
 use crate::types::{Command, DiffOptions};
 
+/// Flat hash-table slot — sentinel-based (no Option overhead).
+/// Empty/stale slots have version == u64::MAX (valid versions start at 0).
+#[derive(Clone, Copy)]
+struct Slot {
+    fp: u64,
+    offset: usize,
+    version: u64,
+}
+
+const EMPTY_SLOT: Slot = Slot {
+    fp: 0,
+    offset: 0,
+    version: u64::MAX,
+};
+
 /// One-Pass algorithm (Section 4.1, Figure 3).
 ///
 /// Scans R and V concurrently with two hash tables (one per string).
@@ -44,11 +59,9 @@ pub fn diff_onepass(r: &[u8], v: &[u8], opts: &DiffOptions) -> Vec<Command> {
     }
 
     // Step (1): lookup structures with version-based logical flushing.
-    // Each entry stores (offset, version).
-
-    // Hash table path
-    let mut h_v_ht: Vec<Option<(u64, usize, u64)>> = if !use_splay { vec![None; q] } else { Vec::new() };
-    let mut h_r_ht: Vec<Option<(u64, usize, u64)>> = if !use_splay { vec![None; q] } else { Vec::new() };
+    // Flat slot array — sentinel version u64::MAX marks empty/stale slots.
+    let mut h_v_ht: Vec<Slot> = if !use_splay { vec![EMPTY_SLOT; q] } else { Vec::new() };
+    let mut h_r_ht: Vec<Slot> = if !use_splay { vec![EMPTY_SLOT; q] } else { Vec::new() };
 
     // Splay tree path: value is (offset, version)
     let mut h_v_sp: SplayTree<(usize, u64)> = SplayTree::new();
@@ -60,29 +73,6 @@ pub fn diff_onepass(r: &[u8], v: &[u8], opts: &DiffOptions) -> Vec<Command> {
     let mut dbg_positions: usize = 0;
     let mut dbg_lookups: usize = 0;
     let mut dbg_matches: usize = 0;
-
-    // Hash table inline helpers
-    #[inline]
-    fn ht_get(table: &[Option<(u64, usize, u64)>], fp: u64, q: usize, ver: u64) -> Option<usize> {
-        let idx = (fp % q as u64) as usize;
-        if let Some((stored_fp, offset, stored_ver)) = table[idx] {
-            if stored_ver == ver && stored_fp == fp {
-                return Some(offset);
-            }
-        }
-        None
-    }
-
-    #[inline]
-    fn ht_put(table: &mut [Option<(u64, usize, u64)>], fp: u64, off: usize, q: usize, ver: u64) {
-        let idx = (fp % q as u64) as usize;
-        if let Some((_, _, stored_ver)) = table[idx] {
-            if stored_ver == ver {
-                return; // retain-existing policy
-            }
-        }
-        table[idx] = Some((fp, off, ver));
-    }
 
     // Step (2): initialize scan pointers
     let mut r_c: usize = 0;
@@ -152,7 +142,11 @@ pub fn diff_onepass(r: &[u8], v: &[u8], opts: &DiffOptions) -> Vec<Command> {
                     h_v_sp.insert(fp, (v_c, ver));
                 }
             } else {
-                ht_put(&mut h_v_ht, fp, v_c, q, ver);
+                let idx = (fp % q as u64) as usize;
+                let slot = &mut h_v_ht[idx];
+                if slot.version != ver {
+                    *slot = Slot { fp, offset: v_c, version: ver };
+                }
             }
         }
         if let Some(fp) = fp_r {
@@ -162,7 +156,11 @@ pub fn diff_onepass(r: &[u8], v: &[u8], opts: &DiffOptions) -> Vec<Command> {
                     h_r_sp.insert(fp, (r_c, ver));
                 }
             } else {
-                ht_put(&mut h_r_ht, fp, r_c, q, ver);
+                let idx = (fp % q as u64) as usize;
+                let slot = &mut h_r_ht[idx];
+                if slot.version != ver {
+                    *slot = Slot { fp, offset: r_c, version: ver };
+                }
             }
         }
 
@@ -175,7 +173,9 @@ pub fn diff_onepass(r: &[u8], v: &[u8], opts: &DiffOptions) -> Vec<Command> {
             let v_cand = if use_splay {
                 h_v_sp.find(fp).and_then(|&mut (off, v)| if v == ver { Some(off) } else { None })
             } else {
-                ht_get(&h_v_ht, fp, q, ver)
+                let idx = (fp % q as u64) as usize;
+                let slot = &h_v_ht[idx];
+                if slot.version == ver && slot.fp == fp { Some(slot.offset) } else { None }
             };
             if let Some(v_cand) = v_cand {
                 dbg_lookups += 1;
@@ -192,7 +192,9 @@ pub fn diff_onepass(r: &[u8], v: &[u8], opts: &DiffOptions) -> Vec<Command> {
                 let r_cand = if use_splay {
                     h_r_sp.find(fp).and_then(|&mut (off, v)| if v == ver { Some(off) } else { None })
                 } else {
-                    ht_get(&h_r_ht, fp, q, ver)
+                    let idx = (fp % q as u64) as usize;
+                    let slot = &h_r_ht[idx];
+                    if slot.version == ver && slot.fp == fp { Some(slot.offset) } else { None }
                 };
                 if let Some(r_cand) = r_cand {
                     dbg_lookups += 1;
@@ -213,10 +215,14 @@ pub fn diff_onepass(r: &[u8], v: &[u8], opts: &DiffOptions) -> Vec<Command> {
         dbg_matches += 1;
 
         // Step (5): extend match forward
-        let mut ml: usize = 0;
-        while v_m + ml < v.len() && r_m + ml < r.len() && v[v_m + ml] == r[r_m + ml] {
-            ml += 1;
-        }
+        // Pre-compute max extension, then compare slices (one bounds check
+        // instead of per-byte).
+        let max_ext = (v.len() - v_m).min(r.len() - r_m);
+        let ml = v[v_m..v_m + max_ext]
+            .iter()
+            .zip(&r[r_m..r_m + max_ext])
+            .position(|(a, b)| a != b)
+            .unwrap_or(max_ext);
 
         // Filter: skip matches shorter than --min-copy
         if ml < p {
