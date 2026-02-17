@@ -887,6 +887,22 @@ def place_commands(commands: List[Command]) -> List[PlacedCommand]:
     return placed
 
 
+def unplace_commands(placed: List[PlacedCommand]) -> List[Command]:
+    """Convert placed commands back to algorithm commands (strip destinations).
+
+    Commands are sorted by destination offset to recover original sequential
+    order, then each PlacedCopy/PlacedAdd is converted to CopyCmd/AddCmd.
+    """
+    by_dst = sorted(placed, key=lambda c: c.dst)
+    commands = []
+    for cmd in by_dst:
+        if isinstance(cmd, PlacedCopy):
+            commands.append(CopyCmd(offset=cmd.src, length=cmd.length))
+        elif isinstance(cmd, PlacedAdd):
+            commands.append(AddCmd(data=cmd.data))
+    return commands
+
+
 # ============================================================================
 # Unified Binary Delta Format
 #
@@ -1405,6 +1421,41 @@ def cmd_info(args):
     print(f"Output size:  {stats['total_output_bytes']:,} bytes")
 
 
+def cmd_inplace(args):
+    with mmap_open(args.reference) as R:
+        with open(args.delta_in, 'rb') as f:
+            delta_bytes = f.read()
+
+        placed, is_ip, version_size = decode_delta(delta_bytes)
+
+        if is_ip:
+            # Already in-place — just copy
+            with open(args.delta_out, 'wb') as f:
+                f.write(delta_bytes)
+            print("Delta is already in-place format; copied unchanged.")
+            return
+
+        t0 = time.time()
+        commands = unplace_commands(placed)
+        ip_placed = make_inplace(R, commands, policy=args.policy)
+        elapsed = time.time() - t0
+
+        ip_delta = encode_delta(ip_placed, inplace=True,
+                                version_size=version_size)
+        with open(args.delta_out, 'wb') as f:
+            f.write(ip_delta)
+
+        stats = placed_summary(ip_placed)
+        print(f"Reference:    {args.reference} ({len(R):,} bytes)")
+        print(f"Input delta:  {args.delta_in} ({len(delta_bytes):,} bytes)")
+        print(f"Output delta: {args.delta_out} ({len(ip_delta):,} bytes)")
+        print(f"Format:       in-place ({args.policy})")
+        print(f"Commands:     {stats['num_copies']} copies, {stats['num_adds']} adds")
+        print(f"Copy bytes:   {stats['copy_bytes']:,}")
+        print(f"Add bytes:    {stats['add_bytes']:,}")
+        print(f"Time:         {elapsed:.3f}s")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description='Differential compression (Ajtai et al. 2002)')
@@ -1440,6 +1491,17 @@ def main():
     inf = sub.add_parser('info', help='Show delta file statistics')
     inf.add_argument('delta', help='Delta file')
     inf.set_defaults(func=cmd_info)
+
+    # inplace
+    inp = sub.add_parser('inplace',
+                         help='Convert standard delta to in-place delta')
+    inp.add_argument('reference', help='Reference file')
+    inp.add_argument('delta_in', help='Input (standard) delta file')
+    inp.add_argument('delta_out', help='Output (in-place) delta file')
+    inp.add_argument('--policy', choices=['localmin', 'constant'],
+                     default='localmin',
+                     help='Cycle-breaking policy (default: localmin)')
+    inp.set_defaults(func=cmd_inplace)
 
     args = ap.parse_args()
     if args.command is None:

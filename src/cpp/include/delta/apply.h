@@ -17,6 +17,10 @@ size_t output_size(const std::vector<Command>& commands);
 /// Convert algorithm output to placed commands with sequential destinations.
 std::vector<PlacedCommand> place_commands(const std::vector<Command>& commands);
 
+/// Convert placed commands back to algorithm commands (strip destinations).
+/// Commands are sorted by destination offset to recover original sequential order.
+std::vector<Command> unplace_commands(const std::vector<PlacedCommand>& placed);
+
 /// Apply placed commands in standard mode: read from R, write to out.
 /// Returns the number of bytes written.
 size_t apply_placed_to(

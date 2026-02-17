@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <numeric>
 
 namespace delta {
 
@@ -61,6 +62,30 @@ std::vector<PlacedCommand> place_commands(const std::vector<Command>& commands) 
         }
     }
     return placed;
+}
+
+std::vector<Command> unplace_commands(const std::vector<PlacedCommand>& placed) {
+    // Sort indices by destination offset to recover original sequential order.
+    std::vector<size_t> indices(placed.size());
+    std::iota(indices.begin(), indices.end(), 0);
+    std::sort(indices.begin(), indices.end(), [&](size_t a, size_t b) {
+        auto dst_of = [&](size_t i) -> size_t {
+            if (auto* c = std::get_if<PlacedCopy>(&placed[i])) return c->dst;
+            return std::get<PlacedAdd>(placed[i]).dst;
+        };
+        return dst_of(a) < dst_of(b);
+    });
+
+    std::vector<Command> commands;
+    commands.reserve(placed.size());
+    for (size_t i : indices) {
+        if (auto* c = std::get_if<PlacedCopy>(&placed[i])) {
+            commands.emplace_back(CopyCmd{c->src, c->length});
+        } else if (auto* a = std::get_if<PlacedAdd>(&placed[i])) {
+            commands.emplace_back(AddCmd{a->data});
+        }
+    }
+    return commands;
 }
 
 size_t apply_placed_to(

@@ -158,6 +158,74 @@ delta_place_commands(const delta_commands_t *cmds)
 	return placed;
 }
 
+/* ── Unplace: convert placed commands back to algorithm commands ────── */
+
+static int
+cmp_dst(const void *a, const void *b)
+{
+	const size_t ia = *(const size_t *)a;
+	const size_t ib = *(const size_t *)b;
+	/* indices into a global placed array — compared by dst */
+	return (ia > ib) - (ia < ib);  /* placeholder, overridden below */
+}
+
+delta_commands_t
+delta_unplace_commands(const delta_placed_commands_t *placed)
+{
+	delta_commands_t cmds;
+	size_t i;
+	size_t *indices;
+
+	delta_commands_init(&cmds);
+	if (placed->len == 0) return cmds;
+
+	/* Sort indices by destination offset. */
+	indices = malloc(placed->len * sizeof(*indices));
+	for (i = 0; i < placed->len; i++) indices[i] = i;
+
+	/* Insertion sort by dst (qsort needs a comparator that can access
+	 * placed->data, but C qsort lacks a context pointer portably). */
+	for (i = 1; i < placed->len; i++) {
+		size_t tmp = indices[i];
+		size_t key;
+		size_t j = i;
+		if (placed->data[tmp].tag == PCMD_COPY)
+			key = placed->data[tmp].copy.dst;
+		else
+			key = placed->data[tmp].add.dst;
+		while (j > 0) {
+			size_t prev = indices[j - 1];
+			size_t prev_dst;
+			if (placed->data[prev].tag == PCMD_COPY)
+				prev_dst = placed->data[prev].copy.dst;
+			else
+				prev_dst = placed->data[prev].add.dst;
+			if (prev_dst <= key) break;
+			indices[j] = indices[j - 1];
+			j--;
+		}
+		indices[j] = tmp;
+	}
+
+	for (i = 0; i < placed->len; i++) {
+		const delta_placed_command_t *pc = &placed->data[indices[i]];
+		delta_command_t cmd;
+		if (pc->tag == PCMD_COPY) {
+			cmd.tag = CMD_COPY;
+			cmd.copy.offset = pc->copy.src;
+			cmd.copy.length = pc->copy.length;
+		} else {
+			cmd.tag = CMD_ADD;
+			cmd.add.length = pc->add.length;
+			cmd.add.data = malloc(pc->add.length);
+			memcpy(cmd.add.data, pc->add.data, pc->add.length);
+		}
+		delta_commands_push(&cmds, cmd);
+	}
+	free(indices);
+	return cmds;
+}
+
 /* ── Apply placed commands (standard mode) ─────────────────────────── */
 
 size_t

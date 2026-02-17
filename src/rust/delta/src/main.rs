@@ -9,7 +9,7 @@ use delta::{
     Algorithm, CyclePolicy, DiffOptions,
     apply_placed_inplace_to, apply_placed_to,
     decode_delta, encode_delta,
-    make_inplace, place_commands,
+    make_inplace, place_commands, unplace_commands,
     placed_summary,
 };
 
@@ -149,6 +149,22 @@ enum Commands {
     Info {
         /// Delta file
         delta_file: String,
+    },
+
+    /// Convert standard delta to in-place delta
+    Inplace {
+        /// Reference file
+        reference: String,
+
+        /// Input (standard) delta file
+        delta_in: String,
+
+        /// Output (in-place) delta file
+        delta_out: String,
+
+        /// Cycle-breaking policy
+        #[arg(long, value_enum, default_value_t = PolicyArg::Localmin)]
+        policy: PolicyArg,
     },
 }
 
@@ -331,6 +347,73 @@ fn main() {
                 stats.num_adds, stats.add_bytes
             );
             println!("Output size:  {} bytes", stats.total_output_bytes);
+        }
+
+        Commands::Inplace {
+            reference,
+            delta_in,
+            delta_out,
+            policy,
+        } => {
+            let (_rf, r_mmap) = mmap_open(&reference).unwrap_or_else(|e| {
+                eprintln!("Error reading {}: {}", reference, e);
+                process::exit(1);
+            });
+            let r: &[u8] = r_mmap.as_deref().unwrap_or(&[]);
+
+            let delta_bytes = fs::read(&delta_in).unwrap_or_else(|e| {
+                eprintln!("Error reading {}: {}", delta_in, e);
+                process::exit(1);
+            });
+
+            let (placed, is_ip, version_size) =
+                decode_delta(&delta_bytes).unwrap_or_else(|e| {
+                    eprintln!("Error decoding delta: {}", e);
+                    process::exit(1);
+                });
+
+            if is_ip {
+                fs::write(&delta_out, &delta_bytes).unwrap_or_else(|e| {
+                    eprintln!("Error writing {}: {}", delta_out, e);
+                    process::exit(1);
+                });
+                println!("Delta is already in-place format; copied unchanged.");
+                return;
+            }
+
+            let t0 = Instant::now();
+            let pol: CyclePolicy = policy.into();
+            let commands = unplace_commands(&placed);
+            let ip_placed = make_inplace(r, &commands, pol);
+            let elapsed = t0.elapsed();
+
+            let ip_delta = encode_delta(&ip_placed, true, version_size);
+            fs::write(&delta_out, &ip_delta).unwrap_or_else(|e| {
+                eprintln!("Error writing {}: {}", delta_out, e);
+                process::exit(1);
+            });
+
+            let stats = placed_summary(&ip_placed);
+            let pol_name = format!("{:?}", pol).to_lowercase();
+            println!("Reference:    {} ({} bytes)", reference, r.len());
+            println!(
+                "Input delta:  {} ({} bytes)",
+                delta_in,
+                delta_bytes.len()
+            );
+            println!(
+                "Output delta: {} ({} bytes)",
+                delta_out,
+                ip_delta.len()
+            );
+            println!("Format:       in-place ({})", pol_name);
+            println!(
+                "Commands:     {} copies, {} adds",
+                stats.num_copies, stats.num_adds
+            );
+            println!("Copy bytes:   {}", stats.copy_bytes);
+            println!("Add bytes:    {}", stats.add_bytes);
+            println!("Time:         {:.3}s", elapsed.as_secs_f64());
         }
     }
 }

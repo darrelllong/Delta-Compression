@@ -37,6 +37,28 @@ pub fn place_commands(commands: &[Command]) -> Vec<PlacedCommand> {
     placed
 }
 
+/// Convert placed commands back to algorithm commands (strip destinations).
+///
+/// Commands are sorted by destination offset to recover original sequential
+/// order, then each PlacedCopy/PlacedAdd is converted to Copy/Add.
+pub fn unplace_commands(placed: &[PlacedCommand]) -> Vec<Command> {
+    let mut sorted: Vec<&PlacedCommand> = placed.iter().collect();
+    sorted.sort_by_key(|c| match c {
+        PlacedCommand::Copy { dst, .. } => *dst,
+        PlacedCommand::Add { dst, .. } => *dst,
+    });
+    sorted
+        .into_iter()
+        .map(|c| match c {
+            PlacedCommand::Copy { src, length, .. } => Command::Copy {
+                offset: *src,
+                length: *length,
+            },
+            PlacedCommand::Add { data, .. } => Command::Add { data: data.clone() },
+        })
+        .collect()
+}
+
 /// Apply placed commands in standard mode: read from R, write to out.
 ///
 /// Returns the number of bytes written.
