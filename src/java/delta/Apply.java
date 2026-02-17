@@ -110,6 +110,28 @@ public final class Apply {
         return buf;
     }
 
+    /**
+     * Convert placed commands back to algorithm commands (strip destinations).
+     * Commands are sorted by destination offset to recover original sequential order.
+     */
+    public static List<Command> unplaceCommands(List<PlacedCommand> placed) {
+        List<PlacedCommand> sorted = new ArrayList<>(placed);
+        sorted.sort(Comparator.comparingInt(c -> {
+            if (c instanceof PlacedCopy) return ((PlacedCopy) c).dst;
+            return ((PlacedAdd) c).dst;
+        }));
+        List<Command> commands = new ArrayList<>(sorted.size());
+        for (PlacedCommand cmd : sorted) {
+            if (cmd instanceof PlacedCopy) {
+                PlacedCopy c = (PlacedCopy) cmd;
+                commands.add(new CopyCmd(c.src, c.length));
+            } else if (cmd instanceof PlacedAdd) {
+                commands.add(new AddCmd(((PlacedAdd) cmd).data));
+            }
+        }
+        return commands;
+    }
+
     // ── In-place reordering (Burns, Long, Stockmeyer, IEEE TKDE 2003) ──
 
     /**

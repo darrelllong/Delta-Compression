@@ -43,6 +43,8 @@ public final class Delta {
             decode(args);
         } else if ("info".equals(cmd)) {
             info(args);
+        } else if ("inplace".equals(cmd)) {
+            inplace(args);
         } else {
             usage();
         }
@@ -53,7 +55,8 @@ public final class Delta {
             "Usage:\n" +
             "  java delta.Delta encode <algorithm> <ref> <ver> <delta> [options]\n" +
             "  java delta.Delta decode <ref> <delta> <output>\n" +
-            "  java delta.Delta info <delta>\n\n" +
+            "  java delta.Delta info <delta>\n" +
+            "  java delta.Delta inplace <ref> <delta_in> <delta_out> [--policy P]\n\n" +
             "Algorithms: greedy, onepass, correcting\n" +
             "Options: --seed-len N, --table-size N, --inplace, --policy P,\n" +
             "         --verbose, --splay, --min-copy N");
@@ -175,6 +178,53 @@ public final class Delta {
         System.out.printf("  Copies:     %d (%d bytes)%n", stats.numCopies, stats.copyBytes);
         System.out.printf("  Adds:       %d (%d bytes)%n", stats.numAdds, stats.addBytes);
         System.out.printf("Output size:  %d bytes%n", stats.totalOutputBytes);
+    }
+
+    private static void inplace(String[] args) throws IOException {
+        if (args.length < 4) usage();
+
+        String refPath = args[1];
+        String deltaInPath = args[2];
+        String deltaOutPath = args[3];
+
+        CyclePolicy policy = CyclePolicy.LOCALMIN;
+        String policyStr = "localmin";
+
+        for (int i = 4; i < args.length; i++) {
+            if ("--policy".equals(args[i]) && i + 1 < args.length) {
+                policy = parsePolicy(args[++i]);
+                policyStr = policy.name().toLowerCase();
+            }
+        }
+
+        byte[] r = readFile(refPath);
+        byte[] deltaBytes = readFile(deltaInPath);
+
+        Encoding.DecodeResult result = Encoding.decodeDelta(deltaBytes);
+
+        if (result.inplace) {
+            writeFile(deltaOutPath, deltaBytes);
+            System.out.println("Delta is already in-place format; copied unchanged.");
+            return;
+        }
+
+        long t0 = System.nanoTime();
+        List<Command> commands = Apply.unplaceCommands(result.commands);
+        List<PlacedCommand> ipPlaced = Apply.makeInplace(r, commands, policy);
+        long elapsed = System.nanoTime() - t0;
+
+        byte[] ipDelta = Encoding.encodeDelta(ipPlaced, true, result.versionSize);
+        writeFile(deltaOutPath, ipDelta);
+
+        PlacedSummary stats = Apply.placedSummary(ipPlaced);
+        System.out.printf("Reference:    %s (%d bytes)%n", refPath, r.length);
+        System.out.printf("Input delta:  %s (%d bytes)%n", deltaInPath, deltaBytes.length);
+        System.out.printf("Output delta: %s (%d bytes)%n", deltaOutPath, ipDelta.length);
+        System.out.printf("Format:       in-place (%s)%n", policyStr);
+        System.out.printf("Commands:     %d copies, %d adds%n", stats.numCopies, stats.numAdds);
+        System.out.printf("Copy bytes:   %d%n", stats.copyBytes);
+        System.out.printf("Add bytes:    %d%n", stats.addBytes);
+        System.out.printf("Time:         %.3fs%n", elapsed / 1e9);
     }
 
     private static Algorithm parseAlgorithm(String s) {

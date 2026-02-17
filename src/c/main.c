@@ -128,6 +128,7 @@ usage(void)
 	    "  delta encode <algorithm> <ref> <ver> <delta> [options]\n"
 	    "  delta decode <ref> <delta> <output>\n"
 	    "  delta info <delta>\n"
+	    "  delta inplace <ref> <delta_in> <delta_out> [--policy P]\n"
 	    "\n"
 	    "Algorithms: greedy, onepass, correcting\n"
 	    "\n"
@@ -332,6 +333,80 @@ main(int argc, char **argv)
 
 		delta_placed_commands_free(&dr.commands);
 		free(delta_data);
+
+	} else if (strcmp(argv[1], "inplace") == 0) {
+		if (argc < 5) usage();
+
+		const char *ref_path = argv[2];
+		const char *delta_in_path = argv[3];
+		const char *delta_out_path = argv[4];
+
+		delta_cycle_policy_t policy = POLICY_LOCALMIN;
+		const char *policy_str = "localmin";
+
+		/* Parse optional --policy */
+		{
+			int a;
+			for (a = 5; a < argc; a++) {
+				if (strcmp(argv[a], "--policy") == 0 &&
+				    a + 1 < argc) {
+					policy_str = argv[++a];
+					if (strcmp(policy_str, "constant") == 0)
+						policy = POLICY_CONSTANT;
+				}
+			}
+		}
+
+		mapped_file_t r_file = map_file(ref_path);
+		size_t delta_len;
+		uint8_t *delta_data = read_file(delta_in_path, &delta_len);
+
+		delta_decode_result_t dr = delta_decode(delta_data, delta_len);
+
+		if (dr.inplace) {
+			write_file(delta_out_path, delta_data, delta_len);
+			printf("Delta is already in-place format; "
+			       "copied unchanged.\n");
+			delta_placed_commands_free(&dr.commands);
+			free(delta_data);
+			unmap_file(&r_file);
+			return 0;
+		}
+
+		struct timespec t0, t1;
+		clock_gettime(CLOCK_MONOTONIC, &t0);
+
+		delta_commands_t cmds = delta_unplace_commands(&dr.commands);
+		delta_placed_commands_t ip_placed = delta_make_inplace(
+			r_file.data, r_file.size, &cmds, policy);
+
+		clock_gettime(CLOCK_MONOTONIC, &t1);
+		double elapsed = elapsed_sec(&t0, &t1);
+
+		delta_buffer_t ip_buf = delta_encode(&ip_placed, true,
+		                                     dr.version_size);
+		write_file(delta_out_path, ip_buf.data, ip_buf.len);
+
+		delta_summary_t stats = delta_placed_summary(&ip_placed);
+		printf("Reference:    %s (%zu bytes)\n",
+		       ref_path, r_file.size);
+		printf("Input delta:  %s (%zu bytes)\n",
+		       delta_in_path, delta_len);
+		printf("Output delta: %s (%zu bytes)\n",
+		       delta_out_path, ip_buf.len);
+		printf("Format:       in-place (%s)\n", policy_str);
+		printf("Commands:     %zu copies, %zu adds\n",
+		       stats.num_copies, stats.num_adds);
+		printf("Copy bytes:   %zu\n", stats.copy_bytes);
+		printf("Add bytes:    %zu\n", stats.add_bytes);
+		printf("Time:         %.3fs\n", elapsed);
+
+		free(ip_buf.data);
+		delta_placed_commands_free(&ip_placed);
+		delta_commands_free(&cmds);
+		delta_placed_commands_free(&dr.commands);
+		free(delta_data);
+		unmap_file(&r_file);
 
 	} else {
 		usage();
