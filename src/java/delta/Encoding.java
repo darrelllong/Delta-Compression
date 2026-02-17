@@ -17,47 +17,45 @@ import static delta.Types.*;
 public final class Encoding {
     private Encoding() {}
 
-    private static final byte[] MAGIC = {'D', 'L', 'T', 0x01};
-    private static final byte FLAG_INPLACE = 0x01;
-
     /** Encode placed commands to the unified binary delta format. */
     public static byte[] encodeDelta(List<PlacedCommand> commands,
                                      boolean inplace, int versionSize) {
-        // Estimate size: header(9) + commands + END(1)
-        int est = 10;
+        // Estimate size: header + commands + END(1)
+        int est = DELTA_HEADER_SIZE + 1;
         for (PlacedCommand cmd : commands) {
             if (cmd instanceof PlacedCopy) {
-                est += 13;
+                est += 1 + DELTA_COPY_PAYLOAD;
             } else if (cmd instanceof PlacedAdd) {
-                est += 9 + ((PlacedAdd) cmd).data.length;
+                est += 1 + DELTA_ADD_HEADER + ((PlacedAdd) cmd).data.length;
             }
         }
         byte[] out = new byte[est];
         int pos = 0;
 
         // Header
-        System.arraycopy(MAGIC, 0, out, 0, 4); pos = 4;
-        out[pos++] = inplace ? FLAG_INPLACE : 0;
-        putU32BE(out, pos, versionSize); pos += 4;
+        System.arraycopy(DELTA_MAGIC, 0, out, 0, DELTA_MAGIC.length);
+        pos = DELTA_MAGIC.length;
+        out[pos++] = inplace ? DELTA_FLAG_INPLACE : 0;
+        putU32BE(out, pos, versionSize); pos += DELTA_U32_SIZE;
 
         for (PlacedCommand cmd : commands) {
             if (cmd instanceof PlacedCopy) {
                 PlacedCopy c = (PlacedCopy) cmd;
-                out[pos++] = 1;
-                putU32BE(out, pos, c.src); pos += 4;
-                putU32BE(out, pos, c.dst); pos += 4;
-                putU32BE(out, pos, c.length); pos += 4;
+                out[pos++] = DELTA_CMD_COPY;
+                putU32BE(out, pos, c.src); pos += DELTA_U32_SIZE;
+                putU32BE(out, pos, c.dst); pos += DELTA_U32_SIZE;
+                putU32BE(out, pos, c.length); pos += DELTA_U32_SIZE;
             } else if (cmd instanceof PlacedAdd) {
                 PlacedAdd a = (PlacedAdd) cmd;
-                out[pos++] = 2;
-                putU32BE(out, pos, a.dst); pos += 4;
-                putU32BE(out, pos, a.data.length); pos += 4;
+                out[pos++] = DELTA_CMD_ADD;
+                putU32BE(out, pos, a.dst); pos += DELTA_U32_SIZE;
+                putU32BE(out, pos, a.data.length); pos += DELTA_U32_SIZE;
                 System.arraycopy(a.data, 0, out, pos, a.data.length);
                 pos += a.data.length;
             }
         }
 
-        out[pos++] = 0; // END
+        out[pos++] = DELTA_CMD_END;
 
         if (pos != out.length) {
             byte[] trimmed = new byte[pos];
@@ -69,33 +67,41 @@ public final class Encoding {
 
     /** Decode the unified binary delta format. */
     public static DecodeResult decodeDelta(byte[] data) {
-        if (data.length < 9) throw new IllegalArgumentException("not a delta file");
-        for (int i = 0; i < 4; i++) {
-            if (data[i] != MAGIC[i]) throw new IllegalArgumentException("not a delta file");
+        if (data.length < DELTA_HEADER_SIZE) {
+            throw new IllegalArgumentException("not a delta file");
+        }
+        for (int i = 0; i < DELTA_MAGIC.length; i++) {
+            if (data[i] != DELTA_MAGIC[i]) {
+                throw new IllegalArgumentException("not a delta file");
+            }
         }
 
-        boolean inplace = (data[4] & FLAG_INPLACE) != 0;
-        int versionSize = getU32BE(data, 5);
-        int pos = 9;
+        boolean inplace = (data[DELTA_MAGIC.length] & DELTA_FLAG_INPLACE) != 0;
+        int versionSize = getU32BE(data, DELTA_MAGIC.length + 1);
+        int pos = DELTA_HEADER_SIZE;
         List<PlacedCommand> commands = new ArrayList<>();
 
         while (pos < data.length) {
             int t = data[pos++] & 0xFF;
-            if (t == 0) break; // END
+            if (t == DELTA_CMD_END) break;
 
-            if (t == 1) {
-                // COPY
-                if (pos + 12 > data.length) throw new IllegalArgumentException("unexpected EOF");
-                int src = getU32BE(data, pos); pos += 4;
-                int dst = getU32BE(data, pos); pos += 4;
-                int len = getU32BE(data, pos); pos += 4;
+            if (t == DELTA_CMD_COPY) {
+                if (pos + DELTA_COPY_PAYLOAD > data.length) {
+                    throw new IllegalArgumentException("unexpected EOF");
+                }
+                int src = getU32BE(data, pos); pos += DELTA_U32_SIZE;
+                int dst = getU32BE(data, pos); pos += DELTA_U32_SIZE;
+                int len = getU32BE(data, pos); pos += DELTA_U32_SIZE;
                 commands.add(new PlacedCopy(src, dst, len));
-            } else if (t == 2) {
-                // ADD
-                if (pos + 8 > data.length) throw new IllegalArgumentException("unexpected EOF");
-                int dst = getU32BE(data, pos); pos += 4;
-                int len = getU32BE(data, pos); pos += 4;
-                if (pos + len > data.length) throw new IllegalArgumentException("unexpected EOF");
+            } else if (t == DELTA_CMD_ADD) {
+                if (pos + DELTA_ADD_HEADER > data.length) {
+                    throw new IllegalArgumentException("unexpected EOF");
+                }
+                int dst = getU32BE(data, pos); pos += DELTA_U32_SIZE;
+                int len = getU32BE(data, pos); pos += DELTA_U32_SIZE;
+                if (pos + len > data.length) {
+                    throw new IllegalArgumentException("unexpected EOF");
+                }
                 byte[] payload = new byte[len];
                 System.arraycopy(data, pos, payload, 0, len);
                 pos += len;
@@ -110,10 +116,11 @@ public final class Encoding {
 
     /** Check if binary data is an in-place delta. */
     public static boolean isInplaceDelta(byte[] data) {
-        return data.length >= 5
-            && data[0] == MAGIC[0] && data[1] == MAGIC[1]
-            && data[2] == MAGIC[2] && data[3] == MAGIC[3]
-            && (data[4] & FLAG_INPLACE) != 0;
+        if (data.length < DELTA_MAGIC.length + 1) return false;
+        for (int i = 0; i < DELTA_MAGIC.length; i++) {
+            if (data[i] != DELTA_MAGIC[i]) return false;
+        }
+        return (data[DELTA_MAGIC.length] & DELTA_FLAG_INPLACE) != 0;
     }
 
     public static final class DecodeResult {

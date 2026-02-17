@@ -23,6 +23,14 @@
 #define DELTA_HASH_BASE   263ULL
 #define DELTA_HASH_MOD    ((1ULL << 61) - 1)  /* Mersenne prime 2^61-1 */
 #define DELTA_FLAG_INPLACE 0x01
+#define DELTA_CMD_END      0
+#define DELTA_CMD_COPY     1
+#define DELTA_CMD_ADD      2
+#define DELTA_HEADER_SIZE  9    /* magic(4) + flags(1) + version_size(4) */
+#define DELTA_U32_SIZE     4
+#define DELTA_COPY_PAYLOAD 12   /* src(4) + dst(4) + len(4) */
+#define DELTA_ADD_HEADER   8    /* dst(4) + len(4) */
+#define DELTA_BUF_CAP      256
 
 static const uint8_t DELTA_MAGIC[4] = {'D', 'L', 'T', 0x01};
 
@@ -169,7 +177,7 @@ typedef struct {
 } delta_diff_options_t;
 
 #define DELTA_DIFF_OPTIONS_DEFAULT \
-	{ DELTA_SEED_LEN, DELTA_TABLE_SIZE, 256, false, false, 0 }
+	{ DELTA_SEED_LEN, DELTA_TABLE_SIZE, DELTA_BUF_CAP, false, false, 0 }
 
 /* ====================================================================
  * Differencing algorithms
