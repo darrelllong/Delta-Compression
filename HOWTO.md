@@ -36,6 +36,19 @@ cmake --build build
 ctest --test-dir build
 ```
 
+### C
+
+Requires a C11 compiler (GCC, Clang, Apple Clang) with `__uint128_t` support
+and POSIX `mmap`.  No external dependencies.
+
+```bash
+cd src/c
+make
+# Binary at ./delta
+# Run tests
+make test
+```
+
 ### Java
 
 Requires Java 11+.  No external dependencies.
@@ -60,7 +73,11 @@ python3 delta.py decode old.bin delta.bin recovered.bin
 delta encode onepass old.bin new.bin delta.bin
 delta decode old.bin delta.bin recovered.bin
 
-# C++
+# C++ (src/cpp/build/delta)
+delta encode onepass old.bin new.bin delta.bin
+delta decode old.bin delta.bin recovered.bin
+
+# C (src/c/delta)
 delta encode onepass old.bin new.bin delta.bin
 delta decode old.bin delta.bin recovered.bin
 
@@ -202,7 +219,7 @@ into ADD commands, increasing delta size from 7 MB to 13 MB.
 The flag does not affect the delta format — deltas produced with any
 `--min-copy` value are decoded identically by all three implementations.
 
-### --splay (Rust, C++, and Java)
+### --splay (Rust, C++, C, and Java)
 
 Replace the hash table with a Tarjan-Sleator splay tree for fingerprint
 lookup.  A splay tree is a self-adjusting binary search tree where every
@@ -230,7 +247,7 @@ O(n^2) so the lookup structure is not the bottleneck.
 
 Not available in Python: Python's built-in `dict` is a C-optimized hash
 table that always outperforms a pure-Python tree structure.  Available in
-Java via the same `--splay` flag.
+C, Java, Rust, and C++ via the same `--splay` flag.
 
 ### Checkpointing (correcting algorithm)
 
@@ -323,13 +340,17 @@ Output size:  5678 bytes
 
 ## Cross-language compatibility
 
-All four implementations (Python, Rust, C++, Java) produce byte-identical
+All five implementations (Python, Rust, C++, C, Java) produce byte-identical
 delta files.  You can encode with any one and decode with any other.
 
 ```bash
 # Encode with Rust, decode with Python
 delta encode onepass old.bin new.bin delta.bin
 python3 delta.py decode old.bin delta.bin recovered.bin
+
+# Encode with C, decode with Rust
+src/c/delta encode onepass old.bin new.bin delta.bin
+delta decode old.bin delta.bin recovered.bin
 
 # Encode with Java, decode with C++
 java -cp out delta.Delta encode onepass old.bin new.bin delta.bin
@@ -431,6 +452,44 @@ auto ip = make_inplace(r, commands, CyclePolicy::Localmin);
 auto ip_delta = encode_delta(ip, true, v.size());
 ```
 
+### C
+
+```c
+#include "delta.h"
+
+uint8_t *r = reference_data;
+size_t r_len = reference_len;
+uint8_t *v = version_data;
+size_t v_len = version_len;
+
+/* Diff (verbose=true prints stats, use_splay=true for splay tree, min_copy=0 for default) */
+delta_commands_t cmds = delta_diff(ALGO_ONEPASS, r, r_len, v, v_len,
+    DELTA_SEED_LEN, DELTA_TABLE_SIZE, false, false, 0);
+
+/* Standard binary delta */
+delta_placed_commands_t placed = delta_place_commands(&cmds);
+size_t delta_len;
+uint8_t *delta_bytes = delta_encode(&placed, false, v_len, &delta_len);
+
+/* Decode and reconstruct */
+delta_decode_result_t res = delta_decode(delta_bytes, delta_len);
+uint8_t *output = calloc(res.version_size, 1);
+delta_apply_placed(r, r_len, &res.commands, output);
+
+/* In-place delta */
+delta_placed_commands_t ip = delta_make_inplace(r, r_len, &cmds, POLICY_LOCALMIN);
+size_t ip_len;
+uint8_t *ip_delta = delta_encode(&ip, true, v_len, &ip_len);
+
+/* Cleanup */
+delta_commands_free(&cmds);
+delta_placed_commands_free(&placed);
+delta_placed_commands_free(&ip);
+free(delta_bytes);
+free(ip_delta);
+free(output);
+```
+
 ### Java
 
 ```java
@@ -467,7 +526,7 @@ byte[] recovered = Apply.applyDeltaInplace(r, ip, v.length);
 cd src/python
 python3 -m unittest test_delta -v
 
-# Rust — 52 tests (17 unit + 35 integration)
+# Rust — 35 tests
 cd src/rust/delta
 cargo test
 
@@ -475,6 +534,14 @@ cargo test
 cd src/cpp
 cmake -B build && cmake --build build
 ctest --test-dir build
+
+# C — 32 integration tests (includes cross-language verification)
+cd src/c
+make test
+
+# Java — roundtrip verification via CLI
+cd src/java
+javac -d out delta/*.java
 ```
 
 A kernel tarball benchmark (`tests/kernel-delta-test.sh`) exercises

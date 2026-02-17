@@ -1,4 +1,5 @@
-use std::collections::VecDeque;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 
 use crate::types::{Command, CyclePolicy, PlacedCommand};
 
@@ -111,15 +112,24 @@ pub fn make_inplace(
     }
 
     // Step 3: topological sort with cycle breaking (Kahn's algorithm)
+    // Priority queue keyed on copy length — always process the smallest
+    // ready copy first, giving a deterministic topological ordering.
     let mut removed = vec![false; n];
     let mut topo_order = Vec::with_capacity(n);
     let mut converted = Vec::new();
 
-    let mut queue: VecDeque<usize> = (0..n).filter(|&i| in_deg[i] == 0).collect();
+    // Min-heap: Reverse so BinaryHeap (max-heap) becomes a min-heap.
+    // Key = (copy_length, index) for deterministic ordering.
+    let mut heap: BinaryHeap<Reverse<(usize, usize)>> = BinaryHeap::new();
+    for i in 0..n {
+        if in_deg[i] == 0 {
+            heap.push(Reverse((copy_info[i].3, i)));
+        }
+    }
     let mut processed = 0;
 
     while processed < n {
-        while let Some(v) = queue.pop_front() {
+        while let Some(Reverse((_, v))) = heap.pop() {
             if removed[v] {
                 continue;
             }
@@ -130,7 +140,7 @@ pub fn make_inplace(
                 if !removed[w] {
                     in_deg[w] -= 1;
                     if in_deg[w] == 0 {
-                        queue.push_back(w);
+                        heap.push(Reverse((copy_info[w].3, w)));
                     }
                 }
             }
@@ -166,7 +176,7 @@ pub fn make_inplace(
             if !removed[w] {
                 in_deg[w] -= 1;
                 if in_deg[w] == 0 {
-                    queue.push_back(w);
+                    heap.push(Reverse((copy_info[w].3, w)));
                 }
             }
         }

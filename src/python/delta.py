@@ -24,6 +24,7 @@ Usage:
 """
 
 import argparse
+import heapq
 import mmap
 import os
 import struct
@@ -654,7 +655,7 @@ def diff_correcting(R: bytes, V: bytes,
     dbg_scan_fp_miss = 0
     dbg_scan_byte_miss = 0
 
-    # ── Step (1): Build hash table for R (first-found policy) ─────────
+    # Step (1): Build hash table for R (first-found policy)
     # Scan every R position, apply checkpoint test (Eq. 3), store at
     # index i = floor(f / m) where f = fp % |F|.  (Section 8.2, p. 349)
     H_R: list = [None] * C
@@ -703,7 +704,7 @@ def diff_correcting(R: bytes, V: bytes,
                 commands.append(oldest.cmd)
         buf.append(_BufEntry(v_start, v_end, cmd))
 
-    # ── Step (2): initialize V scan pointers ───────────────────────────
+    # Step (2): initialize scan pointers
     v_c = 0
     v_s = 0
 
@@ -759,7 +760,7 @@ def diff_correcting(R: bytes, V: bytes,
 
         dbg_scan_match += 1
 
-        # ── Step (5): extend match forwards and backwards ─────────
+        # Step (5): extend match forwards and backwards
         # (Section 7, Step 5; Section 8.2 backward extension, p. 349)
         fwd = p
         while (v_c + fwd < len(V) and r_offset + fwd < len(R)
@@ -781,7 +782,7 @@ def diff_correcting(R: bytes, V: bytes,
             v_c += 1
             continue
 
-        # ── Step (6): encode with correction ──────────────────────
+        # Step (6): encode with correction
         if v_s <= v_m:
             # (6a) match is entirely in unencoded suffix (Section 7)
             if v_s < v_m:
@@ -833,7 +834,7 @@ def diff_correcting(R: bytes, V: bytes,
         # Step (7): advance past the matched region
         v_c = match_end
 
-    # ── Step (8): flush buffer and emit trailing ADD ──────────────────
+    # Step (8): flush buffer and trailing add
     flush_all()
     if v_s < len(V):
         commands.append(AddCmd(data=V[v_s:]))
@@ -1160,16 +1161,21 @@ def make_inplace(R: bytes, commands: List[Command],
                 in_deg[j] += 1
 
     # Step 3: topological sort with cycle breaking (Kahn's algorithm)
+    # Priority queue keyed on copy length — always process the smallest
+    # ready copy first, giving a deterministic topological ordering.
     removed = [False] * n
     topo_order = []
     converted = set()
 
-    queue = deque(i for i in range(n) if in_deg[i] == 0)
+    heap = []  # min-heap of (copy_length, index)
+    for i in range(n):
+        if in_deg[i] == 0:
+            heapq.heappush(heap, (copy_info[i][3], i))
     processed = 0
 
     while processed < n:
-        while queue:
-            v = queue.popleft()
+        while heap:
+            _, v = heapq.heappop(heap)
             if removed[v]:
                 continue
             removed[v] = True
@@ -1179,7 +1185,7 @@ def make_inplace(R: bytes, commands: List[Command],
                 if not removed[w]:
                     in_deg[w] -= 1
                     if in_deg[w] == 0:
-                        queue.append(w)
+                        heapq.heappush(heap, (copy_info[w][3], w))
 
         if processed >= n:
             break
@@ -1205,7 +1211,7 @@ def make_inplace(R: bytes, commands: List[Command],
             if not removed[w]:
                 in_deg[w] -= 1
                 if in_deg[w] == 0:
-                    queue.append(w)
+                    heapq.heappush(heap, (copy_info[w][3], w))
 
     # Step 4: assemble result — copies first (in topo order) because they
     # read from the buffer; adds last because they only write literal data

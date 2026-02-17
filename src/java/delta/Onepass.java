@@ -130,7 +130,7 @@ public final class Onepass {
                 } else {
                     vCand = htGet(htVFp, htVOff, htVVer, fpR, q, ver);
                 }
-                if (vCand >= 0 && arrayEquals(r, rC, v, vCand, p)) {
+                if (vCand >= 0 && Diff.arrayEquals(r, rC, v, vCand, p)) {
                     rM = rC;
                     vM = vCand;
                     matchFound = true;
@@ -145,7 +145,7 @@ public final class Onepass {
                 } else {
                     rCand = htGet(htRFp, htROff, htRVer, fpV, q, ver);
                 }
-                if (rCand >= 0 && arrayEquals(v, vC, r, rCand, p)) {
+                if (rCand >= 0 && Diff.arrayEquals(v, vC, r, rCand, p)) {
                     vM = vC;
                     rM = rCand;
                     matchFound = true;
@@ -164,7 +164,7 @@ public final class Onepass {
 
             // Step (6): encode
             if (vS < vM) {
-                commands.add(new AddCmd(Greedy.copyRange(v, vS, vM)));
+                commands.add(new AddCmd(Diff.copyRange(v, vS, vM)));
             }
             commands.add(new CopyCmd(rM, ml));
             vS = vM + ml;
@@ -177,10 +177,10 @@ public final class Onepass {
 
         // Step (8): trailing add
         if (vS < v.length) {
-            commands.add(new AddCmd(Greedy.copyRange(v, vS, v.length)));
+            commands.add(new AddCmd(Diff.copyRange(v, vS, v.length)));
         }
 
-        if (verbose) Greedy.printStats(commands);
+        if (verbose) Diff.printStats(commands);
         return commands;
     }
 
@@ -200,10 +200,4 @@ public final class Onepass {
         return -1;
     }
 
-    private static boolean arrayEquals(byte[] a, int aOff, byte[] b, int bOff, int len) {
-        for (int i = 0; i < len; i++) {
-            if (a[aOff + i] != b[bOff + i]) return false;
-        }
-        return true;
-    }
 }

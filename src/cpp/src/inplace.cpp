@@ -1,7 +1,8 @@
 #include "delta/inplace.h"
 
 #include <algorithm>
-#include <deque>
+#include <functional>
+#include <queue>
 #include <unordered_map>
 
 namespace delta {
@@ -97,21 +98,25 @@ std::vector<PlacedCommand> make_inplace(
     }
 
     // Step 3: topological sort with cycle breaking (Kahn's algorithm)
+    // Priority queue keyed on copy length — always process the smallest
+    // ready copy first, giving a deterministic topological ordering.
     std::vector<bool> removed(n, false);
     std::vector<size_t> topo_order;
     topo_order.reserve(n);
     std::vector<size_t> converted;
 
-    std::deque<size_t> queue;
+    // Min-heap: (copy_length, index) with std::greater for smallest-first.
+    using HeapEntry = std::pair<size_t, size_t>;
+    std::priority_queue<HeapEntry, std::vector<HeapEntry>, std::greater<>> heap;
     for (size_t i = 0; i < n; ++i) {
-        if (in_deg[i] == 0) queue.push_back(i);
+        if (in_deg[i] == 0) heap.emplace(copy_info[i].length, i);
     }
     size_t processed = 0;
 
     while (processed < n) {
-        while (!queue.empty()) {
-            size_t v = queue.front();
-            queue.pop_front();
+        while (!heap.empty()) {
+            auto [len, v] = heap.top();
+            heap.pop();
             if (removed[v]) continue;
             removed[v] = true;
             topo_order.push_back(v);
@@ -119,7 +124,7 @@ std::vector<PlacedCommand> make_inplace(
             for (size_t w : adj[v]) {
                 if (!removed[w]) {
                     --in_deg[w];
-                    if (in_deg[w] == 0) queue.push_back(w);
+                    if (in_deg[w] == 0) heap.emplace(copy_info[w].length, w);
                 }
             }
         }
@@ -162,7 +167,7 @@ std::vector<PlacedCommand> make_inplace(
         for (size_t w : adj[victim]) {
             if (!removed[w]) {
                 --in_deg[w];
-                if (in_deg[w] == 0) queue.push_back(w);
+                if (in_deg[w] == 0) heap.emplace(copy_info[w].length, w);
             }
         }
     }

@@ -108,8 +108,6 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 	bool *removed;
 	size_t *topo_order;
 	size_t topo_len = 0;
-	size_t *queue;
-	size_t q_head = 0, q_tail = 0, q_cap;
 	size_t processed = 0;
 
 	delta_placed_commands_init(&result);
@@ -190,19 +188,75 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 		}
 	}
 
-	/* Step 3: topological sort with cycle breaking (Kahn's) */
+	/* Step 3: topological sort with cycle breaking (Kahn's algorithm)
+	 * Priority queue (min-heap) keyed on copy length — always process
+	 * the smallest ready copy first for deterministic ordering. */
 	removed = calloc(n, sizeof(*removed));
 	topo_order = malloc(n * sizeof(*topo_order));
-	q_cap = n + 1;
-	queue = malloc(q_cap * sizeof(*queue));
 
-	for (i = 0; i < n; i++)
-		if (in_deg[i] == 0)
-			queue[q_tail++] = i;
+	/* Min-heap entries: (copy_length, vertex_index) */
+	typedef struct { size_t len; size_t idx; } heap_entry_t;
+	size_t heap_len = 0, heap_cap = n + 1;
+	heap_entry_t *heap = malloc(heap_cap * sizeof(*heap));
+
+	/* Heap helpers (0-based indexing) */
+	#define HEAP_PARENT(i) (((i) - 1) / 2)
+	#define HEAP_LEFT(i)   (2 * (i) + 1)
+	#define HEAP_RIGHT(i)  (2 * (i) + 2)
+	#define HEAP_LT(a, b)  ((a).len < (b).len || \
+	                         ((a).len == (b).len && (a).idx < (b).idx))
+
+	#define HEAP_PUSH(e) do {                              \
+		if (heap_len == heap_cap) {                    \
+			heap_cap *= 2;                         \
+			heap = realloc(heap,                   \
+			    heap_cap * sizeof(*heap));          \
+		}                                              \
+		heap[heap_len] = (e);                          \
+		size_t _k = heap_len++;                        \
+		while (_k > 0 && HEAP_LT(heap[_k],            \
+		                          heap[HEAP_PARENT(_k)])) { \
+			heap_entry_t _tmp = heap[_k];          \
+			heap[_k] = heap[HEAP_PARENT(_k)];      \
+			heap[HEAP_PARENT(_k)] = _tmp;          \
+			_k = HEAP_PARENT(_k);                  \
+		}                                              \
+	} while (0)
+
+	#define HEAP_POP(out) do {                             \
+		(out) = heap[0];                               \
+		heap[0] = heap[--heap_len];                    \
+		size_t _k = 0;                                 \
+		for (;;) {                                     \
+			size_t _s = _k;                        \
+			size_t _l = HEAP_LEFT(_k);             \
+			size_t _r = HEAP_RIGHT(_k);            \
+			if (_l < heap_len &&                   \
+			    HEAP_LT(heap[_l], heap[_s]))       \
+				_s = _l;                       \
+			if (_r < heap_len &&                   \
+			    HEAP_LT(heap[_r], heap[_s]))       \
+				_s = _r;                       \
+			if (_s == _k) break;                   \
+			heap_entry_t _tmp = heap[_k];          \
+			heap[_k] = heap[_s];                   \
+			heap[_s] = _tmp;                       \
+			_k = _s;                               \
+		}                                              \
+	} while (0)
+
+	for (i = 0; i < n; i++) {
+		if (in_deg[i] == 0) {
+			heap_entry_t e = { copies[i].length, i };
+			HEAP_PUSH(e);
+		}
+	}
 
 	while (processed < n) {
-		while (q_head < q_tail) {
-			size_t v = queue[q_head++];
+		while (heap_len > 0) {
+			heap_entry_t top;
+			HEAP_POP(top);
+			size_t v = top.idx;
 			if (removed[v]) continue;
 			removed[v] = true;
 			topo_order[topo_len++] = v;
@@ -211,8 +265,12 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 				size_t w = adj[v][j];
 				if (!removed[w]) {
 					in_deg[w]--;
-					if (in_deg[w] == 0)
-						queue[q_tail++] = w;
+					if (in_deg[w] == 0) {
+						heap_entry_t e = {
+						    copies[w].length, w
+						};
+						HEAP_PUSH(e);
+					}
 				}
 			}
 		}
@@ -271,12 +329,23 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 				size_t w = adj[victim][j];
 				if (!removed[w]) {
 					in_deg[w]--;
-					if (in_deg[w] == 0)
-						queue[q_tail++] = w;
+					if (in_deg[w] == 0) {
+						heap_entry_t e = {
+						    copies[w].length, w
+						};
+						HEAP_PUSH(e);
+					}
 				}
 			}
 		}
 	}
+
+	#undef HEAP_PARENT
+	#undef HEAP_LEFT
+	#undef HEAP_RIGHT
+	#undef HEAP_LT
+	#undef HEAP_PUSH
+	#undef HEAP_POP
 
 	/* Step 4: assemble result — copies in topo order, then adds */
 	for (i = 0; i < topo_len; i++) {
@@ -300,7 +369,7 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 	for (i = 0; i < n; i++) free(adj[i]);
 	free(adj); free(adj_len); free(adj_cap);
 	free(in_deg); free(removed);
-	free(topo_order); free(queue);
+	free(topo_order); free(heap);
 	free(copies); free(add_dsts); free(add_datas); free(add_lens);
 
 	return result;
