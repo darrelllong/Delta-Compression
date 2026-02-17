@@ -78,7 +78,7 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool, use_s
         table[idx] = Some((fp, off, ver));
     }
 
-    // Step (2)
+    // Step (2): initialize scan pointers
     let mut r_c: usize = 0;
     let mut v_c: usize = 0;
     let mut v_s: usize = 0;
@@ -91,7 +91,7 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool, use_s
     let mut rh_r_pos: usize = 0;
 
     loop {
-        // Step (3)
+        // Step (3): check for end of V and R
         let can_v = v_c + p <= v.len();
         let can_r = r_c + p <= r.len();
 
@@ -237,7 +237,7 @@ pub fn diff_onepass(r: &[u8], v: &[u8], p: usize, q: usize, verbose: bool, use_s
         ver += 1;
     }
 
-    // Step (8)
+    // Step (8): trailing add
     if v_s < v.len() {
         commands.push(Command::Add {
             data: v[v_s..].to_vec(),

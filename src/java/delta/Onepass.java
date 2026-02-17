@@ -52,6 +52,7 @@ public final class Onepass {
             Arrays.fill(htRVer, -1);
         }
 
+        // Step (2): initialize scan pointers
         long ver = 0;
         int rC = 0, vC = 0, vS = 0;
 
@@ -60,7 +61,7 @@ public final class Onepass {
         int rhVPos = 0, rhRPos = 0;
 
         while (true) {
-            // Step (3)
+            // Step (3): check for end of V and R
             boolean canV = vC + p <= v.length;
             boolean canR = rC + p <= r.length;
             if (!canV && !canR) break;
@@ -174,7 +175,7 @@ public final class Onepass {
             ver++;
         }
 
-        // Step (8)
+        // Step (8): trailing add
         if (vS < v.length) {
             commands.add(new AddCmd(Greedy.copyRange(v, vS, v.length)));
         }

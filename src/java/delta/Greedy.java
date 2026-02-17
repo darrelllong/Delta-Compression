@@ -52,14 +52,14 @@ public final class Greedy {
                 useSplay ? "splay tree" : "hash table", r.length, v.length, p);
         }
 
-        // Step (2)
+        // Step (2): initialize scan pointers
         int vC = 0, vS = 0;
 
         Hash.RollingHash rhV = v.length >= p ? new Hash.RollingHash(v, 0, p) : null;
         int rhVPos = 0;
 
         while (vC + p <= v.length) {
-            // Step (3): compute fingerprint
+            // Step (3): check for end of V; compute fingerprint
             long fpV;
             if (rhV == null) break;
             if (vC == rhVPos) {
@@ -103,11 +103,11 @@ public final class Greedy {
             commands.add(new CopyCmd(bestRm, bestLen));
             vS = vC + bestLen;
 
-            // Step (7)
+            // Step (7): advance past matched region
             vC += bestLen;
         }
 
-        // Step (8)
+        // Step (8): trailing add
         if (vS < v.length) {
             commands.add(new AddCmd(copyRange(v, vS, v.length)));
         }

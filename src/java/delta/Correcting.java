@@ -60,7 +60,7 @@ public final class Correcting {
                 m, expected, occEst);
         }
 
-        // ── Step (1): Build lookup structure for R (first-found policy) ──
+        // Step (1): Build lookup structure for R (first-found policy)
         long[] htFp = null;
         int[] htOff = null;
         boolean[] htUsed = null;
@@ -99,17 +99,17 @@ public final class Correcting {
             }
         }
 
-        // ── Encoding lookback buffer (Section 5.2) ───────────────────
+        // Encoding lookback buffer (Section 5.2)
         Deque<BufEntry> buf = new ArrayDeque<>();
 
-        // ── Step (2) ─────────────────────────────────────────────────
+        // Step (2): initialize scan pointers
         int vC = 0, vS = 0;
 
         int vSeeds = v.length >= p ? v.length - p + 1 : 0;
         Hash.RollingHash rhV = vSeeds > 0 ? new Hash.RollingHash(v, 0, p) : null;
         int rhVPos = 0;
 
-        while (vC + p <= v.length) {
+        while (vC + p <= v.length) {  // Step (3): check for end of V
             // Step (4): fingerprint at vC, apply checkpoint test.
             long fpV;
             if (rhV == null) break;
@@ -146,7 +146,7 @@ public final class Correcting {
             if (storedFp != fpV) { vC++; continue; }
             if (!arrayEquals(r, rOffset, v, vC, p)) { vC++; continue; }
 
-            // ── Step (5): extend match forwards and backwards ────────
+            // Step (5): extend match forwards and backwards
             int fwd = p;
             while (vC + fwd < v.length && rOffset + fwd < r.length
                    && v[vC + fwd] == r[rOffset + fwd]) {
@@ -165,7 +165,7 @@ public final class Correcting {
 
             if (ml < p) { vC++; continue; }
 
-            // ── Step (6): encode with correction ─────────────────────
+            // Step (6): encode with correction
             if (vS <= vM) {
                 // (6a) match in unencoded suffix
                 if (vS < vM) {
@@ -226,11 +226,11 @@ public final class Correcting {
                 vS = matchEnd;
             }
 
-            // Step (7)
+            // Step (7): advance past matched region
             vC = matchEnd;
         }
 
-        // ── Step (8) ─────────────────────────────────────────────────
+        // Step (8): flush buffer and trailing add
         for (BufEntry entry : buf) {
             if (!entry.dummy) commands.add(entry.cmd);
         }
