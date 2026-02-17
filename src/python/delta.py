@@ -1150,13 +1150,23 @@ def make_inplace(R: bytes, commands: List[Command],
     adj = [[] for _ in range(n)]
     in_deg = [0] * n
 
+    # O(n log n + E) sweep-line: sort writes by start, then for each read
+    # interval binary-search into the sorted writes to find overlaps.
+    import bisect
+    write_sorted = sorted(range(n), key=lambda j: copy_info[j][2])
+    write_starts = [copy_info[j][2] for j in write_sorted]
+
     for i in range(n):
         si, li = copy_info[i][1], copy_info[i][3]
-        for j in range(n):
+        read_end = si + li
+        # Find first write whose start < read_end
+        hi = bisect.bisect_left(write_starts, read_end)
+        for k in range(hi):
+            j = write_sorted[k]
             if i == j:
                 continue
             dj, lj = copy_info[j][2], copy_info[j][3]
-            if si < dj + lj and dj < si + li:
+            if dj + lj > si:  # write_end > read_start
                 adj[i].append(j)
                 in_deg[j] += 1
 

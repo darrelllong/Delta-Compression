@@ -12,6 +12,19 @@ struct BufEntry {
     dummy: bool,
 }
 
+/// Flat hash-table slot for correcting — sentinel-based (no Option overhead).
+/// Empty slots have fp == u64::MAX.
+#[derive(Clone, Copy)]
+struct CSlot {
+    fp: u64,
+    offset: usize,
+}
+
+const EMPTY_CSLOT: CSlot = CSlot {
+    fp: u64::MAX,
+    offset: 0,
+};
+
 /// Correcting 1.5-Pass algorithm (Section 7, Figure 8) with
 /// fingerprint-based checkpointing (Section 8).
 ///
@@ -107,7 +120,8 @@ pub fn diff_correcting(
     let mut dbg_scan_byte_mismatch: usize = 0;
 
     // Step (1): Build lookup structure for R (first-found policy)
-    let mut h_r_ht: Vec<Option<(u64, usize)>> = if !use_splay { vec![None; cap] } else { Vec::new() };
+    // Flat slot array — fp == u64::MAX marks empty slots.
+    let mut h_r_ht: Vec<CSlot> = if !use_splay { vec![EMPTY_CSLOT; cap] } else { Vec::new() };
     let mut h_r_sp: SplayTree<(u64, usize)> = SplayTree::new(); // (full_fp, offset)
 
     let mut rh_r = if num_seeds > 0 { Some(RollingHash::new(r, 0, p)) } else { None };
@@ -138,8 +152,8 @@ pub fn diff_correcting(
             if i >= cap {
                 continue; // safety
             }
-            if h_r_ht[i].is_none() {
-                h_r_ht[i] = Some((fp, a)); // first-found (Section 7 Step 1)
+            if h_r_ht[i].fp == u64::MAX {
+                h_r_ht[i] = CSlot { fp, offset: a }; // first-found (Section 7 Step 1)
                 dbg_build_stored += 1;
             } else {
                 dbg_build_skipped_collision += 1;
@@ -170,13 +184,14 @@ pub fn diff_correcting(
     }
 
     // Lookup helper
-    let lookup_r = |h_r_ht: &[Option<(u64, usize)>], h_r_sp: &mut SplayTree<(u64, usize)>, fp_v: u64, f_v: u64| -> Option<(u64, usize)> {
+    let lookup_r = |h_r_ht: &[CSlot], h_r_sp: &mut SplayTree<(u64, usize)>, fp_v: u64, f_v: u64| -> Option<(u64, usize)> {
         if use_splay {
             h_r_sp.find(fp_v).copied()
         } else {
             let i = (f_v / m) as usize;
             if i >= cap { return None; }
-            h_r_ht[i]
+            let slot = &h_r_ht[i];
+            if slot.fp == u64::MAX { None } else { Some((slot.fp, slot.offset)) }
         }
     };
 
@@ -257,19 +272,25 @@ pub fn diff_correcting(
 
         // Step (5): extend match forwards and backwards
         // (Section 7, Step 5; Section 8.2 backward extension, p. 349)
-        let mut fwd = p;
-        while v_c + fwd < v.len() && r_offset + fwd < r.len() && v[v_c + fwd] == r[r_offset + fwd]
-        {
-            fwd += 1;
-        }
+        // Pre-compute max extension, compare slices (one bounds check).
+        let max_fwd = (v.len() - v_c).min(r.len() - r_offset);
+        let fwd = p + v[v_c + p..v_c + max_fwd]
+            .iter()
+            .zip(&r[r_offset + p..r_offset + max_fwd])
+            .position(|(a, b)| a != b)
+            .unwrap_or(max_fwd - p);
 
-        let mut bwd: usize = 0;
-        while v_c >= bwd + 1
-            && r_offset >= bwd + 1
-            && v[v_c - bwd - 1] == r[r_offset - bwd - 1]
-        {
-            bwd += 1;
-        }
+        let max_bwd = v_c.min(r_offset);
+        let bwd = if max_bwd == 0 {
+            0
+        } else {
+            v[v_c - max_bwd..v_c]
+                .iter()
+                .rev()
+                .zip(r[r_offset - max_bwd..r_offset].iter().rev())
+                .position(|(a, b)| a != b)
+                .unwrap_or(max_bwd)
+        };
 
         let v_m = v_c - bwd;
         let r_m = r_offset - bwd;

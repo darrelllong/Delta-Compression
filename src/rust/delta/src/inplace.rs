@@ -97,14 +97,24 @@ pub fn make_inplace(
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut in_deg: Vec<usize> = vec![0; n];
 
+    // O(n log n + E) sweep-line: sort writes by start, then for each read
+    // interval binary-search into the sorted writes to find overlaps.
+    let mut write_sorted: Vec<usize> = (0..n).collect();
+    write_sorted.sort_unstable_by_key(|&j| copy_info[j].2);
+    let write_starts: Vec<usize> = write_sorted.iter().map(|&j| copy_info[j].2).collect();
+
     for i in 0..n {
         let (_, si, _, li) = copy_info[i];
-        for j in 0..n {
+        let read_end = si + li;
+        // Find first write whose start >= read_end
+        let hi = write_starts.partition_point(|&ws| ws < read_end);
+        for k in 0..hi {
+            let j = write_sorted[k];
             if i == j {
                 continue;
             }
             let (_, _, dj, lj) = copy_info[j];
-            if si < dj + lj && dj < si + li {
+            if dj + lj > si {
                 adj[i].push(j);
                 in_deg[j] += 1;
             }
