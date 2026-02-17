@@ -56,7 +56,7 @@ std::vector<Command> diff_greedy(
             r.size(), v.size(), p);
     }
 
-    // Step (2)
+    // Step (2): initialize scan pointers
     size_t v_c = 0;
     size_t v_s = 0;
 
@@ -66,7 +66,7 @@ std::vector<Command> diff_greedy(
     if (v.size() >= p) { rh_v_scan.emplace(v, 0, p); rh_v_pos = 0; }
 
     for (;;) {
-        // Step (3)
+        // Step (3): check for end of V
         if (v_c + p > v.size()) break;
 
         uint64_t fp_v;
@@ -123,11 +123,11 @@ std::vector<Command> diff_greedy(
         commands.emplace_back(CopyCmd{best_rm, best_len});
         v_s = v_c + best_len;
 
-        // Step (7)
+        // Step (7): advance past matched region
         v_c += best_len;
     }
 
-    // Step (8)
+    // Step (8): trailing add
     if (v_s < v.size()) {
         commands.emplace_back(AddCmd{
             std::vector<uint8_t>(v.begin() + v_s, v.end())});

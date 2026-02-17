@@ -93,7 +93,7 @@ std::vector<Command> diff_onepass(
         }
     };
 
-    // Step (2)
+    // Step (2): initialize scan pointers
     size_t r_c = 0, v_c = 0, v_s = 0;
 
     // Rolling hashes for O(1) per-position fingerprinting.
@@ -103,7 +103,7 @@ std::vector<Command> diff_onepass(
     if (r.size() >= p) { rh_r.emplace(r, 0, p); rh_r_pos = 0; }
 
     for (;;) {
-        // Step (3)
+        // Step (3): check for end of V and R
         bool can_v = (v_c + p <= v.size());
         bool can_r = (r_c + p <= r.size());
         if (!can_v && !can_r) break;
@@ -200,7 +200,7 @@ std::vector<Command> diff_onepass(
         ++ver;
     }
 
-    // Step (8)
+    // Step (8): trailing add
     if (v_s < v.size()) {
         commands.emplace_back(AddCmd{
             std::vector<uint8_t>(v.begin() + v_s, v.end())});

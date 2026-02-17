@@ -104,7 +104,7 @@ pub fn diff_correcting(
     let mut dbg_scan_fp_mismatch: usize = 0;
     let mut dbg_scan_byte_mismatch: usize = 0;
 
-    // ── Step (1): Build lookup structure for R (first-found policy) ──
+    // Step (1): Build lookup structure for R (first-found policy)
     let mut h_r_ht: Vec<Option<(u64, usize)>> = if !use_splay { vec![None; cap] } else { Vec::new() };
     let mut h_r_sp: SplayTree<(u64, usize)> = SplayTree::new(); // (full_fp, offset)
 
@@ -189,7 +189,7 @@ pub fn diff_correcting(
         }
     };
 
-    // ── Step (2) ─────────────────────────────────────────────────────
+    // Step (2): initialize scan pointers
     let mut v_c: usize = 0;
     let mut v_s: usize = 0;
 
@@ -199,7 +199,7 @@ pub fn diff_correcting(
     let mut rh_v_pos: usize = 0;
 
     loop {
-        // Step (3)
+        // Step (3): check for end of V
         if v_c + p > v.len() {
             break;
         }
@@ -253,7 +253,7 @@ pub fn diff_correcting(
             }
         };
 
-        // ── Step (5): extend match forwards and backwards ────────
+        // Step (5): extend match forwards and backwards
         // (Section 7, Step 5; Section 8.2 backward extension, p. 349)
         let mut fwd = p;
         while v_c + fwd < v.len() && r_offset + fwd < r.len() && v[v_c + fwd] == r[r_offset + fwd]
@@ -280,7 +280,7 @@ pub fn diff_correcting(
             continue;
         }
 
-        // ── Step (6): encode with correction ─────────────────────
+        // Step (6): encode with correction
         if v_s <= v_m {
             // (6a) match is entirely in unencoded suffix (Section 7)
             if v_s < v_m {
@@ -378,11 +378,11 @@ pub fn diff_correcting(
             v_s = match_end;
         }
 
-        // Step (7)
+        // Step (7): advance past matched region
         v_c = match_end;
     }
 
-    // ── Step (8) ─────────────────────────────────────────────────────
+    // Step (8): flush buffer and trailing add
     flush_buf(&mut buf, &mut commands);
     if v_s < v.len() {
         commands.push(Command::Add {

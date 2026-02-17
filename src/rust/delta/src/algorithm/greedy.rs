@@ -50,7 +50,7 @@ pub fn diff_greedy(r: &[u8], v: &[u8], p: usize, _q: usize, verbose: bool, use_s
         );
     }
 
-    // Step (2)
+    // Step (2): initialize scan pointers
     let mut v_c: usize = 0;
     let mut v_s: usize = 0;
 
@@ -59,7 +59,7 @@ pub fn diff_greedy(r: &[u8], v: &[u8], p: usize, _q: usize, verbose: bool, use_s
     let mut rh_v_pos: usize = 0;
 
     loop {
-        // Step (3)
+        // Step (3): check for end of V
         if v_c + p > v.len() {
             break;
         }
@@ -126,11 +126,11 @@ pub fn diff_greedy(r: &[u8], v: &[u8], p: usize, _q: usize, verbose: bool, use_s
         });
         v_s = v_c + best_len;
 
-        // Step (7)
+        // Step (7): advance past matched region
         v_c += best_len;
     }
 
-    // Step (8)
+    // Step (8): trailing add
     if v_s < v.len() {
         commands.push(Command::Add {
             data: v[v_s..].to_vec(),

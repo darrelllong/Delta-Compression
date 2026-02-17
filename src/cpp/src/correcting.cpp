@@ -73,7 +73,7 @@ std::vector<Command> diff_correcting(
     size_t dbg_scan_checkpoints = 0, dbg_scan_match = 0;
     size_t dbg_scan_fp_mismatch = 0, dbg_scan_byte_mismatch = 0;
 
-    // ── Step (1): Build lookup structure for R (first-found policy) ──
+    // Step (1): Build lookup structure for R (first-found policy)
     using HSlot = std::optional<std::pair<uint64_t, size_t>>;
     std::vector<HSlot> h_r_ht;
     SplayTree<std::pair<uint64_t, size_t>> h_r_sp; // (full_fp, offset)
@@ -158,7 +158,7 @@ std::vector<Command> diff_correcting(
         buf.clear();
     };
 
-    // ── Step (2) ─────────────────────────────────────────────────────
+    // Step (2): initialize scan pointers
     size_t v_c = 0;
     size_t v_s = 0;
 
@@ -168,7 +168,7 @@ std::vector<Command> diff_correcting(
     if (v.size() >= p) { rh_v_scan.emplace(v, 0, p); rh_v_pos = 0; }
 
     for (;;) {
-        // Step (3)
+        // Step (3): check for end of V
         if (v_c + p > v.size()) break;
 
         // Step (4): generate footprint at v_c, apply checkpoint test.
@@ -217,7 +217,7 @@ std::vector<Command> diff_correcting(
             continue;
         }
 
-        // ── Step (5): extend match forwards and backwards ────────
+        // Step (5): extend match forwards and backwards
         size_t fwd = p;
         while (v_c + fwd < v.size() && r_offset + fwd < r.size()
                && v[v_c + fwd] == r[r_offset + fwd]) {
@@ -241,7 +241,7 @@ std::vector<Command> diff_correcting(
             continue;
         }
 
-        // ── Step (6): encode with correction ─────────────────────
+        // Step (6): encode with correction
         if (v_s <= v_m) {
             // (6a) match is entirely in unencoded suffix (Section 7)
             if (v_s < v_m) {
@@ -322,11 +322,11 @@ std::vector<Command> diff_correcting(
             v_s = match_end;
         }
 
-        // Step (7)
+        // Step (7): advance past matched region
         v_c = match_end;
     }
 
-    // ── Step (8) ─────────────────────────────────────────────────────
+    // Step (8): flush buffer and trailing add
     flush_buf();
     if (v_s < v.size()) {
         commands.emplace_back(AddCmd{
