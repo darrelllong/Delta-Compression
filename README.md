@@ -331,3 +331,7 @@ exploiting temporal locality in match probes.
   doi       = {10.1145/321796.321811},
 }
 ```
+
+## License
+
+BSD 2-Clause.  See [`LICENSE`](LICENSE).
