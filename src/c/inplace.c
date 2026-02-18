@@ -326,11 +326,19 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 				cycle = find_cycle(adj, adj_len, removed, n,
 				                   &cycle_len);
 				if (cycle && cycle_len > 0) {
+					/* (length, index) for deterministic
+					 * tie-breaking — same composite key
+					 * as the Kahn's PQ above. */
 					victim = cycle[0];
-					for (j = 1; j < cycle_len; j++)
-						if (copies[cycle[j]].length <
-						    copies[victim].length)
-							victim = cycle[j];
+					for (j = 1; j < cycle_len; j++) {
+						size_t cj = cycle[j];
+						if (copies[cj].length <
+						    copies[victim].length ||
+						    (copies[cj].length ==
+						     copies[victim].length &&
+						     cj < victim))
+							victim = cj;
+					}
 					free(cycle);
 				} else {
 					for (i = 0; i < n; i++) {

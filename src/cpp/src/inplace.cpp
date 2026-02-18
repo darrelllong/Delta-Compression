@@ -155,9 +155,12 @@ std::vector<PlacedCommand> make_inplace(
         case CyclePolicy::Localmin: {
             auto cycle = find_cycle(adj, removed, n);
             if (!cycle.empty()) {
+                // Key on (length, index) for deterministic tie-breaking
+                // — same composite key as the Kahn's PQ above.
                 victim = *std::min_element(cycle.begin(), cycle.end(),
                     [&](size_t a, size_t b) {
-                        return copy_info[a].length < copy_info[b].length;
+                        return std::tie(copy_info[a].length, a)
+                             < std::tie(copy_info[b].length, b);
                     });
             } else {
                 for (size_t i = 0; i < n; ++i) {
