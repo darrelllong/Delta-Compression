@@ -56,20 +56,21 @@ delta_diff_onepass(const uint8_t *r, size_t r_len,
 	delta_splay_t h_v_sp, h_r_sp;
 
 	delta_commands_init(&commands);
-	if (v_len == 0) return commands;
+	if (v_len == 0) { return commands; }
 
 	/* --min-copy raises the seed length */
-	if (min_copy > 0 && min_copy > p) p = min_copy;
+	if (min_copy > 0 && min_copy > p) { p = min_copy; }
 
 	/* Auto-size hash table: one slot per p-byte chunk of R */
 	num_seeds = (r_len >= p) ? (r_len - p + 1) : 0;
 	q = delta_next_prime(q > num_seeds / p ? q : num_seeds / p);
 
-	if (verbose)
+	if (verbose) {
 		fprintf(stderr,
 		        "onepass: %s, q=%zu, |R|=%zu, |V|=%zu, seed_len=%zu\n",
 		        use_splay ? "splay tree" : "hash table",
 		        q, r_len, v_len, p);
+	}
 
 	/* Step (1): initialize lookup structures */
 	if (use_splay) {
@@ -104,7 +105,7 @@ delta_diff_onepass(const uint8_t *r, size_t r_len,
 		/* Step (3): check for end of V and R */
 		can_v = (v_c + p <= v_len);
 		can_r = (r_c + p <= r_len);
-		if (!can_v && !can_r) break;
+		if (!can_v && !can_r) { break; }
 		dbg_positions++;
 
 		/* Compute fingerprints */
@@ -232,8 +233,9 @@ skip_r_store:;
 		{
 			size_t ml = 0;
 			while (v_m + ml < v_len && r_m + ml < r_len &&
-			       v[v_m + ml] == r[r_m + ml])
+			       v[v_m + ml] == r[r_m + ml]) {
 				ml++;
+			}
 
 			if (ml < p) {
 				v_c++;
@@ -297,4 +299,3 @@ skip_r_store:;
 
 	return commands;
 }
-
