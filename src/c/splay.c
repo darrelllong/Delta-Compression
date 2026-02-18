@@ -36,7 +36,7 @@ splay(delta_splay_t *t, uint64_t key)
 {
 	delta_splay_node_t header, *l, *r, *tp, *y;
 
-	if (!t->root) return;
+	if (!t->root) { return; }
 
 	memset(&header, 0, sizeof(header));
 	l = r = &header;
@@ -44,28 +44,28 @@ splay(delta_splay_t *t, uint64_t key)
 
 	for (;;) {
 		if (key < tp->key) {
-			if (!tp->left) break;
+			if (!tp->left) { break; }
 			if (key < tp->left->key) {
 				/* Zig-zig: rotate right */
 				y = tp->left;
 				tp->left = y->right;
 				y->right = tp;
 				tp = y;
-				if (!tp->left) break;
+				if (!tp->left) { break; }
 			}
 			/* Link right */
 			r->left = tp;
 			r = tp;
 			tp = tp->left;
 		} else if (key > tp->key) {
-			if (!tp->right) break;
+			if (!tp->right) { break; }
 			if (key > tp->right->key) {
 				/* Zig-zig: rotate left */
 				y = tp->right;
 				tp->right = y->left;
 				y->left = tp;
 				tp = y;
-				if (!tp->right) break;
+				if (!tp->right) { break; }
 			}
 			/* Link left */
 			l->right = tp;
@@ -98,7 +98,7 @@ delta_splay_init(delta_splay_t *t, size_t value_size)
 void *
 delta_splay_find(delta_splay_t *t, uint64_t key)
 {
-	if (!t->root) return NULL;
+	if (!t->root) { return NULL; }
 	splay(t, key);
 	return (t->root->key == key) ? t->root->value : NULL;
 }
@@ -115,8 +115,9 @@ delta_splay_insert_or_get(delta_splay_t *t, uint64_t key, const void *value)
 	}
 
 	splay(t, key);
-	if (t->root->key == key)
+	if (t->root->key == key) {
 		return t->root->value;  /* retain existing */
+	}
 
 	n = node_alloc(key, value, t->value_size);
 	t->size++;
@@ -167,11 +168,12 @@ delta_splay_insert(delta_splay_t *t, uint64_t key, const void *value)
 static void
 destroy(delta_splay_node_t *n, void (*value_free)(void *))
 {
-	if (!n) return;
+	if (!n) { return; }
 	destroy(n->left, value_free);
 	destroy(n->right, value_free);
-	if (value_free)
+	if (value_free) {
 		value_free(n->value);
+	}
 	free(n);
 }
 

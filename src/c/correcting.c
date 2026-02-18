@@ -34,7 +34,7 @@ deque_push_back(buf_deque_t *d, buf_entry_t *e)
 {
 	e->next = NULL;
 	e->prev = d->tail;
-	if (d->tail) d->tail->next = e; else d->head = e;
+	if (d->tail) { d->tail->next = e; } else { d->head = e; }
 	d->tail = e;
 	d->len++;
 }
@@ -43,9 +43,9 @@ static buf_entry_t *
 deque_pop_front(buf_deque_t *d)
 {
 	buf_entry_t *e = d->head;
-	if (!e) return NULL;
+	if (!e) { return NULL; }
 	d->head = e->next;
-	if (d->head) d->head->prev = NULL; else d->tail = NULL;
+	if (d->head) { d->head->prev = NULL; } else { d->tail = NULL; }
 	d->len--;
 	return e;
 }
@@ -54,9 +54,9 @@ static buf_entry_t *
 deque_pop_back(buf_deque_t *d)
 {
 	buf_entry_t *e = d->tail;
-	if (!e) return NULL;
+	if (!e) { return NULL; }
 	d->tail = e->prev;
-	if (d->tail) d->tail->next = NULL; else d->head = NULL;
+	if (d->tail) { d->tail->next = NULL; } else { d->head = NULL; }
 	d->len--;
 	return e;
 }
@@ -111,10 +111,10 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 	delta_splay_t h_r_sp;
 
 	delta_commands_init(&commands);
-	if (v_len == 0) return commands;
+	if (v_len == 0) { return commands; }
 
 	/* --min-copy raises the seed length */
-	if (min_copy > 0 && min_copy > p) p = min_copy;
+	if (min_copy > 0 && min_copy > p) { p = min_copy; }
 
 	/* Checkpointing parameters (Section 8.1, pp. 347-348) */
 	num_seeds = (r_len >= p) ? (r_len - p + 1) : 0;
@@ -168,7 +168,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 				fp = rh_build.value;
 			}
 			f = fp % f_size;
-			if (f % m != k) continue;
+			if (f % m != k) { continue; }
 			dbg_build_passed++;
 
 			if (use_splay) {
@@ -176,13 +176,14 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 				corr_splay_val_t *existing;
 				existing = delta_splay_insert_or_get(
 					&h_r_sp, fp, &sv);
-				if (existing->offset == a)
+				if (existing->offset == a) {
 					dbg_build_stored++;
-				else
+				} else {
 					dbg_build_skipped++;
+				}
 			} else {
 				size_t i = (size_t)(f / m);
-				if (i >= cap) continue;
+				if (i >= cap) { continue; }
 				if (!h_r_ht[i].occupied) {
 					h_r_ht[i].fp = fp;
 					h_r_ht[i].offset = a;
@@ -230,7 +231,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 		bool found;
 
 		/* Step (3): check for end of V */
-		if (v_c + p > v_len) break;
+		if (v_c + p > v_len) { break; }
 
 		/* Step (4): generate fingerprint, apply checkpoint test */
 		fp_v = delta_rh_advance(&rh_v, &rh_v_valid, &rh_v_pos,
@@ -289,13 +290,15 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 		/* Step (5): extend match forwards and backwards */
 		fwd = p;
 		while (v_c + fwd < v_len && r_offset + fwd < r_len &&
-		       v[v_c + fwd] == r[r_offset + fwd])
+		       v[v_c + fwd] == r[r_offset + fwd]) {
 			fwd++;
+		}
 
 		bwd = 0;
 		while (v_c >= bwd + 1 && r_offset >= bwd + 1 &&
-		       v[v_c - bwd - 1] == r[r_offset - bwd - 1])
+		       v[v_c - bwd - 1] == r[r_offset - bwd - 1]) {
 			bwd++;
+		}
 
 		v_m_val = v_c - bwd;
 		r_m = r_offset - bwd;
@@ -337,11 +340,12 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 			}
 			if (buf.len >= buf_cap) {
 				buf_entry_t *oldest = deque_pop_front(&buf);
-				if (oldest && !oldest->dummy)
+				if (oldest && !oldest->dummy) {
 					delta_commands_push(&commands, oldest->cmd);
-				else if (oldest && oldest->dummy &&
-				         oldest->cmd.tag == CMD_ADD)
+				} else if (oldest && oldest->dummy &&
+				           oldest->cmd.tag == CMD_ADD) {
 					free(oldest->cmd.add.data);
+				}
 				free(oldest);
 			}
 			{
@@ -363,8 +367,9 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 				buf_entry_t *tail = buf.tail;
 				if (tail->dummy) {
 					buf_entry_t *e = deque_pop_back(&buf);
-					if (e->cmd.tag == CMD_ADD)
+					if (e->cmd.tag == CMD_ADD) {
 						free(e->cmd.add.data);
+					}
 					free(e);
 					continue;
 				}
@@ -374,8 +379,9 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 					    ? effective_start : tail->v_start;
 					{
 						buf_entry_t *e = deque_pop_back(&buf);
-						if (e->cmd.tag == CMD_ADD)
+						if (e->cmd.tag == CMD_ADD) {
 							free(e->cmd.add.data);
+						}
 						free(e);
 					}
 					continue;
@@ -412,12 +418,13 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 				if (new_len > 0) {
 					if (buf.len >= buf_cap) {
 						buf_entry_t *oldest = deque_pop_front(&buf);
-						if (oldest && !oldest->dummy)
+						if (oldest && !oldest->dummy) {
 							delta_commands_push(&commands,
 							                    oldest->cmd);
-						else if (oldest && oldest->dummy &&
-						         oldest->cmd.tag == CMD_ADD)
+						} else if (oldest && oldest->dummy &&
+						           oldest->cmd.tag == CMD_ADD) {
 							free(oldest->cmd.add.data);
+						}
 						free(oldest);
 					}
 					{
@@ -442,10 +449,11 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 	/* Step (8): flush buffer and trailing add */
 	while (buf.head) {
 		buf_entry_t *e = deque_pop_front(&buf);
-		if (!e->dummy)
+		if (!e->dummy) {
 			delta_commands_push(&commands, e->cmd);
-		else if (e->cmd.tag == CMD_ADD)
+		} else if (e->cmd.tag == CMD_ADD) {
 			free(e->cmd.add.data);
+		}
 		free(e);
 	}
 	if (v_s < v_len) {
@@ -475,10 +483,11 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 	}
 
 	/* Cleanup */
-	if (use_splay)
+	if (use_splay) {
 		delta_splay_free(&h_r_sp);
-	else
+	} else {
 		free(h_r_ht);
+	}
 
 	return commands;
 }

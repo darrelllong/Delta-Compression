@@ -32,10 +32,10 @@ find_cycle(size_t **adj, size_t *adj_len, const bool *removed,
 
 	for (start = 0; start < n; start++) {
 		size_t i;
-		if (removed[start]) continue;
+		if (removed[start]) { continue; }
 
 		/* Reset visited for this traversal */
-		for (i = 0; i < n; i++) visited_step[i] = (size_t)-1;
+		for (i = 0; i < n; i++) { visited_step[i] = (size_t)-1; }
 
 		path = NULL;
 		path_len = 0;
@@ -75,7 +75,7 @@ find_cycle(size_t **adj, size_t *adj_len, const bool *removed,
 						break;
 					}
 				}
-				if (next == (size_t)-1) break;
+				if (next == (size_t)-1) { break; }
 				c = next;
 			}
 		}
@@ -112,7 +112,7 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 
 	delta_placed_commands_init(&result);
 
-	if (cmds->len == 0) return result;
+	if (cmds->len == 0) { return result; }
 
 	(void)r_len;
 
@@ -175,7 +175,7 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 	{
 		size_t *write_sorted = delta_malloc(n * sizeof(*write_sorted));
 		size_t *write_starts = delta_malloc(n * sizeof(*write_starts));
-		for (i = 0; i < n; i++) write_sorted[i] = i;
+		for (i = 0; i < n; i++) { write_sorted[i] = i; }
 
 		/* Sort write_sorted by dst (insertion sort for simplicity;
 		 * qsort would need a global or thread-local for copies ptr) */
@@ -189,8 +189,9 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 			}
 			write_sorted[j] = tmp;
 		}
-		for (i = 0; i < n; i++)
+		for (i = 0; i < n; i++) {
 			write_starts[i] = copies[write_sorted[i]].dst;
+		}
 
 		for (i = 0; i < n; i++) {
 			size_t read_end = copies[i].src + copies[i].length;
@@ -198,14 +199,15 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 			size_t lo = 0, hi = n;
 			while (lo < hi) {
 				size_t mid = lo + (hi - lo) / 2;
-				if (write_starts[mid] < read_end)
+				if (write_starts[mid] < read_end) {
 					lo = mid + 1;
-				else
+				} else {
 					hi = mid;
+				}
 			}
 			for (j = 0; j < lo; j++) {
 				size_t jj = write_sorted[j];
-				if (i == jj) continue;
+				if (i == jj) { continue; }
 				if (copies[jj].dst + copies[jj].length >
 				    copies[i].src) {
 					if (adj_len[i] == adj_cap[i]) {
@@ -293,7 +295,7 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 			heap_entry_t top;
 			HEAP_POP(top);
 			size_t v = top.idx;
-			if (removed[v]) continue;
+			if (removed[v]) { continue; }
 			removed[v] = true;
 			topo_order[topo_len++] = v;
 			processed++;
@@ -311,7 +313,7 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 			}
 		}
 
-		if (processed >= n) break;
+		if (processed >= n) { break; }
 
 		/* Cycle detected — pick a victim */
 		{
@@ -336,8 +338,9 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 						    copies[victim].length ||
 						    (copies[cj].length ==
 						     copies[victim].length &&
-						     cj < victim))
+						     cj < victim)) {
 							victim = cj;
+						}
 					}
 					free(cycle);
 				} else {
@@ -410,7 +413,7 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 	}
 
 	/* Cleanup */
-	for (i = 0; i < n; i++) free(adj[i]);
+	for (i = 0; i < n; i++) { free(adj[i]); }
 	free(adj); free(adj_len); free(adj_cap);
 	free(in_deg); free(removed);
 	free(topo_order); free(heap);

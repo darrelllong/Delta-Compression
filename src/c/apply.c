@@ -31,9 +31,11 @@ void
 delta_commands_free(delta_commands_t *c)
 {
 	size_t i;
-	for (i = 0; i < c->len; i++)
-		if (c->data[i].tag == CMD_ADD)
+	for (i = 0; i < c->len; i++) {
+		if (c->data[i].tag == CMD_ADD) {
 			free(c->data[i].add.data);
+		}
+	}
 	free(c->data);
 	c->data = NULL;
 	c->len = c->cap = 0;
@@ -62,9 +64,11 @@ void
 delta_placed_commands_free(delta_placed_commands_t *c)
 {
 	size_t i;
-	for (i = 0; i < c->len; i++)
-		if (c->data[i].tag == PCMD_ADD)
+	for (i = 0; i < c->len; i++) {
+		if (c->data[i].tag == PCMD_ADD) {
 			free(c->data[i].add.data);
+		}
+	}
 	free(c->data);
 	c->data = NULL;
 	c->len = c->cap = 0;
@@ -118,10 +122,11 @@ delta_output_size(const delta_commands_t *cmds)
 	size_t total = 0;
 	size_t i;
 	for (i = 0; i < cmds->len; i++) {
-		if (cmds->data[i].tag == CMD_COPY)
+		if (cmds->data[i].tag == CMD_COPY) {
 			total += cmds->data[i].copy.length;
-		else
+		} else {
 			total += cmds->data[i].add.length;
+		}
 	}
 	return total;
 }
@@ -168,11 +173,11 @@ delta_unplace_commands(const delta_placed_commands_t *placed)
 	size_t *indices;
 
 	delta_commands_init(&cmds);
-	if (placed->len == 0) return cmds;
+	if (placed->len == 0) { return cmds; }
 
 	/* Sort indices by destination offset. */
 	indices = delta_malloc(placed->len * sizeof(*indices));
-	for (i = 0; i < placed->len; i++) indices[i] = i;
+	for (i = 0; i < placed->len; i++) { indices[i] = i; }
 
 	/* Insertion sort by dst (qsort needs a comparator that can access
 	 * placed->data, but C qsort lacks a context pointer portably). */
@@ -180,18 +185,20 @@ delta_unplace_commands(const delta_placed_commands_t *placed)
 		size_t tmp = indices[i];
 		size_t key;
 		size_t j = i;
-		if (placed->data[tmp].tag == PCMD_COPY)
+		if (placed->data[tmp].tag == PCMD_COPY) {
 			key = placed->data[tmp].copy.dst;
-		else
+		} else {
 			key = placed->data[tmp].add.dst;
+		}
 		while (j > 0) {
 			size_t prev = indices[j - 1];
 			size_t prev_dst;
-			if (placed->data[prev].tag == PCMD_COPY)
+			if (placed->data[prev].tag == PCMD_COPY) {
 				prev_dst = placed->data[prev].copy.dst;
-			else
+			} else {
 				prev_dst = placed->data[prev].add.dst;
-			if (prev_dst <= key) break;
+			}
+			if (prev_dst <= key) { break; }
 			indices[j] = indices[j - 1];
 			j--;
 		}
@@ -231,12 +238,12 @@ delta_apply_placed(const uint8_t *r, const delta_placed_commands_t *cmds,
 			memcpy(&out[cmd->copy.dst], &r[cmd->copy.src],
 			       cmd->copy.length);
 			size_t end = cmd->copy.dst + cmd->copy.length;
-			if (end > max_written) max_written = end;
+			if (end > max_written) { max_written = end; }
 		} else {
 			memcpy(&out[cmd->add.dst], cmd->add.data,
 			       cmd->add.length);
 			size_t end = cmd->add.dst + cmd->add.length;
-			if (end > max_written) max_written = end;
+			if (end > max_written) { max_written = end; }
 		}
 	}
 	return max_written;
@@ -250,12 +257,13 @@ delta_apply_placed_inplace(const delta_placed_commands_t *cmds, uint8_t *buf)
 	size_t i;
 	for (i = 0; i < cmds->len; i++) {
 		const delta_placed_command_t *cmd = &cmds->data[i];
-		if (cmd->tag == PCMD_COPY)
+		if (cmd->tag == PCMD_COPY) {
 			memmove(&buf[cmd->copy.dst], &buf[cmd->copy.src],
 			        cmd->copy.length);
-		else
+		} else {
 			memcpy(&buf[cmd->add.dst], cmd->add.data,
 			       cmd->add.length);
+		}
 	}
 }
 

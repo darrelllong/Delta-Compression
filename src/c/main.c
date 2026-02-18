@@ -60,10 +60,12 @@ map_file(const char *path)
 static void
 unmap_file(mapped_file_t *mf)
 {
-	if (mf->data && mf->data != MAP_FAILED)
+	if (mf->data && mf->data != MAP_FAILED) {
 		munmap(mf->data, mf->size);
-	if (mf->fd >= 0)
+	}
+	if (mf->fd >= 0) {
 		close(mf->fd);
+	}
 	mf->data = NULL;
 	mf->size = 0;
 	mf->fd = -1;
@@ -149,11 +151,11 @@ usage(void)
 int
 main(int argc, char **argv)
 {
-	if (argc < 2) usage();
+	if (argc < 2) { usage(); }
 
 	if (strcmp(argv[1], "encode") == 0) {
 		/* encode <algo> <ref> <ver> <delta> [options] */
-		if (argc < 6) usage();
+		if (argc < 6) { usage(); }
 
 		const char *algo_str = argv[2];
 		const char *ref_path = argv[3];
@@ -161,13 +163,13 @@ main(int argc, char **argv)
 		const char *delta_path = argv[5];
 
 		delta_algorithm_t algo;
-		if (strcmp(algo_str, "greedy") == 0)
+		if (strcmp(algo_str, "greedy") == 0) {
 			algo = ALGO_GREEDY;
-		else if (strcmp(algo_str, "onepass") == 0)
+		} else if (strcmp(algo_str, "onepass") == 0) {
 			algo = ALGO_ONEPASS;
-		else if (strcmp(algo_str, "correcting") == 0)
+		} else if (strcmp(algo_str, "correcting") == 0) {
 			algo = ALGO_CORRECTING;
-		else {
+		} else {
 			fprintf(stderr, "Unknown algorithm: %s\n", algo_str);
 			return 1;
 		}
@@ -200,8 +202,9 @@ main(int argc, char **argv)
 			case 'i': flags = delta_flag_set(flags, DELTA_OPT_INPLACE); break;
 			case 'p':
 				policy_str = optarg;
-				if (strcmp(optarg, "constant") == 0)
+				if (strcmp(optarg, "constant") == 0) {
 					policy = POLICY_CONSTANT;
+				}
 				break;
 			case 'v': flags = delta_flag_set(flags, DELTA_OPT_VERBOSE); break;
 			case 'y': flags = delta_flag_set(flags, DELTA_OPT_SPLAY); break;
@@ -230,11 +233,12 @@ main(int argc, char **argv)
 			v_file.data, v_file.size, &diff_opts);
 
 		delta_placed_commands_t placed;
-		if (inplace)
+		if (inplace) {
 			placed = delta_make_inplace(r_file.data, r_file.size,
 			                            &cmds, policy);
-		else
+		} else {
 			placed = delta_place_commands(&cmds);
+		}
 
 		clock_gettime(CLOCK_MONOTONIC, &t1);
 		double elapsed = elapsed_sec(&t0, &t1);
@@ -247,12 +251,13 @@ main(int argc, char **argv)
 		double ratio = v_file.size == 0 ? 0.0
 		    : (double)delta_buf.len / v_file.size;
 
-		if (inplace)
+		if (inplace) {
 			printf("Algorithm:    %s%s + in-place (%s)\n",
 			       algo_str, splay ? " [splay]" : "", policy_str);
-		else
+		} else {
 			printf("Algorithm:    %s%s\n",
 			       algo_str, splay ? " [splay]" : "");
+		}
 		printf("Reference:    %s (%zu bytes)\n", ref_path, r_file.size);
 		printf("Version:      %s (%zu bytes)\n", ver_path, v_file.size);
 		printf("Delta:        %s (%zu bytes)\n", delta_path, delta_buf.len);
@@ -270,7 +275,7 @@ main(int argc, char **argv)
 		unmap_file(&v_file);
 
 	} else if (strcmp(argv[1], "decode") == 0) {
-		if (argc < 5) usage();
+		if (argc < 5) { usage(); }
 
 		const char *ref_path = argv[2];
 		const char *delta_path = argv[3];
@@ -312,7 +317,7 @@ main(int argc, char **argv)
 		unmap_file(&r_file);
 
 	} else if (strcmp(argv[1], "info") == 0) {
-		if (argc < 3) usage();
+		if (argc < 3) { usage(); }
 
 		const char *delta_path = argv[2];
 		size_t delta_len;
@@ -335,7 +340,7 @@ main(int argc, char **argv)
 		free(delta_data);
 
 	} else if (strcmp(argv[1], "inplace") == 0) {
-		if (argc < 5) usage();
+		if (argc < 5) { usage(); }
 
 		const char *ref_path = argv[2];
 		const char *delta_in_path = argv[3];
@@ -351,8 +356,9 @@ main(int argc, char **argv)
 				if (strcmp(argv[a], "--policy") == 0 &&
 				    a + 1 < argc) {
 					policy_str = argv[++a];
-					if (strcmp(policy_str, "constant") == 0)
+					if (strcmp(policy_str, "constant") == 0) {
 						policy = POLICY_CONSTANT;
+					}
 				}
 			}
 		}

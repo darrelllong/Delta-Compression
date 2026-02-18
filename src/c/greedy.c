@@ -104,10 +104,10 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 	size_t min_copy = opts->min_copy;
 
 	delta_commands_init(&commands);
-	if (v_len == 0) return commands;
+	if (v_len == 0) { return commands; }
 
 	/* --min-copy raises the seed length */
-	if (min_copy > 0 && min_copy > p) p = min_copy;
+	if (min_copy > 0 && min_copy > p) { p = min_copy; }
 
 	num_seeds = (r_len >= p) ? (r_len - p + 1) : 0;
 
@@ -147,10 +147,11 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 		}
 	}
 
-	if (verbose)
+	if (verbose) {
 		fprintf(stderr, "greedy: %s, |R|=%zu, |V|=%zu, seed_len=%zu\n",
 		        use_splay ? "splay tree" : "hash table",
 		        r_len, v_len, p);
+	}
 
 	/* Step (2): initialize scan pointers */
 	v_c = 0;
@@ -167,7 +168,7 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 		size_t best_len = 0, best_rm = 0;
 
 		/* Step (3): check for end of V */
-		if (v_c + p > v_len) break;
+		if (v_c + p > v_len) { break; }
 
 		/* Compute V fingerprint at v_c */
 		fp_v = delta_rh_advance(&rh_v, &rh_v_valid, &rh_v_pos,
@@ -181,13 +182,15 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 				for (k = 0; k < val->len; k++) {
 					size_t r_cand = val->offsets[k];
 					size_t ml;
-					if (memcmp(&r[r_cand], &v[v_c], p) != 0)
+					if (memcmp(&r[r_cand], &v[v_c], p) != 0) {
 						continue;
+					}
 					ml = p;
 					while (v_c + ml < v_len &&
 					       r_cand + ml < r_len &&
-					       v[v_c + ml] == r[r_cand + ml])
+					       v[v_c + ml] == r[r_cand + ml]) {
 						ml++;
+					}
 					if (ml > best_len) {
 						best_len = ml;
 						best_rm = r_cand;
@@ -199,14 +202,16 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 			greedy_entry_t *e;
 			for (e = ht.buckets[idx]; e; e = e->next) {
 				size_t ml;
-				if (e->fp != fp_v) continue;
-				if (memcmp(&r[e->offset], &v[v_c], p) != 0)
+				if (e->fp != fp_v) { continue; }
+				if (memcmp(&r[e->offset], &v[v_c], p) != 0) {
 					continue;
+				}
 				ml = p;
 				while (v_c + ml < v_len &&
 				       e->offset + ml < r_len &&
-				       v[v_c + ml] == r[e->offset + ml])
+				       v[v_c + ml] == r[e->offset + ml]) {
 					ml++;
+				}
 				if (ml > best_len) {
 					best_len = ml;
 					best_rm = e->offset;
@@ -251,8 +256,9 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 		delta_commands_push(&commands, cmd);
 	}
 
-	if (verbose)
+	if (verbose) {
 		delta_print_command_stats(&commands);
+	}
 
 	/* Cleanup */
 	if (use_splay) {

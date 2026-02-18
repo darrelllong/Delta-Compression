@@ -17,9 +17,9 @@ delta_mod_mersenne(__uint128_t x)
 {
 	__uint128_t m = DELTA_HASH_MOD;
 	__uint128_t r = (x >> 61) + (x & m);
-	if (r >= m) r -= m;
+	if (r >= m) { r -= m; }
 	r = (r >> 61) + (r & m);
-	if (r >= m) r -= m;
+	if (r >= m) { r -= m; }
 	return (uint64_t)r;
 }
 
@@ -30,9 +30,10 @@ delta_fingerprint(const uint8_t *data, size_t offset, size_t p)
 {
 	uint64_t h = 0;
 	size_t i;
-	for (i = 0; i < p; i++)
+	for (i = 0; i < p; i++) {
 		h = delta_mod_mersenne((__uint128_t)h * DELTA_HASH_BASE +
 		                       data[offset + i]);
+	}
 	return h;
 }
 
@@ -44,11 +45,12 @@ delta_precompute_bp(size_t p)
 	uint64_t result = 1;
 	uint64_t base = DELTA_HASH_BASE;
 	size_t exp;
-	if (p == 0) return 1;
+	if (p == 0) { return 1; }
 	exp = p - 1;
 	while (exp > 0) {
-		if (exp & 1)
+		if (exp & 1) {
 			result = delta_mod_mersenne((__uint128_t)result * base);
+		}
 		base = delta_mod_mersenne((__uint128_t)base * base);
 		exp >>= 1;
 	}
@@ -103,11 +105,12 @@ power_mod(uint64_t base, uint64_t exp, uint64_t modulus)
 	__uint128_t m = modulus;
 	__uint128_t result = 1;
 	__uint128_t b;
-	if (modulus == 1) return 0;
+	if (modulus == 1) { return 0; }
 	b = (__uint128_t)base % m;
 	while (exp > 0) {
-		if (exp & 1)
+		if (exp & 1) {
 			result = result * b % m;
+		}
 		exp >>= 1;
 		b = b * b % m;
 	}
@@ -137,8 +140,9 @@ witness(uint64_t a, uint64_t n)
 	x = power_mod(a, d, n);
 	for (i = 0; i < r; i++) {
 		y = power_mod(x, 2, n);
-		if (y == 1 && x != 1 && x != n - 1)
+		if (y == 1 && x != 1 && x != n - 1) {
 			return true;
+		}
 		x = y;
 	}
 	return x != 1;
@@ -162,13 +166,13 @@ delta_is_prime(size_t n)
 	uint64_t n64 = (uint64_t)n;
 	uint64_t rng_state;
 	uint32_t i;
-	if (n64 < 2 || (n64 != 2 && n64 % 2 == 0)) return false;
-	if (n64 == 2 || n64 == 3) return true;
+	if (n64 < 2 || (n64 != 2 && n64 % 2 == 0)) { return false; }
+	if (n64 == 2 || n64 == 3) { return true; }
 
 	rng_state = n64 ^ 0xdeadbeefcafebabeULL ^ (uint64_t)time(NULL);
 	for (i = 0; i < 100; i++) {
 		uint64_t a = xorshift64(&rng_state) % (n64 - 3) + 2;
-		if (witness(a, n64)) return false;
+		if (witness(a, n64)) { return false; }
 	}
 	return true;
 }
@@ -177,9 +181,10 @@ size_t
 delta_next_prime(size_t n)
 {
 	size_t c;
-	if (n <= 2) return 2;
+	if (n <= 2) { return 2; }
 	c = (n % 2 == 0) ? n + 1 : n;
-	while (!delta_is_prime(c))
+	while (!delta_is_prime(c)) {
 		c += 2;
+	}
 	return c;
 }
