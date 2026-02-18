@@ -259,6 +259,19 @@ HOWTO.md
   doi       = {10.1109/TKDE.2003.1209013},
 }
 
+@article{kahn1962topological,
+  author    = {Kahn, Arthur B.},
+  title     = {Topological Sorting of Large Networks},
+  journal   = {Communications of the ACM},
+  volume    = {5},
+  number    = {11},
+  pages     = {558--562},
+  year      = {1962},
+  month     = nov,
+  publisher = {ACM},
+  doi       = {10.1145/368996.369025},
+}
+
 @article{karp1987efficient,
   author    = {Karp, Richard M. and Rabin, Michael O.},
   title     = {Efficient Randomized Pattern-Matching Algorithms},
@@ -308,6 +321,19 @@ HOWTO.md
   doi       = {10.1002/spe.4380151102},
 }
 
+@article{sleator1985self,
+  author    = {Sleator, Daniel D. and Tarjan, Robert E.},
+  title     = {Self-Adjusting Binary Search Trees},
+  journal   = {Journal of the ACM},
+  volume    = {32},
+  number    = {3},
+  pages     = {652--686},
+  year      = {1985},
+  month     = jul,
+  publisher = {ACM},
+  doi       = {10.1145/3828.3835},
+}
+
 @inproceedings{reichenberger1991delta,
   author    = {Reichenberger, Christoph},
   title     = {Delta Storage for Arbitrary Non-Text Files},
@@ -353,4 +379,7 @@ it to block moves — the model solved by the algorithms here.
 Reichenberger and Miller-Myers are the prior O(n^2) optimal algorithms
 that Ajtai et al. improve upon.  Rabin's paper describes the
 Miller-Rabin probabilistic primality test used for hash table
-auto-sizing.
+auto-sizing.  Kahn's algorithm is used for topological sorting of the
+CRWI digraph during in-place conversion.  Sleator and Tarjan's splay
+tree provides an alternative to hash tables for fingerprint lookup,
+exploiting temporal locality in match probes.

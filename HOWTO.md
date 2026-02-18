@@ -612,6 +612,10 @@ hash table, fewer checkpoint operations).
   *IEEE Transactions on Knowledge and Data Engineering*, 15(4):973-984,
   Jul/Aug 2003.
 
+- A.B. Kahn.
+  Topological sorting of large networks.
+  *Communications of the ACM*, 5(11):558-562, November 1962.
+
 - R.M. Karp and M.O. Rabin.
   Efficient randomized pattern-matching algorithms.
   *IBM Journal of Research and Development*, 31(2):249-260, March 1987.
