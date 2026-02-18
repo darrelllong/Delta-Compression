@@ -102,7 +102,6 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 	size_t buf_cap = opts->buf_cap;
 	bool verbose = delta_flag_get(opts->flags, DELTA_OPT_VERBOSE);
 	bool use_splay = delta_flag_get(opts->flags, DELTA_OPT_SPLAY);
-	size_t min_copy = opts->min_copy;
 
 	/* Hash table path */
 	corr_slot_t *h_r_ht = NULL;
@@ -112,9 +111,6 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 
 	delta_commands_init(&commands);
 	if (v_len == 0) { return commands; }
-
-	/* --min-copy raises the seed length */
-	if (min_copy > 0 && min_copy > p) { p = min_copy; }
 
 	/* Checkpointing parameters (Section 8.1, pp. 347-348) */
 	num_seeds = (r_len >= p) ? (r_len - p + 1) : 0;

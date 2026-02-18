@@ -24,9 +24,6 @@ public final class Greedy {
         int p = opts.p;
         boolean verbose = opts.verbose;
         boolean useSplay = opts.useSplay;
-        int minCopy = opts.minCopy;
-
-        if (minCopy > 0) p = Math.max(p, minCopy);
 
         // Step (1): build lookup structure for R keyed by full fingerprint.
         Map<Long, List<Integer>> hrHt = useSplay ? null : new HashMap<>();

@@ -41,9 +41,6 @@ public final class Correcting {
         int bufCap = opts.bufCap;
         boolean verbose = opts.verbose;
         boolean useSplay = opts.useSplay;
-        int minCopy = opts.minCopy;
-
-        if (minCopy > 0) p = Math.max(p, minCopy);
 
         // ── Checkpointing parameters (Section 8.1, pp. 347-348) ─────
         int numSeeds = r.length >= p ? r.length - p + 1 : 0;

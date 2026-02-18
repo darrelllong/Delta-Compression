@@ -20,13 +20,9 @@ std::vector<Command> diff_onepass(
     auto q = opts.q;
     bool verbose = opts.verbose;
     bool use_splay = opts.use_splay;
-    size_t min_copy = opts.min_copy;
 
     std::vector<Command> commands;
     if (v.empty()) { return commands; }
-    // --min-copy raises the seed length so we never fingerprint at a
-    // granularity finer than the minimum copy threshold.
-    if (min_copy > 0 && min_copy > p) { p = min_copy; }
 
     // Auto-size hash table: one slot per p-byte chunk of R (floor = q).
     size_t num_seeds = (r.size() >= p) ? (r.size() - p + 1) : 0;
@@ -181,12 +177,6 @@ std::vector<Command> diff_onepass(
             ++ml;
         }
 
-        // Filter: skip matches shorter than --min-copy
-        if (ml < p) {
-            ++v_c;
-            ++r_c;
-            continue;
-        }
 
         // Step (6): encode
         if (v_s < v_m) {

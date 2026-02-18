@@ -119,7 +119,6 @@ struct DiffOptions {
     size_t buf_cap = DELTA_BUF_CAP;
     bool verbose = false;
     bool use_splay = false;
-    size_t min_copy = 0;
 };
 
 } // namespace delta

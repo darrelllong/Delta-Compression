@@ -20,13 +20,9 @@ std::vector<Command> diff_greedy(
     auto p = opts.p;
     bool verbose = opts.verbose;
     bool use_splay = opts.use_splay;
-    size_t min_copy = opts.min_copy;
 
     std::vector<Command> commands;
     if (v.empty()) { return commands; }
-    // --min-copy raises the seed length so we never fingerprint at a
-    // granularity finer than the minimum copy threshold.
-    if (min_copy > 0 && min_copy > p) { p = min_copy; }
 
     // Step (1): Build lookup structure for R keyed by full fingerprint.
     // Hash table (default) or splay tree (--splay).

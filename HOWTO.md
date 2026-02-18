@@ -196,32 +196,6 @@ delta encode correcting old.bin new.bin delta.bin --verbose
 delta inplace old.bin standard.delta inplace.delta --verbose
 ```
 
-### --min-copy (default: 0)
-
-Minimum match length for COPY commands.  When `--min-copy` exceeds
-`--seed-len`, the effective seed length is raised to `--min-copy` so
-that the rolling hash window itself is larger — no computation is
-wasted on short matches that would be discarded.  When set to 0 (the
-default), the seed length is used as the natural minimum.
-
-```bash
-# Only emit copies of 128+ bytes (seed length raised to 128)
-delta encode onepass old.bin new.bin delta.bin --min-copy 128
-
-# Only emit copies of 256+ bytes (aggressive filtering)
-delta encode correcting old.bin new.bin delta.bin --min-copy 256
-```
-
-With a larger effective seed length, fewer seeds exist, the hash table
-is smaller (less memory), and fewer checkpoint operations are needed.
-On 871 MB kernel tarballs, `--min-copy 128` reduces the correcting
-hash table from 2.5 GB to 311 MB and runs in 4.1s versus 5.3s for the
-default (Rust).  The tradeoff is a larger delta: short matches are absorbed
-into ADD commands, increasing delta size from 7 MB to 13 MB.
-
-The flag does not affect the delta format — deltas produced with any
-`--min-copy` value are decoded identically by all five implementations.
-
 ### --splay (Rust, C++, C, and Java)
 
 Replace the hash table with a Tarjan-Sleator splay tree for fingerprint
@@ -612,25 +586,18 @@ between C and Python.  C and C++ are within measurement noise of each
 other on correcting; C edges C++ slightly on onepass.  Python is
 60–120× slower than Rust.
 
-**Rust, default vs `--min-copy 128` vs `--splay`**
+**Rust, default vs `--splay` (onepass)**
 
 | Algorithm | Flags | Time | Delta | Copies | Median copy |
 |-----------|-------|-----:|------:|-------:|------------:|
 | onepass | (default) | 0.6s | 5.1 MB | 205,030 | 89 B |
-| onepass | `--min-copy 128` | 0.5s | 11.5 MB | 68,478 | 3,950 B |
 | onepass | `--splay` | 0.5s | 5.1 MB | 205,030 | 89 B |
 | correcting | (default) | 5.3s | 7.0 MB | 243,546 | 91 B |
-| correcting | `--min-copy 128` | 4.1s | 13.0 MB | 72,446 | 3,438 B |
 
 The copy-length distribution is heavy-tailed: median is 89–91 bytes
 (barely above the 16-byte seed length), but the mean is 3,500–4,200
 bytes and the maximum reaches 14 MB.  Most copies are short, but most
 *bytes* come from long copies.
-
-With `--min-copy 128`, the ~137,000 short copies are absorbed into ADD
-commands.  The delta grows from 5–7 MB to 11–13 MB, but encoding is
-faster because the effective seed length is 128 (fewer seeds, smaller
-hash table, fewer checkpoint operations).
 
 ### Cross-version kernel benchmark (linux-5.1.x, C++)
 

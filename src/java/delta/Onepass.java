@@ -26,9 +26,6 @@ public final class Onepass {
         int q = opts.q;
         boolean verbose = opts.verbose;
         boolean useSplay = opts.useSplay;
-        int minCopy = opts.minCopy;
-
-        if (minCopy > 0) p = Math.max(p, minCopy);
 
         // Auto-size hash table: one slot per p-byte chunk of R (floor = q).
         int numSeeds = r.length >= p ? r.length - p + 1 : 0;

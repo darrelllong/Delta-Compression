@@ -99,19 +99,6 @@ for algo in greedy onepass correcting; do
 done
 
 echo ""
-echo "=== --min-copy tests ==="
-
-for mc in 32 64 128; do
-    for algo in onepass correcting; do
-        d="$tmpdir/${algo}-mc${mc}.delta"
-        out="$tmpdir/${algo}-mc${mc}.out"
-        $DELTA encode $algo "$ref" "$ver" "$d" --min-copy $mc
-        $DELTA decode "$ref" "$d" "$out"
-        check "$algo --min-copy=$mc roundtrip" diff -q "$ver" "$out"
-    done
-done
-
-echo ""
 echo "=== Info command ==="
 
 d="$tmpdir/onepass.delta"

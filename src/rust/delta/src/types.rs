@@ -111,7 +111,6 @@ pub struct DiffOptions {
     pub buf_cap: usize,
     pub verbose: bool,
     pub use_splay: bool,
-    pub min_copy: usize,
 }
 
 impl Default for DiffOptions {
@@ -122,7 +121,6 @@ impl Default for DiffOptions {
             buf_cap: DELTA_BUF_CAP,
             verbose: false,
             use_splay: false,
-            min_copy: 0,
         }
     }
 }
