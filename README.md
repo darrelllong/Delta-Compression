@@ -214,7 +214,7 @@ exploiting temporal locality in match probes.
   number    = {4},
   pages     = {973--984},
   year      = {2003},
-  month     = {jul/aug},
+  month     = jul # {/} # aug,
   publisher = {IEEE},
   doi       = {10.1109/TKDE.2003.1209013},
 }
