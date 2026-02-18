@@ -601,6 +601,51 @@ commands.  The delta grows from 5–7 MB to 11–13 MB, but encoding is
 faster because the effective seed length is 128 (fewer seeds, smaller
 hash table, fewer checkpoint operations).
 
+### Cross-version kernel benchmark (linux-5.1.x, C++)
+
+All six ordered pairs of linux-5.1.1, 5.1.2, and 5.1.3 (~831 MB each),
+encoded with the C++ implementation (default flags):
+
+**onepass**
+
+| Ref → Ver | Ratio | Time |
+|-----------|------:|-----:|
+| 5.1.1 → 5.1.2 | 0.54% | 3.8s |
+| 5.1.1 → 5.1.3 | 0.55% | 2.1s |
+| 5.1.2 → 5.1.1 | 0.53% | 0.8s |
+| 5.1.2 → 5.1.3 | 0.47% | 0.7s |
+| 5.1.3 → 5.1.1 | 0.54% | 0.8s |
+| 5.1.3 → 5.1.2 | 0.47% | 0.7s |
+
+**correcting**
+
+| Ref → Ver | Ratio | Time |
+|-----------|------:|-----:|
+| 5.1.1 → 5.1.2 | 0.86% | 13.8s |
+| 5.1.1 → 5.1.3 | 0.81% | 13.9s |
+| 5.1.2 → 5.1.1 | 0.81% | 13.9s |
+| 5.1.2 → 5.1.3 | 1.02% | 14.0s |
+| 5.1.3 → 5.1.1 | 0.78% | 14.0s |
+| 5.1.3 → 5.1.2 | 0.85% | 14.0s |
+
+Onepass is 4–20× faster than correcting and achieves better ratios on
+every pair.  The 5.1.1 → 5.1.2 onepass time (3.8s) is elevated by a
+cold mmap cache on the first run; subsequent pairs drop to 0.7–0.8s.
+Correcting times are nearly uniform (~14s) because encoding is dominated
+by the build phase over the 831 MB reference.
+
+### Effect of `--splay` on correcting compression ratio
+
+The hash table for correcting uses `f / m` (where `f = fp % |F|`) as the
+slot index, so two fingerprints with the same `f / m` collide and only
+the first is retained (first-found policy).  The splay tree keys on the
+full 64-bit fingerprint, so collisions are negligible: every
+checkpoint-passing R seed gets its own node.  The result is that
+`--splay` stores more R fingerprints and finds more matches during the V
+scan, yielding slightly better compression at the cost of O(log n)
+lookups instead of O(1).  On the 22 MB literary corpus benchmark,
+correcting+hash gives 22.94% and correcting+splay gives 22.39%.
+
 ## References
 
 - M. Ajtai, R. Burns, R. Fagin, D.D.E. Long, and L. Stockmeyer.
