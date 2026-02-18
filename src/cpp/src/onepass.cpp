@@ -23,10 +23,10 @@ std::vector<Command> diff_onepass(
     size_t min_copy = opts.min_copy;
 
     std::vector<Command> commands;
-    if (v.empty()) return commands;
+    if (v.empty()) { return commands; }
     // --min-copy raises the seed length so we never fingerprint at a
     // granularity finer than the minimum copy threshold.
-    if (min_copy > 0 && min_copy > p) p = min_copy;
+    if (min_copy > 0 && min_copy > p) { p = min_copy; }
 
     // Auto-size hash table: one slot per p-byte chunk of R (floor = q).
     size_t num_seeds = (r.size() >= p) ? (r.size() - p + 1) : 0;
@@ -65,14 +65,14 @@ std::vector<Command> diff_onepass(
         if (use_splay) {
             auto& tree = is_v_table ? h_v_sp : h_r_sp;
             auto* val = tree.find(fp);
-            if (val && val->second == ver) return val->first;
+            if (val && val->second == ver) { return val->first; }
             return std::nullopt;
         } else {
             auto& table = is_v_table ? h_v_ht : h_r_ht;
             size_t idx = static_cast<size_t>(fp % static_cast<uint64_t>(q));
             if (table[idx].has_value()) {
                 auto& [sfp, off, sver] = *table[idx];
-                if (sver == ver && sfp == fp) return off;
+                if (sver == ver && sfp == fp) { return off; }
             }
             return std::nullopt;
         }
@@ -82,14 +82,14 @@ std::vector<Command> diff_onepass(
         if (use_splay) {
             auto& tree = is_v_table ? h_v_sp : h_r_sp;
             auto* existing = tree.find(fp);
-            if (existing && existing->second == ver) return; // retain-existing
+            if (existing && existing->second == ver) { return; } // retain-existing
             tree.insert(fp, SlotVal{off, ver});
         } else {
             auto& table = is_v_table ? h_v_ht : h_r_ht;
             size_t idx = static_cast<size_t>(fp % static_cast<uint64_t>(q));
             if (table[idx].has_value()) {
                 auto& [sfp, soff, sver] = *table[idx];
-                if (sver == ver) return; // retain-existing policy
+                if (sver == ver) { return; } // retain-existing policy
             }
             table[idx] = std::make_tuple(fp, off, ver);
         }
@@ -108,7 +108,7 @@ std::vector<Command> diff_onepass(
         // Step (3): check for end of V and R
         bool can_v = (v_c + p <= v.size());
         bool can_r = (r_c + p <= r.size());
-        if (!can_v && !can_r) break;
+        if (!can_v && !can_r) { break; }
         ++dbg_positions;
 
         std::optional<uint64_t> fp_v, fp_r;
@@ -138,8 +138,8 @@ std::vector<Command> diff_onepass(
         }
 
         // Step (4a): store offsets (retain-existing policy)
-        if (fp_v) hput(true, *fp_v, v_c);
-        if (fp_r) hput(false, *fp_r, r_c);
+        if (fp_v) { hput(true, *fp_v, v_c); }
+        if (fp_r) { hput(false, *fp_r, r_c); }
 
         // Step (4b): look for a matching seed in the other table
         bool match_found = false;

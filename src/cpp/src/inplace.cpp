@@ -15,7 +15,7 @@ static std::vector<size_t> find_cycle(
     size_t n) {
 
     for (size_t start = 0; start < n; ++start) {
-        if (removed[start]) continue;
+        if (removed[start]) { continue; }
 
         std::unordered_map<size_t, size_t> visited;
         std::vector<size_t> path;
@@ -52,7 +52,7 @@ std::vector<PlacedCommand> make_inplace(
     const std::vector<Command>& commands,
     CyclePolicy policy) {
 
-    if (commands.empty()) return {};
+    if (commands.empty()) { return {}; }
 
     // Step 1: compute write offsets for each command
     // copy_info: (index, src, dst, length)
@@ -93,7 +93,7 @@ std::vector<PlacedCommand> make_inplace(
     std::sort(write_sorted.begin(), write_sorted.end(),
         [&](size_t a, size_t b) { return copy_info[a].dst < copy_info[b].dst; });
     std::vector<size_t> write_starts(n);
-    for (size_t k = 0; k < n; ++k) write_starts[k] = copy_info[write_sorted[k]].dst;
+    for (size_t k = 0; k < n; ++k) { write_starts[k] = copy_info[write_sorted[k]].dst; }
 
     for (size_t i = 0; i < n; ++i) {
         size_t read_end = copy_info[i].src + copy_info[i].length;
@@ -102,7 +102,7 @@ std::vector<PlacedCommand> make_inplace(
         size_t hi = static_cast<size_t>(hi_it - write_starts.begin());
         for (size_t k = 0; k < hi; ++k) {
             size_t j = write_sorted[k];
-            if (i == j) continue;
+            if (i == j) { continue; }
             if (copy_info[j].dst + copy_info[j].length > copy_info[i].src) {
                 adj[i].push_back(j);
                 ++in_deg[j];
@@ -122,7 +122,7 @@ std::vector<PlacedCommand> make_inplace(
     using HeapEntry = std::pair<size_t, size_t>;
     std::priority_queue<HeapEntry, std::vector<HeapEntry>, std::greater<>> heap;
     for (size_t i = 0; i < n; ++i) {
-        if (in_deg[i] == 0) heap.emplace(copy_info[i].length, i);
+        if (in_deg[i] == 0) { heap.emplace(copy_info[i].length, i); }
     }
     size_t processed = 0;
 
@@ -130,19 +130,19 @@ std::vector<PlacedCommand> make_inplace(
         while (!heap.empty()) {
             auto [len, v] = heap.top();
             heap.pop();
-            if (removed[v]) continue;
+            if (removed[v]) { continue; }
             removed[v] = true;
             topo_order.push_back(v);
             ++processed;
             for (size_t w : adj[v]) {
                 if (!removed[w]) {
                     --in_deg[w];
-                    if (in_deg[w] == 0) heap.emplace(copy_info[w].length, w);
+                    if (in_deg[w] == 0) { heap.emplace(copy_info[w].length, w); }
                 }
             }
         }
 
-        if (processed >= n) break;
+        if (processed >= n) { break; }
 
         // Cycle detected — choose a victim to convert from copy to add
         size_t victim = 0;
@@ -183,7 +183,7 @@ std::vector<PlacedCommand> make_inplace(
         for (size_t w : adj[victim]) {
             if (!removed[w]) {
                 --in_deg[w];
-                if (in_deg[w] == 0) heap.emplace(copy_info[w].length, w);
+                if (in_deg[w] == 0) { heap.emplace(copy_info[w].length, w); }
             }
         }
     }

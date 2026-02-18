@@ -8,10 +8,10 @@ namespace delta {
 uint64_t mod_mersenne(__uint128_t x) {
     __uint128_t m = HASH_MOD;
     __uint128_t r = (x >> 61) + (x & m);
-    if (r >= m) r -= m;
+    if (r >= m) { r -= m; }
     // One more reduction in case the first wasn't enough (x >> 61 can be large)
     __uint128_t r2 = (r >> 61) + (r & m);
-    if (r2 >= m) r2 -= m;
+    if (r2 >= m) { r2 -= m; }
     return static_cast<uint64_t>(r2);
 }
 
@@ -25,7 +25,7 @@ uint64_t fingerprint(std::span<const uint8_t> data, size_t offset, size_t p) {
 }
 
 uint64_t precompute_bp(size_t p) {
-    if (p == 0) return 1;
+    if (p == 0) { return 1; }
     uint64_t result = 1;
     uint64_t base = HASH_BASE;
     size_t exp = p - 1;
@@ -61,7 +61,7 @@ void RollingHash::roll(uint8_t old_byte, uint8_t new_byte) {
 
 /// Modular exponentiation: base^exp mod modulus (uses __uint128_t to avoid overflow).
 static uint64_t power_mod(uint64_t base, uint64_t exp, uint64_t modulus) {
-    if (modulus == 1) return 0;
+    if (modulus == 1) { return 0; }
     __uint128_t m = modulus;
     __uint128_t result = 1;
     __uint128_t b = static_cast<__uint128_t>(base) % m;
@@ -105,21 +105,21 @@ bool is_prime(size_t n) {
 
 bool is_prime_mr(size_t n, uint32_t k) {
     uint64_t n64 = static_cast<uint64_t>(n);
-    if (n64 < 2 || (n64 != 2 && n64 % 2 == 0)) return false;
-    if (n64 == 2 || n64 == 3) return true;
+    if (n64 < 2 || (n64 != 2 && n64 % 2 == 0)) { return false; }
+    if (n64 == 2 || n64 == 3) { return true; }
 
     thread_local std::mt19937_64 rng{std::random_device{}()};
     std::uniform_int_distribution<uint64_t> dist(2, n64 - 2);
 
     for (uint32_t i = 0; i < k; ++i) {
         uint64_t a = dist(rng);
-        if (witness(a, n64)) return false;
+        if (witness(a, n64)) { return false; }
     }
     return true;
 }
 
 size_t next_prime(size_t n) {
-    if (n <= 2) return 2;
+    if (n <= 2) { return 2; }
     size_t candidate = (n % 2 == 0) ? n + 1 : n;
     while (!is_prime(candidate)) {
         candidate += 2;

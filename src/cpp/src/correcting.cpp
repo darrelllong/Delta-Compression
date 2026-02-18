@@ -32,10 +32,10 @@ std::vector<Command> diff_correcting(
     size_t min_copy = opts.min_copy;
 
     std::vector<Command> commands;
-    if (v.empty()) return commands;
+    if (v.empty()) { return commands; }
     // --min-copy raises the seed length so we never fingerprint at a
     // granularity finer than the minimum copy threshold.
-    if (min_copy > 0 && min_copy > p) p = min_copy;
+    if (min_copy > 0 && min_copy > p) { p = min_copy; }
 
     // ── Checkpointing parameters (Section 8.1, pp. 347-348) ─────────
     size_t num_seeds = (r.size() >= p) ? (r.size() - p + 1) : 0;
@@ -85,7 +85,7 @@ std::vector<Command> diff_correcting(
     }
 
     std::optional<RollingHash> rh_build;
-    if (num_seeds > 0) rh_build.emplace(r, 0, p);
+    if (num_seeds > 0) { rh_build.emplace(r, 0, p); }
     for (size_t a = 0; a < num_seeds; ++a) {
         uint64_t fp;
         if (a == 0) {
@@ -95,7 +95,7 @@ std::vector<Command> diff_correcting(
             fp = rh_build->value();
         }
         uint64_t f = fp % f_size;
-        if (f % m != k) continue; // not a checkpoint seed
+        if (f % m != k) { continue; } // not a checkpoint seed
         ++dbg_build_passed;
 
         if (use_splay) {
@@ -108,7 +108,7 @@ std::vector<Command> diff_correcting(
             }
         } else {
             size_t i = static_cast<size_t>(f / m);
-            if (i >= cap) continue; // safety
+            if (i >= cap) { continue; } // safety
             if (!h_r_ht[i].has_value()) {
                 h_r_ht[i] = std::make_pair(fp, a); // first-found (Section 7 Step 1)
                 ++dbg_build_stored;
@@ -138,12 +138,12 @@ std::vector<Command> diff_correcting(
         -> std::optional<std::pair<uint64_t, size_t>> {
         if (use_splay) {
             auto* val = h_r_sp.find(fp_v);
-            if (val) return *val;
+            if (val) { return *val; }
             return std::nullopt;
         } else {
             size_t i = static_cast<size_t>(f_v / m);
-            if (i >= cap) return std::nullopt;
-            if (h_r_ht[i].has_value()) return *h_r_ht[i];
+            if (i >= cap) { return std::nullopt; }
+            if (h_r_ht[i].has_value()) { return *h_r_ht[i]; }
             return std::nullopt;
         }
     };
@@ -171,7 +171,7 @@ std::vector<Command> diff_correcting(
 
     for (;;) {
         // Step (3): check for end of V
-        if (v_c + p > v.size()) break;
+        if (v_c + p > v.size()) { break; }
 
         // Step (4): generate footprint at v_c, apply checkpoint test.
         uint64_t fp_v;
@@ -250,7 +250,7 @@ std::vector<Command> diff_correcting(
                 if (buf.size() >= buf_cap) {
                     auto oldest = std::move(buf.front());
                     buf.pop_front();
-                    if (!oldest.dummy) commands.push_back(std::move(oldest.cmd));
+                    if (!oldest.dummy) { commands.push_back(std::move(oldest.cmd)); }
                 }
                 buf.push_back(BufEntry{
                     v_s, v_m,
@@ -260,7 +260,7 @@ std::vector<Command> diff_correcting(
             if (buf.size() >= buf_cap) {
                 auto oldest = std::move(buf.front());
                 buf.pop_front();
-                if (!oldest.dummy) commands.push_back(std::move(oldest.cmd));
+                if (!oldest.dummy) { commands.push_back(std::move(oldest.cmd)); }
             }
             buf.push_back(BufEntry{
                 v_m, match_end,
@@ -314,7 +314,7 @@ std::vector<Command> diff_correcting(
                 if (buf.size() >= buf_cap) {
                     auto oldest = std::move(buf.front());
                     buf.pop_front();
-                    if (!oldest.dummy) commands.push_back(std::move(oldest.cmd));
+                    if (!oldest.dummy) { commands.push_back(std::move(oldest.cmd)); }
                 }
                 buf.push_back(BufEntry{
                     effective_start, match_end,

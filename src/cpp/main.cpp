@@ -157,16 +157,19 @@ int main(int argc, char** argv) {
 
     if (enc->parsed()) {
         Algorithm algo;
-        if (enc_algo_str == "greedy") algo = Algorithm::Greedy;
-        else if (enc_algo_str == "onepass") algo = Algorithm::Onepass;
-        else if (enc_algo_str == "correcting") algo = Algorithm::Correcting;
-        else {
+        if (enc_algo_str == "greedy") {
+            algo = Algorithm::Greedy;
+        } else if (enc_algo_str == "onepass") {
+            algo = Algorithm::Onepass;
+        } else if (enc_algo_str == "correcting") {
+            algo = Algorithm::Correcting;
+        } else {
             std::fprintf(stderr, "Unknown algorithm: %s\n", enc_algo_str.c_str());
             return 1;
         }
 
         CyclePolicy pol = CyclePolicy::Localmin;
-        if (enc_policy_str == "constant") pol = CyclePolicy::Constant;
+        if (enc_policy_str == "constant") { pol = CyclePolicy::Constant; }
 
         auto r_file = MappedFile::open_read(enc_ref);
         auto v_file = MappedFile::open_read(enc_ver);
@@ -257,7 +260,7 @@ int main(int argc, char** argv) {
 
     } else if (inp->parsed()) {
         CyclePolicy pol = CyclePolicy::Localmin;
-        if (inp_policy_str == "constant") pol = CyclePolicy::Constant;
+        if (inp_policy_str == "constant") { pol = CyclePolicy::Constant; }
 
         auto r_file = MappedFile::open_read(inp_ref);
         auto r = r_file.span();

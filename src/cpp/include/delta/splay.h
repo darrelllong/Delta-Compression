@@ -47,7 +47,7 @@ public:
     /// Find key; returns pointer to value or nullptr.
     /// Splays the found node (or last visited) to root.
     V* find(uint64_t key) {
-        if (!root_) return nullptr;
+        if (!root_) { return nullptr; }
         splay(key);
         return (root_->key == key) ? &root_->value : nullptr;
     }
@@ -139,7 +139,7 @@ private:
     /// Restructures the tree so that the node with the given key
     /// (or the last node on the search path) becomes the root.
     void splay(uint64_t key) {
-        if (!root_) return;
+        if (!root_) { return; }
 
         // Sentinel header node; left/right trees accumulate in l/r.
         Node header{0, V{}, nullptr, nullptr};
@@ -149,28 +149,28 @@ private:
 
         for (;;) {
             if (key < t->key) {
-                if (!t->left) break;
+                if (!t->left) { break; }
                 if (key < t->left->key) {
                     // Zig-zig: rotate right
                     Node* y = t->left;
                     t->left = y->right;
                     y->right = t;
                     t = y;
-                    if (!t->left) break;
+                    if (!t->left) { break; }
                 }
                 // Link right
                 r->left = t;
                 r = t;
                 t = t->left;
             } else if (key > t->key) {
-                if (!t->right) break;
+                if (!t->right) { break; }
                 if (key > t->right->key) {
                     // Zig-zig: rotate left
                     Node* y = t->right;
                     t->right = y->left;
                     y->left = t;
                     t = y;
-                    if (!t->right) break;
+                    if (!t->right) { break; }
                 }
                 // Link left
                 l->right = t;
@@ -193,7 +193,7 @@ private:
     /// for very deep trees, but fingerprints are well-distributed
     /// and splay keeps depth reasonable).
     void destroy(Node* n) {
-        if (!n) return;
+        if (!n) { return; }
         destroy(n->left);
         destroy(n->right);
         delete n;
