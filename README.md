@@ -5,9 +5,9 @@ reconstructed from the old file plus the (small) delta.  Supports
 in-place reconstruction — the new version can be rebuilt directly in
 the buffer holding the old version, with no scratch space.
 
-Two implementations — Python and Rust — producing identical binary
-deltas.  The Rust version is ~20x faster thanks to O(1) rolling hash
-updates and zero-copy mmap I/O.
+Five implementations — Python, Rust, C++, C, and Java — producing
+byte-identical binary deltas.  Encode with any one, decode with any
+other.
 
 Implements the algorithms from two papers:
 
@@ -27,11 +27,7 @@ Both papers are in [`pubs/`](pubs/).
 
 ```bash
 cd src/python
-
-# Encode
 python3 delta.py encode onepass old.bin new.bin delta.bin
-
-# Decode
 python3 delta.py decode old.bin delta.bin recovered.bin
 ```
 
@@ -40,16 +36,36 @@ python3 delta.py decode old.bin delta.bin recovered.bin
 ```bash
 cd src/rust/delta
 cargo build --release
-
-# Encode
-cargo run --release -- encode onepass old.bin new.bin delta.bin
-
-# Decode
-cargo run --release -- decode old.bin delta.bin recovered.bin
+target/release/delta encode onepass old.bin new.bin delta.bin
+target/release/delta decode old.bin delta.bin recovered.bin
 ```
 
-The two implementations produce byte-identical delta files.
-Encode with one, decode with the other.
+### C++
+
+```bash
+cd src/cpp
+cmake -B build && cmake --build build
+build/delta encode onepass old.bin new.bin delta.bin
+build/delta decode old.bin delta.bin recovered.bin
+```
+
+### C
+
+```bash
+cd src/c
+make
+./delta encode onepass old.bin new.bin delta.bin
+./delta decode old.bin delta.bin recovered.bin
+```
+
+### Java
+
+```bash
+cd src/java
+javac -d out delta/*.java
+java -cp out delta.Delta encode onepass old.bin new.bin delta.bin
+java -cp out delta.Delta decode old.bin delta.bin recovered.bin
+```
 
 ## Algorithms
 
@@ -96,7 +112,7 @@ Cycle-breaking policies:
 
 ## Binary delta format
 
-Unified format used by both implementations:
+Unified format used by all five implementations:
 
 ```
 Header (9 bytes):
@@ -117,23 +133,35 @@ standard deltas (flag 0x00) from in-place deltas (flag 0x01).
 ## Testing
 
 ```bash
-# Python — 154 tests
+# Python — 168 tests
 cd src/python
 python3 -m unittest test_delta -v
 
-# Rust — 48 tests (13 unit + 35 integration)
+# Rust — 52 tests (17 unit + 35 integration)
 cd src/rust/delta
 cargo test
+
+# C++ — 46 tests (11 hash + 35 integration)
+cd src/cpp
+cmake -B build && cmake --build build
+ctest --test-dir build
+
+# C — 32 tests
+cd src/c
+make test
+
+# Java — roundtrip verification via CLI
+cd src/java
+javac -d out delta/*.java
 ```
 
 Tests cover all three algorithms, binary round-trips, paper examples,
 edge cases (empty/identical/completely different files), in-place
 reconstruction with both cycle-breaking policies, variable-length block
-transpositions (8 blocks, 200-5000 bytes each, permuted, reversed,
-interleaved with junk, duplicated, halved and scrambled, plus 20
-random subset trials), checkpointing correctness, and cross-language
-compatibility.  A kernel tarball benchmark (`tests/kernel-delta-test.sh`)
-exercises onepass and correcting on ~871 MB inputs.
+transpositions (8–64 blocks with controlled transpositions),
+checkpointing correctness, and cross-language compatibility.
+A kernel tarball benchmark (`tests/kernel-delta-test.sh`) exercises
+onepass and correcting on ~871 MB inputs.
 
 ## Project layout
 
@@ -141,24 +169,53 @@ exercises onepass and correcting on ~871 MB inputs.
 src/
   python/
     delta.py              Library + CLI
-    test_delta.py         Test suite (154 tests)
+    test_delta.py         Test suite (168 tests)
   rust/delta/
     src/
       lib.rs              Re-exports
       main.rs             CLI (clap)
-      types.rs            Command, PlacedCommand, constants
-      hash.rs             Karp-Rabin rolling hash (13 unit tests)
+      types.rs            Command, PlacedCommand, DiffOptions, constants
+      hash.rs             Karp-Rabin rolling hash
       encoding.rs         Unified binary format
+      splay.rs            Splay tree (Sleator & Tarjan 1985)
       apply.rs            place_commands, apply_placed_to, apply_placed_inplace_to
       inplace.rs          CRWI digraph, topological sort, cycle breaking
       algorithm/
         mod.rs            Dispatch
         greedy.rs         O(n^2) optimal
         onepass.rs        O(n) linear
-        correcting.rs     1.5-pass with tail correction
+        correcting.rs     1.5-pass with checkpointing
     tests/
       integration.rs      35 integration tests
     Cargo.toml
+  cpp/
+    include/delta/
+      types.h             Command/PlacedCommand (std::variant), DiffOptions
+      hash.h              Rolling hash, fingerprint, primality
+      encoding.h          Binary format encode/decode
+      algorithm.h         Greedy, onepass, correcting dispatchers
+      apply.h             place_commands, apply, in-place apply
+      inplace.h           CRWI digraph
+      delta.h             Umbrella header
+    src/                  Implementations (.cpp)
+    main.cpp              CLI (CLI11)
+    tests/                Catch2 v3 tests
+    CMakeLists.txt
+  c/
+    delta.h               Single header (types, flags, alloc, API)
+    *.c                   Implementations + CLI (main.c)
+    Makefile
+  java/delta/
+    Types.java            Command, PlacedCommand, DiffOptions, constants
+    Hash.java             Rolling hash, fingerprint, primality
+    Encoding.java         Binary format encode/decode
+    Diff.java             Algorithm dispatcher
+    Greedy.java           O(n^2) optimal
+    Onepass.java          O(n) linear
+    Correcting.java       1.5-pass with checkpointing
+    Apply.java            place_commands, apply, in-place, CRWI digraph
+    SplayTree.java        Splay tree
+    Delta.java            CLI
 tests/
   kernel-delta-test.sh    Kernel tarball benchmark (onepass + correcting)
 pubs/

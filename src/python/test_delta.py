@@ -599,6 +599,144 @@ class TestInPlaceVarlenRandomTrials(unittest.TestCase):
     def test_correcting_lmin(self):  self._run_all(diff_correcting, 'localmin')
 
 
+# ── in-place: controlled transpositions (cycle-heavy workloads) ───────────
+
+def generate_transposed(num_blocks, block_size, num_transpositions, seed=42):
+    """Generate reference and version data with controlled transpositions.
+
+    Creates num_blocks distinct blocks of block_size bytes each.  The version
+    is formed by applying num_transpositions random adjacent-pair swaps to
+    the block ordering.  Each swap of adjacent same-sized blocks in place
+    creates a CRWI cycle (copy A→B and copy B→A each read what the other
+    writes), so this directly controls the number of cycles the in-place
+    converter must break.
+
+    Returns (R, V, num_swaps_applied).
+    """
+    rng = random.Random(seed)
+    # Generate distinct blocks (different first bytes guarantee uniqueness)
+    blocks = []
+    for i in range(num_blocks):
+        blk = bytes([i % 256] * 4) + bytes(rng.getrandbits(8) for _ in range(block_size - 4))
+        blocks.append(blk)
+
+    R = b''.join(blocks)
+
+    # Build version by applying transpositions to a permutation
+    perm = list(range(num_blocks))
+    swaps_applied = 0
+    for _ in range(num_transpositions):
+        # Pick a random pair (not necessarily adjacent — any swap)
+        a = rng.randint(0, num_blocks - 1)
+        b = rng.randint(0, num_blocks - 1)
+        if a != b:
+            perm[a], perm[b] = perm[b], perm[a]
+            swaps_applied += 1
+
+    V = b''.join(blocks[perm[i]] for i in range(num_blocks))
+    return R, V, swaps_applied
+
+
+class TestInPlaceTranspositions(unittest.TestCase):
+    """Test in-place reconstruction with increasing numbers of transpositions.
+
+    Each transposition of equal-sized blocks creates a potential CRWI cycle,
+    forcing the in-place converter to break cycles by converting copies to
+    adds.  This verifies correctness under cycle-heavy workloads.
+    """
+
+    BLOCK_SIZE = 200
+    CONFIGS = [
+        # (num_blocks, num_transpositions, seed)
+        (8,   1,  100),   # 1 swap — 1 cycle
+        (8,   4,  101),   # 4 swaps — multiple cycles
+        (16,  8,  102),   # larger with many swaps
+        (32, 16,  103),   # 32 blocks, 16 swaps
+        (32, 31,  104),   # near-total scramble
+        (64, 50,  105),   # 64 blocks, heavy scramble
+    ]
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cases = []
+        for num_blocks, num_trans, seed in cls.CONFIGS:
+            R, V, swaps = generate_transposed(
+                num_blocks, cls.BLOCK_SIZE, num_trans, seed)
+            cls.cases.append((num_blocks, num_trans, swaps, R, V))
+
+    def _run_all(self, fn, pol):
+        for num_blocks, num_trans, swaps, R, V in self.cases:
+            got = inplace_roundtrip(fn, R, V, policy=pol)
+            self.assertEqual(
+                got, V,
+                f"failed: {num_blocks} blocks, {num_trans} transpositions "
+                f"({swaps} applied), policy={pol}")
+
+    def test_greedy_const(self):    self._run_all(diff_greedy, 'constant')
+    def test_greedy_lmin(self):     self._run_all(diff_greedy, 'localmin')
+    def test_onepass_const(self):   self._run_all(diff_onepass, 'constant')
+    def test_onepass_lmin(self):    self._run_all(diff_onepass, 'localmin')
+    def test_correcting_const(self): self._run_all(diff_correcting, 'constant')
+    def test_correcting_lmin(self):  self._run_all(diff_correcting, 'localmin')
+
+
+class TestInPlaceTranspositionsBinary(unittest.TestCase):
+    """Same as above but through the full binary encode/decode path."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cases = []
+        for num_blocks, num_trans, seed in TestInPlaceTranspositions.CONFIGS:
+            R, V, swaps = generate_transposed(
+                num_blocks, TestInPlaceTranspositions.BLOCK_SIZE, num_trans, seed)
+            cls.cases.append((num_blocks, num_trans, swaps, R, V))
+
+    def _run_all(self, fn, pol):
+        for num_blocks, num_trans, swaps, R, V in self.cases:
+            got = inplace_binary_roundtrip(fn, R, V, policy=pol)
+            self.assertEqual(
+                got, V,
+                f"binary failed: {num_blocks} blocks, {num_trans} trans, "
+                f"policy={pol}")
+
+    def test_greedy_const(self):    self._run_all(diff_greedy, 'constant')
+    def test_greedy_lmin(self):     self._run_all(diff_greedy, 'localmin')
+    def test_onepass_const(self):   self._run_all(diff_onepass, 'constant')
+    def test_onepass_lmin(self):    self._run_all(diff_onepass, 'localmin')
+    def test_correcting_const(self): self._run_all(diff_correcting, 'constant')
+    def test_correcting_lmin(self):  self._run_all(diff_correcting, 'localmin')
+
+
+class TestBothPoliciesCorrectOnTranspositions(unittest.TestCase):
+    """Both cycle policies produce correct output on cycle-heavy workloads
+    with variable-sized blocks."""
+
+    @classmethod
+    def setUpClass(cls):
+        rng = random.Random(777)
+        cls.blocks = []
+        for i in range(20):
+            size = rng.randint(50, 500)
+            blk = bytes([i % 256] * 4) + bytes(rng.getrandbits(8) for _ in range(size - 4))
+            cls.blocks.append(blk)
+        cls.R = b''.join(cls.blocks)
+        perm = list(range(20))
+        for _ in range(15):
+            a, b = rng.sample(range(20), 2)
+            perm[a], perm[b] = perm[b], perm[a]
+        cls.V = b''.join(cls.blocks[perm[i]] for i in range(20))
+
+    def test_greedy_constant(self):
+        self.assertEqual(
+            inplace_roundtrip(diff_greedy, self.R, self.V, policy='constant'),
+            self.V)
+
+    def test_greedy_localmin(self):
+        self.assertEqual(
+            inplace_roundtrip(diff_greedy, self.R, self.V, policy='localmin'),
+            self.V)
+
+
 # ── in-place: localmin actually picks the smaller victim ─────────────────
 
 class TestLocalminPicksSmallest(unittest.TestCase):
