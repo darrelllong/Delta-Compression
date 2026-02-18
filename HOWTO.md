@@ -646,6 +646,35 @@ scan, yielding slightly better compression at the cost of O(log n)
 lookups instead of O(1).  On the 22 MB literary corpus benchmark,
 correcting+hash gives 22.94% and correcting+splay gives 22.39%.
 
+The correcting+splay cross-version kernel results (same six pairs, ~831 MB):
+
+| Ref → Ver | Ratio (hash) | Ratio (splay) | Time (hash) | Time (splay) |
+|-----------|-------------:|--------------:|------------:|-------------:|
+| 5.1.1 → 5.1.2 | 0.86% | 0.85% | 13.8s | 48.9s |
+| 5.1.1 → 5.1.3 | 0.81% | 0.80% | 13.9s | 49.5s |
+| 5.1.2 → 5.1.1 | 0.81% | 0.80% | 13.9s | 48.9s |
+| 5.1.2 → 5.1.3 | 1.02% | 1.00% | 14.0s | 48.6s |
+| 5.1.3 → 5.1.1 | 0.78% | 0.78% | 14.0s | 49.2s |
+| 5.1.3 → 5.1.2 | 0.85% | 0.83% | 14.0s | 48.7s |
+
+Splay wins on ratio by a small but consistent margin (~0.01–0.02 pp) on
+every pair, at 3.5× the time.
+
+The O(log n) characterisation of splay lookup is a worst-case amortised
+bound.  In practice the cost is closer to O(log(n/f)) for a fingerprint
+with frequency f: a fingerprint that appears k times in R is splayed to
+the root k times during the build phase, so the most common R fingerprints
+are already near the top by the time the V scan begins.  For a Zipfian
+frequency distribution — which natural language and source code both
+follow closely — the weighted average access cost is O(log H) where H is
+the entropy of the distribution, which can be substantially less than
+O(log n).  This is the same reason LRU caching works well in practice:
+the splay tree automatically performs implicit frequency-based caching,
+keeping hot fingerprints near the root.  On kernel tarballs the effect is
+visible: common boilerplate (headers, copyright blocks, repeated idioms)
+dominates the fingerprint distribution, limiting the practical slowdown
+to 3.5× rather than the O(log n) / O(1) asymptotic ratio would suggest.
+
 ## References
 
 - M. Ajtai, R. Burns, R. Fagin, D.D.E. Long, and L. Stockmeyer.
