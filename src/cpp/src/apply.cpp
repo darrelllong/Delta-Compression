@@ -70,7 +70,7 @@ std::vector<Command> unplace_commands(const std::vector<PlacedCommand>& placed) 
     std::iota(indices.begin(), indices.end(), 0);
     std::sort(indices.begin(), indices.end(), [&](size_t a, size_t b) {
         auto dst_of = [&](size_t i) -> size_t {
-            if (auto* c = std::get_if<PlacedCopy>(&placed[i])) return c->dst;
+            if (auto* c = std::get_if<PlacedCopy>(&placed[i])) { return c->dst; }
             return std::get<PlacedAdd>(placed[i]).dst;
         };
         return dst_of(a) < dst_of(b);
@@ -98,11 +98,11 @@ size_t apply_placed_to(
         if (auto* c = std::get_if<PlacedCopy>(&cmd)) {
             std::memcpy(&out[c->dst], &r[c->src], c->length);
             size_t end = c->dst + c->length;
-            if (end > max_written) max_written = end;
+            if (end > max_written) { max_written = end; }
         } else if (auto* a = std::get_if<PlacedAdd>(&cmd)) {
             std::memcpy(&out[a->dst], a->data.data(), a->data.size());
             size_t end = a->dst + a->data.size();
-            if (end > max_written) max_written = end;
+            if (end > max_written) { max_written = end; }
         }
     }
     return max_written;

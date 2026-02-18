@@ -23,10 +23,10 @@ std::vector<Command> diff_greedy(
     size_t min_copy = opts.min_copy;
 
     std::vector<Command> commands;
-    if (v.empty()) return commands;
+    if (v.empty()) { return commands; }
     // --min-copy raises the seed length so we never fingerprint at a
     // granularity finer than the minimum copy threshold.
-    if (min_copy > 0 && min_copy > p) p = min_copy;
+    if (min_copy > 0 && min_copy > p) { p = min_copy; }
 
     // Step (1): Build lookup structure for R keyed by full fingerprint.
     // Hash table (default) or splay tree (--splay).
@@ -68,7 +68,7 @@ std::vector<Command> diff_greedy(
 
     for (;;) {
         // Step (3): check for end of V
-        if (v_c + p > v.size()) break;
+        if (v_c + p > v.size()) { break; }
 
         uint64_t fp_v;
         if (v_c == rh_v_pos) {
@@ -92,13 +92,13 @@ std::vector<Command> diff_greedy(
             offsets = splay_r.find(fp_v);
         } else {
             auto it = h_r.find(fp_v);
-            if (it != h_r.end()) offsets = &it->second;
+            if (it != h_r.end()) { offsets = &it->second; }
         }
 
         if (offsets) {
             for (size_t r_cand : *offsets) {
                 // Verify the seed actually matches
-                if (std::memcmp(&r[r_cand], &v[v_c], p) != 0) continue;
+                if (std::memcmp(&r[r_cand], &v[v_c], p) != 0) { continue; }
                 size_t ml = p;
                 while (v_c + ml < v.size() && r_cand + ml < r.size()
                        && v[v_c + ml] == r[r_cand + ml]) {
