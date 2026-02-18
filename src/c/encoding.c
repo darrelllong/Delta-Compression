@@ -45,9 +45,11 @@ delta_encode(const delta_placed_commands_t *cmds, bool inplace,
 	size_t i;
 	uint8_t *buf, *p;
 
-	for (i = 0; i < cmds->len; i++)
-		if (cmds->data[i].tag == PCMD_ADD)
+	for (i = 0; i < cmds->len; i++) {
+		if (cmds->data[i].tag == PCMD_ADD) {
 			est += cmds->data[i].add.length;
+		}
+	}
 
 	buf = delta_malloc(est);
 	p = buf;
@@ -83,6 +85,16 @@ delta_encode(const delta_placed_commands_t *cmds, bool inplace,
 	return result;
 }
 
+/* ── delta_buffer_t destructor ─────────────────────────────────────── */
+
+void
+delta_buffer_free(delta_buffer_t *buf)
+{
+	free(buf->data);
+	buf->data = NULL;
+	buf->len = 0;
+}
+
 /* ── Decode ────────────────────────────────────────────────────────── */
 
 delta_decode_result_t
@@ -109,8 +121,9 @@ delta_decode(const uint8_t *data, size_t len)
 		uint8_t t = data[pos++];
 		delta_placed_command_t cmd;
 
-		if (t == DELTA_CMD_END)
+		if (t == DELTA_CMD_END) {
 			return result;
+		}
 
 		if (t == DELTA_CMD_COPY) {
 			if (pos + DELTA_COPY_PAYLOAD > len) {
@@ -147,4 +160,12 @@ delta_decode(const uint8_t *data, size_t len)
 	}
 
 	return result;
+}
+
+/* ── delta_decode_result_t destructor ──────────────────────────────── */
+
+void
+delta_decode_result_free(delta_decode_result_t *dr)
+{
+	delta_placed_commands_free(&dr->commands);
 }

@@ -294,6 +294,7 @@ typedef struct {
 
 delta_buffer_t delta_encode(const delta_placed_commands_t *cmds,
                             bool inplace, size_t version_size);
+void           delta_buffer_free(delta_buffer_t *buf);
 
 typedef struct {
 	delta_placed_commands_t commands;
@@ -302,6 +303,7 @@ typedef struct {
 } delta_decode_result_t;
 
 delta_decode_result_t delta_decode(const uint8_t *data, size_t len);
+void                  delta_decode_result_free(delta_decode_result_t *dr);
 
 /* ====================================================================
  * Command placement and application
@@ -313,17 +315,16 @@ delta_placed_commands_t delta_place_commands(const delta_commands_t *cmds);
 
 delta_commands_t delta_unplace_commands(const delta_placed_commands_t *placed);
 
-size_t delta_apply_placed(const uint8_t *r,
-                          const delta_placed_commands_t *cmds,
-                          uint8_t *out);
+delta_buffer_t delta_apply_placed(const uint8_t *r,
+                                   const delta_placed_commands_t *cmds,
+                                   size_t version_size);
 
-void   delta_apply_placed_inplace(const delta_placed_commands_t *cmds,
-                                   uint8_t *buf);
+void           delta_apply_placed_inplace(const delta_placed_commands_t *cmds,
+                                          uint8_t *buf);
 
-/* Reconstruct version from R + in-place placed commands. Caller frees. */
-uint8_t *delta_apply_delta_inplace(const uint8_t *r, size_t r_len,
-                                    const delta_placed_commands_t *cmds,
-                                    size_t version_size);
+delta_buffer_t delta_apply_delta_inplace(const uint8_t *r, size_t r_len,
+                                          const delta_placed_commands_t *cmds,
+                                          size_t version_size);
 
 /* ====================================================================
  * In-place conversion (Burns, Long, Stockmeyer — IEEE TKDE 2003)
