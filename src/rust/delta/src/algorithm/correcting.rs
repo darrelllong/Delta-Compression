@@ -60,15 +60,11 @@ pub fn diff_correcting(
     let buf_cap = opts.buf_cap;
     let verbose = opts.verbose;
     let use_splay = opts.use_splay;
-    let min_copy = opts.min_copy;
 
     let mut commands = Vec::new();
     if v.is_empty() {
         return commands;
     }
-    // --min-copy raises the seed length so we never fingerprint at a
-    // granularity finer than the minimum copy threshold.
-    let p = if min_copy > 0 { p.max(min_copy) } else { p };
 
     // ── Checkpointing parameters (Section 8.1, pp. 347-348) ─────────
     let num_seeds = if r.len() >= p { r.len() - p + 1 } else { 0 };
@@ -296,12 +292,6 @@ pub fn diff_correcting(
         let r_m = r_offset - bwd;
         let ml = bwd + fwd;
         let match_end = v_m + ml;
-
-        // Filter: skip matches shorter than --min-copy
-        if ml < p {
-            v_c += 1;
-            continue;
-        }
 
         // Step (6): encode with correction
         if v_s <= v_m {

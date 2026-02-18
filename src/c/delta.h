@@ -248,11 +248,10 @@ typedef struct {
 	size_t        q;
 	size_t        buf_cap;
 	delta_flags_t flags;
-	size_t        min_copy;
 } delta_diff_options_t;
 
 #define DELTA_DIFF_OPTIONS_DEFAULT \
-	{ DELTA_SEED_LEN, DELTA_TABLE_SIZE, DELTA_BUF_CAP, 0, 0 }
+	{ DELTA_SEED_LEN, DELTA_TABLE_SIZE, DELTA_BUF_CAP, 0 }
 
 /* ====================================================================
  * Differencing algorithms

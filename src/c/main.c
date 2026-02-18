@@ -140,8 +140,7 @@ usage(void)
 	    "  --inplace        Produce in-place delta\n"
 	    "  --policy P       Cycle policy: localmin (default), constant\n"
 	    "  --verbose        Print diagnostics\n"
-	    "  --splay          Use splay tree instead of hash table\n"
-	    "  --min-copy N     Minimum copy length (0 = use seed length)\n",
+	    "  --splay          Use splay tree instead of hash table\n",
 	    DELTA_SEED_LEN, DELTA_TABLE_SIZE);
 	exit(1);
 }
@@ -178,7 +177,6 @@ main(int argc, char **argv)
 		size_t table_size = DELTA_TABLE_SIZE;
 		delta_flags_t flags = 0;
 		delta_cycle_policy_t policy = POLICY_LOCALMIN;
-		size_t min_copy_val = 0;
 		const char *policy_str = "localmin";
 
 		/* Parse options from argv[6..] */
@@ -189,7 +187,6 @@ main(int argc, char **argv)
 			{"policy",     required_argument, NULL, 'p'},
 			{"verbose",    no_argument,       NULL, 'v'},
 			{"splay",      no_argument,       NULL, 'y'},
-			{"min-copy",   required_argument, NULL, 'm'},
 			{NULL, 0, NULL, 0}
 		};
 
@@ -208,7 +205,6 @@ main(int argc, char **argv)
 				break;
 			case 'v': flags = delta_flag_set(flags, DELTA_OPT_VERBOSE); break;
 			case 'y': flags = delta_flag_set(flags, DELTA_OPT_SPLAY); break;
-			case 'm': min_copy_val = (size_t)atol(optarg); break;
 			default: usage();
 			}
 		}
@@ -223,7 +219,6 @@ main(int argc, char **argv)
 		diff_opts.p = seed_len;
 		diff_opts.q = table_size;
 		diff_opts.flags = flags;
-		diff_opts.min_copy = min_copy_val;
 
 		bool inplace = delta_flag_get(flags, DELTA_OPT_INPLACE);
 		bool splay = delta_flag_get(flags, DELTA_OPT_SPLAY);

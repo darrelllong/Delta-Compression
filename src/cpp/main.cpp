@@ -129,8 +129,6 @@ int main(int argc, char** argv) {
     enc->add_flag("--verbose", enc_verbose, "Print diagnostics");
     bool enc_splay = false;
     enc->add_flag("--splay", enc_splay, "Use splay tree instead of hash table");
-    size_t enc_min_copy = 0;
-    enc->add_option("--min-copy", enc_min_copy, "Minimum copy length (0 = use seed length)");
 
     // ── decode subcommand ────────────────────────────────────────────
     auto* dec = app.add_subcommand("decode", "Reconstruct version from delta");
@@ -182,7 +180,6 @@ int main(int argc, char** argv) {
         opts.q = enc_table_size;
         opts.verbose = enc_verbose;
         opts.use_splay = enc_splay;
-        opts.min_copy = enc_min_copy;
         auto commands = diff(algo, r, v, opts);
 
         std::vector<PlacedCommand> placed;

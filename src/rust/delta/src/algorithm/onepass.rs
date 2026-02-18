@@ -36,15 +36,11 @@ pub fn diff_onepass(r: &[u8], v: &[u8], opts: &DiffOptions) -> Vec<Command> {
     let q = opts.q;
     let verbose = opts.verbose;
     let use_splay = opts.use_splay;
-    let min_copy = opts.min_copy;
 
     let mut commands = Vec::new();
     if v.is_empty() {
         return commands;
     }
-    // --min-copy raises the seed length so we never fingerprint at a
-    // granularity finer than the minimum copy threshold.
-    let p = if min_copy > 0 { p.max(min_copy) } else { p };
 
     // Auto-size hash table: one slot per p-byte chunk of R (floor = q).
     let num_seeds = if r.len() >= p { r.len() - p + 1 } else { 0 };
@@ -223,13 +219,6 @@ pub fn diff_onepass(r: &[u8], v: &[u8], opts: &DiffOptions) -> Vec<Command> {
             .zip(&r[r_m..r_m + max_ext])
             .position(|(a, b)| a != b)
             .unwrap_or(max_ext);
-
-        // Filter: skip matches shorter than --min-copy
-        if ml < p {
-            v_c += 1;
-            r_c += 1;
-            continue;
-        }
 
         // Step (6): encode
         if v_s < v_m {

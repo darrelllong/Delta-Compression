@@ -101,13 +101,9 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 	size_t p = opts->p;
 	bool verbose = delta_flag_get(opts->flags, DELTA_OPT_VERBOSE);
 	bool use_splay = delta_flag_get(opts->flags, DELTA_OPT_SPLAY);
-	size_t min_copy = opts->min_copy;
 
 	delta_commands_init(&commands);
 	if (v_len == 0) { return commands; }
-
-	/* --min-copy raises the seed length */
-	if (min_copy > 0 && min_copy > p) { p = min_copy; }
 
 	num_seeds = (r_len >= p) ? (r_len - p + 1) : 0;
 

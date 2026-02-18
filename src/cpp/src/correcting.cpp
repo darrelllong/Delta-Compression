@@ -29,13 +29,9 @@ std::vector<Command> diff_correcting(
     size_t buf_cap = opts.buf_cap;
     bool verbose = opts.verbose;
     bool use_splay = opts.use_splay;
-    size_t min_copy = opts.min_copy;
 
     std::vector<Command> commands;
     if (v.empty()) { return commands; }
-    // --min-copy raises the seed length so we never fingerprint at a
-    // granularity finer than the minimum copy threshold.
-    if (min_copy > 0 && min_copy > p) { p = min_copy; }
 
     // ── Checkpointing parameters (Section 8.1, pp. 347-348) ─────────
     size_t num_seeds = (r.size() >= p) ? (r.size() - p + 1) : 0;
@@ -236,12 +232,6 @@ std::vector<Command> diff_correcting(
         size_t r_m = r_offset - bwd;
         size_t ml = bwd + fwd;
         size_t match_end = v_m + ml;
-
-        // Filter: skip matches shorter than --min-copy
-        if (ml < p) {
-            ++v_c;
-            continue;
-        }
 
         // Step (6): encode with correction
         if (v_s <= v_m) {

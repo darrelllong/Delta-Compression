@@ -15,15 +15,11 @@ pub fn diff_greedy(r: &[u8], v: &[u8], opts: &DiffOptions) -> Vec<Command> {
     let p = opts.p;
     let verbose = opts.verbose;
     let use_splay = opts.use_splay;
-    let min_copy = opts.min_copy;
 
     let mut commands = Vec::new();
     if v.is_empty() {
         return commands;
     }
-    // --min-copy raises the seed length so we never fingerprint at a
-    // granularity finer than the minimum copy threshold.
-    let p = if min_copy > 0 { p.max(min_copy) } else { p };
 
     // Step (1): Build lookup structure for R keyed by full fingerprint.
     // Hash table (default) or splay tree (--splay).

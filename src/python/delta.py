@@ -129,7 +129,6 @@ class DiffOptions:
     q: int = TABLE_SIZE
     buf_cap: int = DELTA_BUF_CAP
     verbose: bool = False
-    min_copy: int = 0
 
 # ── Primality testing ─────────────────────────────────────────────────────
 
@@ -269,7 +268,6 @@ def _print_command_stats(commands: List[Command]) -> None:
 def diff_greedy(R: bytes, V: bytes,
                 p: int = SEED_LEN, q: int = TABLE_SIZE,
                 verbose: bool = False,
-                min_copy: int = 0,
                 opts: 'DiffOptions' = None) -> List[Command]:
     """Greedy algorithm (Section 3.1, Figure 2).
 
@@ -277,14 +275,10 @@ def diff_greedy(R: bytes, V: bytes,
     per footprint (Section 3.1).
     """
     if opts is not None:
-        p, q, verbose, min_copy = opts.p, opts.q, opts.verbose, opts.min_copy
+        p, q, verbose = opts.p, opts.q, opts.verbose
     commands: List[Command] = []
     if not V:
         return commands
-    # --min-copy raises the seed length so we never fingerprint at a
-    # granularity finer than the minimum copy threshold.
-    if min_copy > 0 and min_copy > p:
-        p = min_copy
 
     # Step (1): build hash table mapping fingerprints to R offsets
     H_R: dict = defaultdict(list)
@@ -380,7 +374,6 @@ def diff_greedy(R: bytes, V: bytes,
 def diff_onepass(R: bytes, V: bytes,
                  p: int = SEED_LEN, q: int = TABLE_SIZE,
                  verbose: bool = False,
-                 min_copy: int = 0,
                  opts: 'DiffOptions' = None) -> List[Command]:
     """One-pass algorithm (Section 4.1, Figure 3).
 
@@ -389,14 +382,10 @@ def diff_onepass(R: bytes, V: bytes,
     acts as a floor for small files.
     """
     if opts is not None:
-        p, q, verbose, min_copy = opts.p, opts.q, opts.verbose, opts.min_copy
+        p, q, verbose = opts.p, opts.q, opts.verbose
     commands: List[Command] = []
     if not V:
         return commands
-    # --min-copy raises the seed length so we never fingerprint at a
-    # granularity finer than the minimum copy threshold.
-    if min_copy > 0 and min_copy > p:
-        p = min_copy
 
     # Auto-size hash table: one slot per p-byte chunk of R (floor = q).
     num_seeds = max(0, len(R) - p + 1)
@@ -526,12 +515,6 @@ def diff_onepass(R: bytes, V: bytes,
                and V[v_m + ml] == R[r_m + ml]):
             ml += 1
 
-        # Filter: skip matches shorter than --min-copy
-        if ml < p:
-            v_c += 1
-            r_c += 1
-            continue
-
         # Step (6): emit ADD for unmatched gap, then COPY for match
         if v_s < v_m:
             commands.append(AddCmd(data=V[v_s:v_m]))
@@ -592,7 +575,6 @@ def diff_correcting(R: bytes, V: bytes,
                     p: int = SEED_LEN, q: int = TABLE_SIZE,
                     buf_cap: int = DELTA_BUF_CAP,
                     verbose: bool = False,
-                    min_copy: int = 0,
                     opts: 'DiffOptions' = None) -> List[Command]:
     """Correcting 1.5-pass algorithm (Section 7, Figure 8) with
     fingerprint-based checkpointing (Section 8).
@@ -622,14 +604,10 @@ def diff_correcting(R: bytes, V: bytes,
     that fall between checkpoint positions.
     """
     if opts is not None:
-        p, q, buf_cap, verbose, min_copy = opts.p, opts.q, opts.buf_cap, opts.verbose, opts.min_copy
+        p, q, buf_cap, verbose = opts.p, opts.q, opts.buf_cap, opts.verbose
     commands: List[Command] = []
     if not V:
         return commands
-    # --min-copy raises the seed length so we never fingerprint at a
-    # granularity finer than the minimum copy threshold.
-    if min_copy > 0 and min_copy > p:
-        p = min_copy
 
     # ── Checkpointing parameters (Section 8.1, pp. 347-348) ──────────
     num_seeds = max(0, len(R) - p + 1)
@@ -784,11 +762,6 @@ def diff_correcting(R: bytes, V: bytes,
         r_m = r_offset - bwd
         ml = bwd + fwd
         match_end = v_m + ml
-
-        # Filter: skip matches shorter than --min-copy
-        if ml < p:
-            v_c += 1
-            continue
 
         # Step (6): encode with correction
         if v_s <= v_m:
@@ -1349,7 +1322,7 @@ def cmd_encode(args):
     with mmap_open(args.reference) as R, mmap_open(args.version) as V:
         t0 = time.time()
         commands = algo(R, V, p=args.seed_len, q=args.table_size,
-                        verbose=args.verbose, min_copy=args.min_copy)
+                        verbose=args.verbose)
 
         if args.inplace:
             placed = make_inplace(R, commands, policy=args.policy)
@@ -1478,8 +1451,6 @@ def main():
                      help='Cycle-breaking policy for --inplace (default: localmin)')
     enc.add_argument('--verbose', action='store_true',
                      help='Print diagnostic messages to stderr')
-    enc.add_argument('--min-copy', type=int, default=0,
-                     help='Minimum copy length (0 = use seed length)')
     enc.set_defaults(func=cmd_encode)
 
     # decode

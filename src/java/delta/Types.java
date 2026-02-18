@@ -64,7 +64,6 @@ public final class Types {
         public int bufCap = DELTA_BUF_CAP;
         public boolean verbose = false;
         public boolean useSplay = false;
-        public int minCopy = 0;
     }
 
     // ── Statistics ──

@@ -127,10 +127,6 @@ enum Commands {
         /// Use splay tree instead of hash table
         #[arg(long)]
         splay: bool,
-
-        /// Minimum copy length (0 = use seed length)
-        #[arg(long, default_value_t = 0)]
-        min_copy: usize,
     },
 
     /// Reconstruct version from delta
@@ -189,7 +185,6 @@ fn main() {
             policy,
             verbose,
             splay,
-            min_copy,
         } => {
             let (_rf, r_mmap) = mmap_open(&reference).unwrap_or_else(|e| {
                 eprintln!("Error reading {}: {}", reference, e);
@@ -210,7 +205,6 @@ fn main() {
                 q: table_size,
                 verbose,
                 use_splay: splay,
-                min_copy,
                 ..DiffOptions::default()
             };
             let commands = delta::diff(algo, r, v, &opts);

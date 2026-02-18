@@ -17,7 +17,7 @@ import static delta.Types.*;
  *
  * Algorithms: greedy, onepass, correcting
  * Options: --seed-len N, --table-size N, --inplace, --policy P,
- *          --verbose, --splay, --min-copy N
+ *          --verbose, --splay
  */
 public final class Delta {
 
@@ -59,7 +59,7 @@ public final class Delta {
             "  java delta.Delta inplace <ref> <delta_in> <delta_out> [--policy P]\n\n" +
             "Algorithms: greedy, onepass, correcting\n" +
             "Options: --seed-len N, --table-size N, --inplace, --policy P,\n" +
-            "         --verbose, --splay, --min-copy N");
+            "         --verbose, --splay");
     }
 
     private static void encode(String[] args) throws IOException {
@@ -88,8 +88,6 @@ public final class Delta {
                 opts.verbose = true;
             } else if ("--splay".equals(opt)) {
                 opts.useSplay = true;
-            } else if ("--min-copy".equals(opt)) {
-                opts.minCopy = Integer.parseInt(args[++i]);
             } else {
                 throw new IllegalArgumentException("Unknown option: " + opt);
             }
