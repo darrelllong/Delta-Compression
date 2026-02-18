@@ -75,11 +75,16 @@ java -cp out delta.Delta decode old.bin delta.bin recovered.bin
 | `correcting` | ~O(n) | O(q) | Data with rearranged/moved blocks |
 | `greedy` | O(n^2) | O(n) | Smallest possible delta (optimal) |
 
-All three use Karp-Rabin rolling hashes with a Mersenne prime (2^61-1)
-for fingerprinting and a polynomial base of 263 for good bit mixing.
-Hash tables are auto-sized based on input length (`--table-size` acts
-as a floor).  Use `--verbose` to see hash table sizing and match
-statistics on stderr.
+All three use Karp-Rabin rolling hashes (Karp & Rabin 1987) with a
+Mersenne prime (2^61-1) for fingerprinting and a polynomial base of 263
+for good bit mixing.  Hash tables are auto-sized based on input length
+(`--table-size` acts as a floor).  An optional `--splay` flag replaces
+the hash table with a Sleator-Tarjan splay tree, which exploits temporal
+locality in match probes.  Use `--verbose` to see hash table sizing and
+match statistics on stderr.
+
+See [`HOWTO.md`](HOWTO.md) for tuning parameters, library API examples,
+checkpointing internals, and benchmark results.
 
 ## In-place mode
 
@@ -99,9 +104,10 @@ delta decode old.bin patch.delta recovered.bin
 
 The in-place converter builds a CRWI (Conflicting Read-Write Interval)
 digraph where an edge from command i to j means "i must execute before j"
-(because i reads from a region j will overwrite).  A topological sort
-gives a safe execution order.  Cycles are broken by converting copy
-commands to literal add commands.
+(because i reads from a region j will overwrite).  Kahn's algorithm
+(Kahn 1962) gives a topological sort with deterministic ordering via a
+min-heap keyed on (copy length, index).  Cycles are broken by converting
+copy commands to literal add commands.
 
 Cycle-breaking policies:
 
@@ -132,28 +138,13 @@ standard deltas (flag 0x00) from in-place deltas (flag 0x01).
 
 ## Testing
 
-```bash
-# Python — 168 tests
-cd src/python
-python3 -m unittest test_delta -v
-
-# Rust — 52 tests (17 unit + 35 integration)
-cd src/rust/delta
-cargo test
-
-# C++ — 46 tests (11 hash + 35 integration)
-cd src/cpp
-cmake -B build && cmake --build build
-ctest --test-dir build
-
-# C — 32 tests
-cd src/c
-make test
-
-# Java — roundtrip verification via CLI
-cd src/java
-javac -d out delta/*.java
-```
+| Language | Tests | Command |
+|----------|------:|---------|
+| Python | 168 | `cd src/python && python3 -m unittest test_delta -v` |
+| Rust | 52 | `cd src/rust/delta && cargo test` |
+| C++ | 46 | `cd src/cpp && cmake -B build && cmake --build build && ctest --test-dir build` |
+| C | 32 | `cd src/c && make test` |
+| Java | — | `cd src/java && javac -d out delta/*.java` |
 
 Tests cover all three algorithms, binary round-trips, paper examples,
 edge cases (empty/identical/completely different files), in-place
@@ -167,65 +158,34 @@ onepass and correcting on ~871 MB inputs.
 
 ```
 src/
-  python/
-    delta.py              Library + CLI
-    test_delta.py         Test suite (168 tests)
-  rust/delta/
-    src/
-      lib.rs              Re-exports
-      main.rs             CLI (clap)
-      types.rs            Command, PlacedCommand, DiffOptions, constants
-      hash.rs             Karp-Rabin rolling hash
-      encoding.rs         Unified binary format
-      splay.rs            Splay tree (Sleator & Tarjan 1985)
-      apply.rs            place_commands, apply_placed_to, apply_placed_inplace_to
-      inplace.rs          CRWI digraph, topological sort, cycle breaking
-      algorithm/
-        mod.rs            Dispatch
-        greedy.rs         O(n^2) optimal
-        onepass.rs        O(n) linear
-        correcting.rs     1.5-pass with checkpointing
-    tests/
-      integration.rs      35 integration tests
-    Cargo.toml
-  cpp/
-    include/delta/
-      types.h             Command/PlacedCommand (std::variant), DiffOptions
-      hash.h              Rolling hash, fingerprint, primality
-      encoding.h          Binary format encode/decode
-      algorithm.h         Greedy, onepass, correcting dispatchers
-      apply.h             place_commands, apply, in-place apply
-      inplace.h           CRWI digraph
-      delta.h             Umbrella header
-    src/                  Implementations (.cpp)
-    main.cpp              CLI (CLI11)
-    tests/                Catch2 v3 tests
-    CMakeLists.txt
-  c/
-    delta.h               Single header (types, flags, alloc, API)
-    *.c                   Implementations + CLI (main.c)
-    Makefile
-  java/delta/
-    Types.java            Command, PlacedCommand, DiffOptions, constants
-    Hash.java             Rolling hash, fingerprint, primality
-    Encoding.java         Binary format encode/decode
-    Diff.java             Algorithm dispatcher
-    Greedy.java           O(n^2) optimal
-    Onepass.java          O(n) linear
-    Correcting.java       1.5-pass with checkpointing
-    Apply.java            place_commands, apply, in-place, CRWI digraph
-    SplayTree.java        Splay tree
-    Delta.java            CLI
+  python/         Single-file library + CLI + 168-test suite
+  rust/delta/     Cargo crate — library + clap CLI + 52 tests
+  cpp/            CMake project — static library + CLI11 CLI + Catch2 tests
+  c/              Makefile project — single-header API + CLI + 32 tests
+  java/delta/     Java 11+ sources — library + CLI
 tests/
-  kernel-delta-test.sh    Kernel tarball benchmark (onepass + correcting)
-pubs/
-  ajtai-et-al-jacm-2002-differential-compression.pdf
-  burns-et-al-tkde-2003-inplace-reconstruction.pdf
-README.md
-HOWTO.md
+  kernel-delta-test.sh    Kernel tarball benchmark
+pubs/                     Ajtai et al. 2002, Burns et al. 2003 (PDFs)
 ```
 
+Each implementation has the same architecture: rolling hash, three
+algorithm modules, binary encoding, command placement, and CRWI-based
+in-place conversion.  See [`HOWTO.md`](HOWTO.md) for detailed file
+listings and library API examples.
+
 ## References
+
+The Karp-Rabin paper introduces the rolling hash / fingerprinting
+technique used by all three differencing algorithms.  Wagner and Fischer
+formalized string-to-string correction (edit distance).  Tichy extended
+it to block moves — the model solved by the algorithms here.
+Reichenberger and Miller-Myers are the prior O(n^2) optimal algorithms
+that Ajtai et al. improve upon.  Rabin's paper describes the
+Miller-Rabin probabilistic primality test used for hash table
+auto-sizing.  Kahn's algorithm is used for topological sorting of the
+CRWI digraph during in-place conversion.  Sleator and Tarjan's splay
+tree provides an alternative to hash tables for fingerprint lookup,
+exploiting temporal locality in match probes.
 
 ### BibTeX
 
@@ -371,15 +331,3 @@ HOWTO.md
   doi       = {10.1145/321796.321811},
 }
 ```
-
-The Karp-Rabin paper introduces the rolling hash / fingerprinting
-technique used by all three differencing algorithms.  Wagner and Fischer
-formalized string-to-string correction (edit distance).  Tichy extended
-it to block moves — the model solved by the algorithms here.
-Reichenberger and Miller-Myers are the prior O(n^2) optimal algorithms
-that Ajtai et al. improve upon.  Rabin's paper describes the
-Miller-Rabin probabilistic primality test used for hash table
-auto-sizing.  Kahn's algorithm is used for topological sorting of the
-CRWI digraph during in-place conversion.  Sleator and Tarjan's splay
-tree provides an alternative to hash tables for fingerprint lookup,
-exploiting temporal locality in match probes.
