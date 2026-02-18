@@ -157,7 +157,10 @@ reconstruction with both cycle-breaking policies, variable-length block
 transpositions (8–64 blocks with controlled transpositions),
 checkpointing correctness, and cross-language compatibility.
 A kernel tarball benchmark (`tests/kernel-delta-test.sh`) exercises
-onepass and correcting on ~871 MB inputs.
+onepass and correcting on ~871 MB inputs.  On linux-5.1 → 5.1.1, all
+five implementations produce identical deltas; Rust is fastest (0.6s
+onepass, 5.3s correcting), Python slowest (69s / 354s); see `HOWTO.md`
+for the full table.
 
 ## Project layout
 
