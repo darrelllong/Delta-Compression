@@ -215,8 +215,8 @@ delta encode correcting old.bin new.bin delta.bin --min-copy 256
 With a larger effective seed length, fewer seeds exist, the hash table
 is smaller (less memory), and fewer checkpoint operations are needed.
 On 871 MB kernel tarballs, `--min-copy 128` reduces the correcting
-hash table from 2.5 GB to 311 MB and runs in 4.1s versus 5.9s for the
-default.  The tradeoff is a larger delta: short matches are absorbed
+hash table from 2.5 GB to 311 MB and runs in 4.1s versus 5.3s for the
+default (Rust).  The tradeoff is a larger delta: short matches are absorbed
 into ADD commands, increasing delta size from 7 MB to 13 MB.
 
 The flag does not affect the delta format — deltas produced with any
@@ -581,14 +581,45 @@ slides the window one byte at a time; after a match jump, the hash is
 reinitialized from scratch (O(p) for one position, amortized across
 the scan).
 
-### Kernel tarball benchmark (linux-5.1 → 5.1.1, 871 MB, Rust)
+### Kernel tarball benchmark (linux-5.1 → linux-5.1.1, 871 MB)
+
+All five implementations, same input pair, default flags.  All produce
+byte-identical delta files.
+
+**onepass** (delta: 5.1 MB, ratio: 0.58%)
+
+| Implementation | Time |
+|----------------|-----:|
+| Rust | 0.6s |
+| C | 0.7s |
+| C++ | 0.8s |
+| Java | 2.2s |
+| Python | 69s |
+
+**correcting** (delta: 7.0 MB, ratio: 0.81%)
+
+| Implementation | Time |
+|----------------|-----:|
+| Rust | 5.3s |
+| Java | 7.4s |
+| C | 13.6s |
+| C++ | 13.6s |
+| Python | 354s |
+
+Rust leads on both algorithms.  For correcting, Java outperforms C and
+C++ by nearly 2×; for onepass the JVM overhead shows and Java lands
+between C and Python.  C and C++ are within measurement noise of each
+other on correcting; C edges C++ slightly on onepass.  Python is
+60–120× slower than Rust.
+
+**Rust, default vs `--min-copy 128` vs `--splay`**
 
 | Algorithm | Flags | Time | Delta | Copies | Median copy |
-|-----------|-------|------|-------|--------|-------------|
-| onepass | (default) | 1.5s | 5.1 MB | 205,030 | 89 B |
-| onepass | `--min-copy 128` | 1.1s | 11.5 MB | 68,478 | 3,950 B |
-| onepass | `--splay` | 1.0s | 5.1 MB | 205,030 | 89 B |
-| correcting | (default) | 5.9s | 7.0 MB | 243,546 | 91 B |
+|-----------|-------|-----:|------:|-------:|------------:|
+| onepass | (default) | 0.6s | 5.1 MB | 205,030 | 89 B |
+| onepass | `--min-copy 128` | 0.5s | 11.5 MB | 68,478 | 3,950 B |
+| onepass | `--splay` | 0.5s | 5.1 MB | 205,030 | 89 B |
+| correcting | (default) | 5.3s | 7.0 MB | 243,546 | 91 B |
 | correcting | `--min-copy 128` | 4.1s | 13.0 MB | 72,446 | 3,438 B |
 
 The copy-length distribution is heavy-tailed: median is 89–91 bytes
