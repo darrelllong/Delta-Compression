@@ -1222,7 +1222,9 @@ def make_inplace(R: bytes, commands: List[Command],
         else:  # localmin
             cycle = _find_cycle(adj, removed, n)
             if cycle:
-                victim = min(cycle, key=lambda i: copy_info[i][3])
+                # Key on (length, index) for deterministic tie-breaking
+                # — same composite key as the Kahn's PQ above.
+                victim = min(cycle, key=lambda i: (copy_info[i][3], i))
             else:
                 victim = next(i for i in range(n) if not removed[i])
 

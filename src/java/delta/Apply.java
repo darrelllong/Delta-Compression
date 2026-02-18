@@ -244,11 +244,14 @@ public final class Apply {
                 // LOCALMIN: find cycle, pick smallest copy
                 List<Integer> cycle = findCycle(adj, removed, n);
                 if (cycle != null) {
+                    // Key on (length, index) for deterministic tie-breaking
+                    // — same composite key as the Kahn's PQ above.
                     victim = cycle.get(0);
                     int minLen = copies.get(victim)[3];
                     for (int idx : cycle) {
-                        if (copies.get(idx)[3] < minLen) {
-                            minLen = copies.get(idx)[3];
+                        int len = copies.get(idx)[3];
+                        if (len < minLen || (len == minLen && idx < victim)) {
+                            minLen = len;
                             victim = idx;
                         }
                     }

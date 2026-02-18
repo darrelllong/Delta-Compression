@@ -183,9 +183,11 @@ pub fn make_inplace(
             CyclePolicy::Constant => (0..n).find(|&i| !removed[i]).unwrap(),
             CyclePolicy::Localmin => {
                 if let Some(cycle) = find_cycle(&adj, &removed, n) {
+                    // Key on (length, index) for deterministic tie-breaking
+                    // — same composite key as the Kahn's PQ above.
                     *cycle
                         .iter()
-                        .min_by_key(|&&i| copy_info[i].3)
+                        .min_by_key(|&&i| (copy_info[i].3, i))
                         .unwrap()
                 } else {
                     (0..n).find(|&i| !removed[i]).unwrap()
