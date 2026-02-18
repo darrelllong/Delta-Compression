@@ -268,7 +268,7 @@ main(int argc, char **argv)
 		printf("Add bytes:    %zu\n", stats.add_bytes);
 		printf("Time:         %.3fs\n", elapsed);
 
-		free(delta_buf.data);
+		delta_buffer_free(&delta_buf);
 		delta_placed_commands_free(&placed);
 		delta_commands_free(&cmds);
 		unmap_file(&r_file);
@@ -291,16 +291,16 @@ main(int argc, char **argv)
 		delta_decode_result_t dr = delta_decode(delta_data, delta_len);
 
 		if (dr.inplace) {
-			uint8_t *result = delta_apply_delta_inplace(
+			delta_buffer_t result = delta_apply_delta_inplace(
 				r_file.data, r_file.size,
 				&dr.commands, dr.version_size);
-			write_file(out_path, result, dr.version_size);
-			free(result);
+			write_file(out_path, result.data, result.len);
+			delta_buffer_free(&result);
 		} else {
-			uint8_t *out = calloc(dr.version_size, 1);
-			delta_apply_placed(r_file.data, &dr.commands, out);
-			write_file(out_path, out, dr.version_size);
-			free(out);
+			delta_buffer_t out = delta_apply_placed(
+				r_file.data, &dr.commands, dr.version_size);
+			write_file(out_path, out.data, out.len);
+			delta_buffer_free(&out);
 		}
 
 		clock_gettime(CLOCK_MONOTONIC, &t1);
@@ -312,7 +312,7 @@ main(int argc, char **argv)
 		printf("Output:       %s (%zu bytes)\n", out_path, dr.version_size);
 		printf("Time:         %.3fs\n", elapsed);
 
-		delta_placed_commands_free(&dr.commands);
+		delta_decode_result_free(&dr);
 		free(delta_data);
 		unmap_file(&r_file);
 
@@ -336,7 +336,7 @@ main(int argc, char **argv)
 		       stats.num_adds, stats.add_bytes);
 		printf("Output size:  %zu bytes\n", stats.total_output_bytes);
 
-		delta_placed_commands_free(&dr.commands);
+		delta_decode_result_free(&dr);
 		free(delta_data);
 
 	} else if (strcmp(argv[1], "inplace") == 0) {
@@ -373,7 +373,7 @@ main(int argc, char **argv)
 			write_file(delta_out_path, delta_data, delta_len);
 			printf("Delta is already in-place format; "
 			       "copied unchanged.\n");
-			delta_placed_commands_free(&dr.commands);
+			delta_decode_result_free(&dr);
 			free(delta_data);
 			unmap_file(&r_file);
 			return 0;
@@ -407,10 +407,10 @@ main(int argc, char **argv)
 		printf("Add bytes:    %zu\n", stats.add_bytes);
 		printf("Time:         %.3fs\n", elapsed);
 
-		free(ip_buf.data);
+		delta_buffer_free(&ip_buf);
 		delta_placed_commands_free(&ip_placed);
 		delta_commands_free(&cmds);
-		delta_placed_commands_free(&dr.commands);
+		delta_decode_result_free(&dr);
 		free(delta_data);
 		unmap_file(&r_file);
 

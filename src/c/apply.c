@@ -226,27 +226,26 @@ delta_unplace_commands(const delta_placed_commands_t *placed)
 
 /* ── Apply placed commands (standard mode) ─────────────────────────── */
 
-size_t
+delta_buffer_t
 delta_apply_placed(const uint8_t *r, const delta_placed_commands_t *cmds,
-                   uint8_t *out)
+                   size_t version_size)
 {
-	size_t max_written = 0;
+	uint8_t *out = delta_calloc(version_size, 1);
 	size_t i;
 	for (i = 0; i < cmds->len; i++) {
 		const delta_placed_command_t *cmd = &cmds->data[i];
 		if (cmd->tag == PCMD_COPY) {
 			memcpy(&out[cmd->copy.dst], &r[cmd->copy.src],
 			       cmd->copy.length);
-			size_t end = cmd->copy.dst + cmd->copy.length;
-			if (end > max_written) { max_written = end; }
 		} else {
 			memcpy(&out[cmd->add.dst], cmd->add.data,
 			       cmd->add.length);
-			size_t end = cmd->add.dst + cmd->add.length;
-			if (end > max_written) { max_written = end; }
 		}
 	}
-	return max_written;
+	delta_buffer_t result;
+	result.data = out;
+	result.len = version_size;
+	return result;
 }
 
 /* ── Apply placed commands in-place (memmove-safe) ─────────────────── */
@@ -269,7 +268,7 @@ delta_apply_placed_inplace(const delta_placed_commands_t *cmds, uint8_t *buf)
 
 /* ── Reconstruct version from R + in-place commands ────────────────── */
 
-uint8_t *
+delta_buffer_t
 delta_apply_delta_inplace(const uint8_t *r, size_t r_len,
                           const delta_placed_commands_t *cmds,
                           size_t version_size)
@@ -278,6 +277,8 @@ delta_apply_delta_inplace(const uint8_t *r, size_t r_len,
 	uint8_t *buf = delta_calloc(buf_size, 1);
 	memcpy(buf, r, r_len);
 	delta_apply_placed_inplace(cmds, buf);
-	/* Truncate to version_size by returning buf; caller knows the size. */
-	return buf;
+	delta_buffer_t result;
+	result.data = buf;
+	result.len = version_size;
+	return result;
 }
