@@ -79,9 +79,14 @@ All three use Karp-Rabin rolling hashes (Karp & Rabin 1987) with a
 Mersenne prime (2^61-1) for fingerprinting and a polynomial base of 263
 for good bit mixing.  Hash tables are auto-sized based on input length
 (`--table-size` acts as a floor).  An optional `--splay` flag replaces
-the hash table with a Sleator-Tarjan splay tree, which exploits temporal
-locality in match probes.  Use `--verbose` to see hash table sizing and
-match statistics on stderr.
+the hash table with a Sleator-Tarjan splay tree.  Frequently accessed
+fingerprints are splayed to the root and stay there, giving O(log(n/f))
+access for a fingerprint with frequency f — the same reason LRU caching
+works in practice.  For correcting, `--splay` also improves compression
+slightly: the hash table discards fingerprints that collide to the same
+slot, while the splay tree stores every checkpoint-passing seed.  See
+`HOWTO.md` for benchmark data.  Use `--verbose` to see hash table sizing
+and match statistics on stderr.
 
 See [`HOWTO.md`](HOWTO.md) for tuning parameters, library API examples,
 checkpointing internals, and benchmark results.
@@ -184,8 +189,9 @@ that Ajtai et al. improve upon.  Rabin's paper describes the
 Miller-Rabin probabilistic primality test used for hash table
 auto-sizing.  Kahn's algorithm is used for topological sorting of the
 CRWI digraph during in-place conversion.  Sleator and Tarjan's splay
-tree provides an alternative to hash tables for fingerprint lookup,
-exploiting temporal locality in match probes.
+tree provides an alternative to hash tables for fingerprint lookup;
+frequent fingerprints self-promote to the root, giving sub-logarithmic
+amortised access on Zipfian distributions.
 
 ### BibTeX
 
