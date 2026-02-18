@@ -42,6 +42,17 @@ fn find_cycle(adj: &[Vec<usize>], removed: &[bool], n: usize) -> Option<Vec<usiz
     None
 }
 
+/// Statistics from in-place conversion.
+#[derive(Debug, Default)]
+pub struct InplaceStats {
+    pub num_copies: usize,
+    pub num_adds: usize,
+    pub edges: usize,
+    pub cycles_broken: usize,
+    pub copies_converted: usize,
+    pub bytes_converted: usize,
+}
+
 /// Convert standard delta commands to in-place executable commands.
 ///
 /// The returned commands can be applied to a buffer initialized with R
@@ -59,9 +70,11 @@ pub fn make_inplace(
     r: &[u8],
     commands: &[Command],
     policy: CyclePolicy,
-) -> Vec<PlacedCommand> {
+) -> (Vec<PlacedCommand>, InplaceStats) {
+    let mut stats = InplaceStats::default();
+
     if commands.is_empty() {
-        return Vec::new();
+        return (Vec::new(), stats);
     }
 
     // Step 1: compute write offsets for each command
@@ -85,10 +98,14 @@ pub fn make_inplace(
 
     let n = copy_info.len();
     if n == 0 {
-        return add_info
-            .into_iter()
-            .map(|(dst, data)| PlacedCommand::Add { dst, data })
-            .collect();
+        stats.num_adds = add_info.len();
+        return (
+            add_info
+                .into_iter()
+                .map(|(dst, data)| PlacedCommand::Add { dst, data })
+                .collect(),
+            stats,
+        );
     }
 
     // Step 2: build CRWI digraph
@@ -117,6 +134,7 @@ pub fn make_inplace(
             if dj + lj > si {
                 adj[i].push(j);
                 in_deg[j] += 1;
+                stats.edges += 1;
             }
         }
     }
@@ -179,6 +197,9 @@ pub fn make_inplace(
         let (_, src, dst, length) = copy_info[victim];
         add_info.push((dst, r[src..src + length].to_vec()));
         converted.push(victim);
+        stats.cycles_broken += 1;
+        stats.copies_converted += 1;
+        stats.bytes_converted += length;
         removed[victim] = true;
         processed += 1;
 
@@ -200,9 +221,13 @@ pub fn make_inplace(
         result.push(PlacedCommand::Copy { src, dst, length });
     }
 
+    stats.num_copies = topo_order.len();
+
     for (dst, data) in add_info {
         result.push(PlacedCommand::Add { dst, data });
     }
 
-    result
+    stats.num_adds = result.len() - stats.num_copies;
+
+    (result, stats)
 }

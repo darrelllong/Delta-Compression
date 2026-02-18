@@ -25,5 +25,5 @@ pub use apply::{
     apply_placed_inplace_to, apply_placed_to,
     output_size, place_commands, unplace_commands,
 };
-pub use inplace::make_inplace;
+pub use inplace::{make_inplace, InplaceStats};
 pub use types::{delta_summary, placed_summary};

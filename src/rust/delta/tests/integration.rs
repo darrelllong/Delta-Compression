@@ -31,7 +31,7 @@ fn inplace_roundtrip(
     p: usize,
 ) -> Vec<u8> {
     let cmds = algo_fn(r, v, &opts(p));
-    let ip = make_inplace(r, &cmds, policy);
+    let (ip, _) = make_inplace(r, &cmds, policy);
     apply_delta_inplace(r, &ip, v.len())
 }
 
@@ -43,7 +43,7 @@ fn inplace_binary_roundtrip(
     p: usize,
 ) -> Vec<u8> {
     let cmds = algo_fn(r, v, &opts(p));
-    let ip = make_inplace(r, &cmds, policy);
+    let (ip, _) = make_inplace(r, &cmds, policy);
     let delta = encode_delta(&ip, true, v.len());
     let (ip2, _, vs) = decode_delta(&delta).unwrap();
     apply_delta_inplace(r, &ip2, vs)
@@ -428,7 +428,7 @@ fn test_inplace_identical() {
 fn test_inplace_empty_version() {
     for (_, algo) in all_algos() {
         let cmds = algo(b"hello", b"", &opts(2));
-        let ip = make_inplace(b"hello", &cmds, CyclePolicy::Localmin);
+        let (ip, _) = make_inplace(b"hello", &cmds, CyclePolicy::Localmin);
         assert_eq!(apply_delta_inplace(b"hello", &ip, 0), b"");
     }
 }
@@ -488,7 +488,7 @@ fn test_inplace_detected() {
         .copied()
         .collect();
     let cmds = diff_greedy(&r, &v, &opts(2));
-    let ip = make_inplace(&r, &cmds, CyclePolicy::Localmin);
+    let (ip, _) = make_inplace(&r, &cmds, CyclePolicy::Localmin);
     let delta = encode_delta(&ip, true, v.len());
     assert!(is_inplace_delta(&delta));
 }
@@ -730,8 +730,8 @@ fn test_localmin_picks_smallest() {
     let v: Vec<u8> = blocks.iter().rev().flat_map(|b| b.iter().copied()).collect();
 
     let cmds = diff_greedy(&r, &v, &opts(4));
-    let ip_const = make_inplace(&r, &cmds, CyclePolicy::Constant);
-    let ip_lmin = make_inplace(&r, &cmds, CyclePolicy::Localmin);
+    let (ip_const, _) = make_inplace(&r, &cmds, CyclePolicy::Constant);
+    let (ip_lmin, _) = make_inplace(&r, &cmds, CyclePolicy::Localmin);
 
     let add_const: usize = ip_const
         .iter()

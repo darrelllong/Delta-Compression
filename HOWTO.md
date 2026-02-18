@@ -191,6 +191,9 @@ behavior and diagnosing performance.
 ```bash
 delta encode onepass old.bin new.bin delta.bin --verbose
 delta encode correcting old.bin new.bin delta.bin --verbose
+
+# Also available on the inplace subcommand (shows CRWI edges and cycles broken)
+delta inplace old.bin standard.delta inplace.delta --verbose
 ```
 
 ### --min-copy (default: 0)
@@ -217,7 +220,7 @@ default.  The tradeoff is a larger delta: short matches are absorbed
 into ADD commands, increasing delta size from 7 MB to 13 MB.
 
 The flag does not affect the delta format — deltas produced with any
-`--min-copy` value are decoded identically by all three implementations.
+`--min-copy` value are decoded identically by all five implementations.
 
 ### --splay (Rust, C++, C, and Java)
 
@@ -320,6 +323,24 @@ delta encode onepass old.bin new.bin patch.delta --inplace --policy localmin
 delta encode onepass old.bin new.bin patch.delta --inplace --policy constant
 ```
 
+### Converting a standard delta to in-place
+
+If you already have a standard delta and want to convert it to in-place
+format without re-encoding from the original files:
+
+```bash
+# Rust, C++, C, Java
+delta inplace old.bin standard.delta inplace.delta
+
+# With verbose output (shows CRWI edge count and cycles broken)
+delta inplace old.bin standard.delta inplace.delta --verbose
+
+# Python
+python3 delta.py inplace old.bin standard.delta inplace.delta
+```
+
+If the input delta is already in-place format, it is copied unchanged.
+
 ## Inspecting a delta file
 
 ```bash
@@ -367,7 +388,7 @@ java -cp out delta.Delta decode old.bin delta.bin recovered.bin
 
 ```python
 from delta import (
-    diff_onepass, diff_greedy, diff_correcting,
+    diff_onepass, diff_greedy, diff_correcting, DiffOptions,
     place_commands, encode_delta, decode_delta,
     apply_delta, apply_placed, apply_placed_inplace,
     make_inplace,
@@ -379,7 +400,7 @@ with open('new.bin', 'rb') as f:
     V = f.read()
 
 # Diff (verbose=True prints hash table stats to stderr)
-commands = diff_onepass(R, V)
+commands = diff_onepass(R, V, verbose=True)
 
 # Standard binary delta
 placed = place_commands(commands)
@@ -399,7 +420,7 @@ recovered = apply_placed_inplace(R, ip_commands, len(V))
 
 ```rust
 use delta::{
-    diff, Algorithm, CyclePolicy,
+    diff, Algorithm, CyclePolicy, DiffOptions,
     place_commands, encode_delta, decode_delta,
     apply_placed_to, apply_placed_inplace_to,
     make_inplace,
@@ -408,8 +429,9 @@ use delta::{
 let r: &[u8] = &reference_data;
 let v: &[u8] = &version_data;
 
-// Diff (verbose=true prints stats, use_splay=true for splay tree, min_copy=0 for default)
-let commands = diff(Algorithm::Onepass, r, v, 16, 1048573, false, false, 0);
+// Diff with options
+let opts = DiffOptions { verbose: true, ..DiffOptions::default() };
+let commands = diff(Algorithm::Onepass, r, v, &opts);
 
 // Standard binary delta
 let placed = place_commands(&commands);
@@ -421,7 +443,7 @@ let mut output = vec![0u8; version_size];
 apply_placed_to(r, &placed2, &mut output);
 
 // In-place delta
-let ip = make_inplace(r, &commands, CyclePolicy::Localmin);
+let (ip, _stats) = make_inplace(r, &commands, CyclePolicy::Localmin);
 let ip_delta = encode_delta(&ip, true, v.len());
 ```
 
@@ -435,8 +457,10 @@ using namespace delta;
 std::span<const uint8_t> r = reference_data;
 std::span<const uint8_t> v = version_data;
 
-// Diff (verbose=true prints stats, use_splay=true for splay tree, min_copy=0 for default)
-auto commands = diff(Algorithm::Onepass, r, v, SEED_LEN, TABLE_SIZE, false, false, 0);
+// Diff with options
+DiffOptions opts;
+opts.verbose = true;
+auto commands = diff(Algorithm::Onepass, r, v, opts);
 
 // Standard binary delta
 auto placed = place_commands(commands);
@@ -462,9 +486,10 @@ size_t r_len = reference_len;
 uint8_t *v = version_data;
 size_t v_len = version_len;
 
-/* Diff (verbose=true prints stats, use_splay=true for splay tree, min_copy=0 for default) */
-delta_commands_t cmds = delta_diff(ALGO_ONEPASS, r, r_len, v, v_len,
-    DELTA_SEED_LEN, DELTA_TABLE_SIZE, false, false, 0);
+/* Diff with options (flags use delta_flag_set for verbose, splay, etc.) */
+delta_diff_options_t opts = DELTA_DIFF_OPTIONS_DEFAULT;
+opts.flags = delta_flag_set(opts.flags, DELTA_OPT_VERBOSE);
+delta_commands_t cmds = delta_diff(ALGO_ONEPASS, r, r_len, v, v_len, &opts);
 
 /* Standard binary delta */
 delta_placed_commands_t placed = delta_place_commands(&cmds);
@@ -473,7 +498,7 @@ uint8_t *delta_bytes = delta_encode(&placed, false, v_len, &delta_len);
 
 /* Decode and reconstruct */
 delta_decode_result_t res = delta_decode(delta_bytes, delta_len);
-uint8_t *output = calloc(res.version_size, 1);
+uint8_t *output = delta_calloc(res.version_size, 1);
 delta_apply_placed(r, r_len, &res.commands, output);
 
 /* In-place delta */
@@ -500,9 +525,10 @@ import java.util.List;
 byte[] r = readReference();
 byte[] v = readVersion();
 
-// Diff (verbose=true prints stats, useSplay=true for splay tree, minCopy=0 for default)
-List<Command> commands = Diff.diff(Algorithm.ONEPASS, r, v,
-    SEED_LEN, TABLE_SIZE, false, false, 0);
+// Diff with options
+DiffOptions opts = new DiffOptions();
+opts.verbose = true;
+List<Command> commands = Diff.diff(Algorithm.ONEPASS, r, v, opts);
 
 // Standard binary delta
 List<PlacedCommand> placed = Apply.placeCommands(commands);
@@ -522,11 +548,11 @@ byte[] recovered = Apply.applyDeltaInplace(r, ip, v.length);
 ## Running the tests
 
 ```bash
-# Python — 154 tests
+# Python — 168 tests
 cd src/python
 python3 -m unittest test_delta -v
 
-# Rust — 35 tests
+# Rust — 52 tests (17 unit + 35 integration)
 cd src/rust/delta
 cargo test
 

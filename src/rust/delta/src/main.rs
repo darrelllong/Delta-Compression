@@ -165,6 +165,10 @@ enum Commands {
         /// Cycle-breaking policy
         #[arg(long, value_enum, default_value_t = PolicyArg::Localmin)]
         policy: PolicyArg,
+
+        /// Print diagnostics (cycles broken, etc.)
+        #[arg(long)]
+        verbose: bool,
     },
 }
 
@@ -213,7 +217,8 @@ fn main() {
 
             let pol: CyclePolicy = policy.into();
             let placed = if inplace {
-                make_inplace(r, &commands, pol)
+                let (p, _stats) = make_inplace(r, &commands, pol);
+                p
             } else {
                 place_commands(&commands)
             };
@@ -354,6 +359,7 @@ fn main() {
             delta_in,
             delta_out,
             policy,
+            verbose,
         } => {
             let (_rf, r_mmap) = mmap_open(&reference).unwrap_or_else(|e| {
                 eprintln!("Error reading {}: {}", reference, e);
@@ -384,7 +390,7 @@ fn main() {
             let t0 = Instant::now();
             let pol: CyclePolicy = policy.into();
             let commands = unplace_commands(&placed);
-            let ip_placed = make_inplace(r, &commands, pol);
+            let (ip_placed, ip_stats) = make_inplace(r, &commands, pol);
             let elapsed = t0.elapsed();
 
             let ip_delta = encode_delta(&ip_placed, true, version_size);
@@ -392,6 +398,22 @@ fn main() {
                 eprintln!("Error writing {}: {}", delta_out, e);
                 process::exit(1);
             });
+
+            if verbose {
+                eprintln!(
+                    "inplace: {} copies, {} CRWI edges, {} cycles broken",
+                    ip_stats.num_copies + ip_stats.copies_converted,
+                    ip_stats.edges,
+                    ip_stats.cycles_broken,
+                );
+                if ip_stats.copies_converted > 0 {
+                    eprintln!(
+                        "  converted {} copies -> adds ({} bytes materialized)",
+                        ip_stats.copies_converted,
+                        ip_stats.bytes_converted,
+                    );
+                }
+            }
 
             let stats = placed_summary(&ip_placed);
             let pol_name = format!("{:?}", pol).to_lowercase();
