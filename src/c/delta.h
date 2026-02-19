@@ -18,8 +18,9 @@
  * Constants (Section 2.1.3)
  * ==================================================================== */
 
-#define DELTA_SEED_LEN    16
-#define DELTA_TABLE_SIZE  1048573   /* largest prime < 2^20 */
+#define DELTA_SEED_LEN       16
+#define DELTA_TABLE_SIZE     1048573UL    /* largest prime < 2^20 */
+#define DELTA_MAX_TABLE_SIZE 1073741827UL /* prime near 2^30; default ceiling for auto-sizing */
 #define DELTA_HASH_BASE   263ULL
 #define DELTA_HASH_MOD    ((1ULL << 61) - 1)  /* Mersenne prime 2^61-1 */
 #define DELTA_FLAG_INPLACE 0x01
@@ -247,11 +248,12 @@ typedef struct {
 	size_t        p;
 	size_t        q;
 	size_t        buf_cap;
+	size_t        max_table;
 	delta_flags_t flags;
 } delta_diff_options_t;
 
 #define DELTA_DIFF_OPTIONS_DEFAULT \
-	{ DELTA_SEED_LEN, DELTA_TABLE_SIZE, DELTA_BUF_CAP, 0 }
+	{ DELTA_SEED_LEN, DELTA_TABLE_SIZE, DELTA_BUF_CAP, DELTA_MAX_TABLE_SIZE, 0 }
 
 /* ====================================================================
  * Differencing algorithms

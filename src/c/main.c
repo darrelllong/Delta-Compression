@@ -120,6 +120,19 @@ elapsed_sec(struct timespec *t0, struct timespec *t1)
 	     + (double)(t1->tv_nsec - t0->tv_nsec) / 1e9;
 }
 
+/* ── Parse a size string with optional k/M/B suffix ────────────────── */
+
+static size_t
+parse_size_suffix(const char *s)
+{
+	char *end;
+	unsigned long long n = strtoull(s, &end, 10);
+	if (*end == 'k' || *end == 'K') { n *= 1000ULL; }
+	else if (*end == 'M' || *end == 'm') { n *= 1000000ULL; }
+	else if (*end == 'B' || *end == 'b') { n *= 1000000000ULL; }
+	return (size_t)n;
+}
+
 /* ── Usage ─────────────────────────────────────────────────────────── */
 
 static void
@@ -136,12 +149,13 @@ usage(void)
 	    "\n"
 	    "Options:\n"
 	    "  --seed-len N     Seed length (default %d)\n"
-	    "  --table-size N   Hash table size floor (default %d)\n"
+	    "  --table-size N   Hash table size floor (default %lu)\n"
+	    "  --max-table N    Max hash table size, k/M/B suffix ok (default %lu)\n"
 	    "  --inplace        Produce in-place delta\n"
 	    "  --policy P       Cycle policy: localmin (default), constant\n"
 	    "  --verbose        Print diagnostics\n"
 	    "  --splay          Use splay tree instead of hash table\n",
-	    DELTA_SEED_LEN, DELTA_TABLE_SIZE);
+	    DELTA_SEED_LEN, (unsigned long)DELTA_TABLE_SIZE, (unsigned long)DELTA_MAX_TABLE_SIZE);
 	exit(1);
 }
 
@@ -175,6 +189,7 @@ main(int argc, char **argv)
 
 		size_t seed_len = DELTA_SEED_LEN;
 		size_t table_size = DELTA_TABLE_SIZE;
+		size_t max_table = DELTA_MAX_TABLE_SIZE;
 		delta_flags_t flags = 0;
 		delta_cycle_policy_t policy = POLICY_LOCALMIN;
 		const char *policy_str = "localmin";
@@ -183,6 +198,7 @@ main(int argc, char **argv)
 		static struct option long_opts[] = {
 			{"seed-len",   required_argument, NULL, 's'},
 			{"table-size", required_argument, NULL, 't'},
+			{"max-table",  required_argument, NULL, 'x'},
 			{"inplace",    no_argument,       NULL, 'i'},
 			{"policy",     required_argument, NULL, 'p'},
 			{"verbose",    no_argument,       NULL, 'v'},
@@ -196,6 +212,7 @@ main(int argc, char **argv)
 			switch (opt) {
 			case 's': seed_len = (size_t)atol(optarg); break;
 			case 't': table_size = (size_t)atol(optarg); break;
+			case 'x': max_table = parse_size_suffix(optarg); break;
 			case 'i': flags = delta_flag_set(flags, DELTA_OPT_INPLACE); break;
 			case 'p':
 				policy_str = optarg;
@@ -215,9 +232,14 @@ main(int argc, char **argv)
 		struct timespec t0, t1;
 		clock_gettime(CLOCK_MONOTONIC, &t0);
 
+		if (seed_len == 0) {
+			fprintf(stderr, "error: --seed-len must be >= 1\n");
+			exit(1);
+		}
 		delta_diff_options_t diff_opts = DELTA_DIFF_OPTIONS_DEFAULT;
 		diff_opts.p = seed_len;
 		diff_opts.q = table_size;
+		diff_opts.max_table = max_table;
 		diff_opts.flags = flags;
 
 		bool inplace = delta_flag_get(flags, DELTA_OPT_INPLACE);

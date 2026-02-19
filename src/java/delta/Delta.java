@@ -50,6 +50,18 @@ public final class Delta {
         }
     }
 
+    /** Parse a size string with optional k/M/B suffix (decimal multipliers). */
+    private static int parseSizeSuffix(String s) {
+        if (s.isEmpty()) throw new IllegalArgumentException("empty size value");
+        char last = s.charAt(s.length() - 1);
+        long mult = 1;
+        String num = s;
+        if (last == 'k' || last == 'K') { mult = 1_000L;         num = s.substring(0, s.length() - 1); }
+        else if (last == 'M' || last == 'm') { mult = 1_000_000L;     num = s.substring(0, s.length() - 1); }
+        else if (last == 'B' || last == 'b') { mult = 1_000_000_000L; num = s.substring(0, s.length() - 1); }
+        return (int) (Long.parseLong(num) * mult);
+    }
+
     private static void usage() {
         throw new IllegalArgumentException(
             "Usage:\n" +
@@ -58,8 +70,8 @@ public final class Delta {
             "  java delta.Delta info <delta>\n" +
             "  java delta.Delta inplace <ref> <delta_in> <delta_out> [--policy P]\n\n" +
             "Algorithms: greedy, onepass, correcting\n" +
-            "Options: --seed-len N, --table-size N, --inplace, --policy P,\n" +
-            "         --verbose, --splay");
+            "Options: --seed-len N, --table-size N, --max-table N (k/M/B ok),\n" +
+            "         --inplace, --policy P, --verbose, --splay");
     }
 
     private static void encode(String[] args) throws IOException {
@@ -80,6 +92,8 @@ public final class Delta {
                 opts.p = Integer.parseInt(args[++i]);
             } else if ("--table-size".equals(opt)) {
                 opts.q = Integer.parseInt(args[++i]);
+            } else if ("--max-table".equals(opt)) {
+                opts.maxTable = parseSizeSuffix(args[++i]);
             } else if ("--inplace".equals(opt)) {
                 inplace = true;
             } else if ("--policy".equals(opt)) {
@@ -92,6 +106,9 @@ public final class Delta {
                 throw new IllegalArgumentException("Unknown option: " + opt);
             }
         }
+
+        if (opts.p < 1)
+            throw new IllegalArgumentException("--seed-len must be >= 1");
 
         byte[] r = readFile(refPath);
         byte[] v = readFile(verPath);

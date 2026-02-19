@@ -5,38 +5,57 @@ use crate::types::{Command, CyclePolicy, PlacedCommand};
 
 /// Find a cycle in the subgraph of non-removed vertices.
 ///
-/// Follows forward edges from each non-removed vertex until we revisit
-/// one (cycle found) or reach a dead end (try next start vertex).
-/// Returns a list of vertex indices forming the cycle, or None.
+/// Iterative DFS with three-color marking (unvisited / on-path / done).
+/// A back-edge to an on-path vertex (color 1) signals a cycle.
+/// Returns the cycle vertices in order, or None if the graph is acyclic.
 fn find_cycle(adj: &[Vec<usize>], removed: &[bool], n: usize) -> Option<Vec<usize>> {
+    let mut color = vec![0u8; n]; // 0=unvisited, 1=on current path, 2=done
+    let mut path: Vec<usize> = Vec::new();
+
     for start in 0..n {
-        if removed[start] {
+        if removed[start] || color[start] != 0 {
             continue;
         }
-        let mut visited = std::collections::HashMap::new();
-        let mut path = Vec::new();
-        let mut curr = Some(start);
-        let mut step = 0usize;
 
-        while let Some(c) = curr {
-            if visited.contains_key(&c) {
-                // Found a cycle
-                let cycle_idx = visited[&c];
-                return Some(path[cycle_idx..].to_vec());
-            }
-            visited.insert(c, step);
-            path.push(c);
-            step += 1;
+        color[start] = 1;
+        path.push(start);
+        // Stack entries: (vertex, index of next neighbor to visit)
+        let mut stack: Vec<(usize, usize)> = vec![(start, 0)];
 
-            // Find next non-removed neighbor
-            let mut next_v = None;
-            for &w in &adj[c] {
-                if !removed[w] {
-                    next_v = Some(w);
+        while !stack.is_empty() {
+            let (v, ni) = *stack.last().unwrap();
+            let mut advanced = false;
+            let mut next_ni = ni;
+
+            while next_ni < adj[v].len() {
+                let w = adj[v][next_ni];
+                next_ni += 1;
+                if removed[w] {
+                    continue;
+                }
+                if color[w] == 1 {
+                    // Back-edge: w is on the current path — cycle found.
+                    let pos = path.iter().position(|&x| x == w).unwrap();
+                    return Some(path[pos..].to_vec());
+                }
+                if color[w] == 0 {
+                    // Save progress on current frame, then descend.
+                    stack.last_mut().unwrap().1 = next_ni;
+                    color[w] = 1;
+                    path.push(w);
+                    stack.push((w, 0));
+                    advanced = true;
                     break;
                 }
+                // color[w] == 2: already fully explored, skip.
             }
-            curr = next_v;
+
+            if !advanced {
+                // All neighbors explored — backtrack.
+                stack.pop();
+                color[v] = 2;
+                path.pop();
+            }
         }
     }
     None
@@ -58,12 +77,22 @@ pub struct InplaceStats {
 /// The returned commands can be applied to a buffer initialized with R
 /// to reconstruct V in-place, without a separate output buffer.
 ///
+/// Why overlaps don't always require add conversion:
+/// When copy i reads from `[src_i, src_i+len_i)` and copy j writes to
+/// `[dst_j, dst_j+len_j)`, and these intervals overlap, copy i MUST execute
+/// before j overwrites its source data.  This ordering constraint is an edge
+/// i→j in the CRWI (Copy-Read/Write-Intersection) digraph.  When the graph
+/// is acyclic, a topological order gives a valid serial schedule — no
+/// conversion needed.  A cycle i₁→i₂→…→iₖ→i₁ creates a circular dependency
+/// with no valid schedule; breaking it materializes one copy as a literal add
+/// (saving source bytes from R before the buffer is modified).
+///
 /// Algorithm (Burns, Long, Stockmeyer, IEEE TKDE 2003):
 ///   1. Annotate each command with its write offset in the output
-///   2. Build CRWI (Copy-Read/Write-Intersection) digraph on copy commands
-///      (Section 4.2) — edge from i to j when i's read interval overlaps
-///      j's write interval (i must execute before j)
-///   3. Topological sort; break cycles by converting copies to adds
+///   2. Build CRWI digraph: edge i→j iff i's read interval intersects j's
+///      write interval (Section 4.2)
+///   3. Topological sort (Kahn); when the heap empties with nodes remaining,
+///      a cycle exists — find it and convert the minimum-length copy to an add
 ///      (cycle-breaking policies: Section 4.3)
 ///   4. Output: copies in topological order, then all adds
 pub fn make_inplace(
@@ -123,15 +152,29 @@ pub fn make_inplace(
     for i in 0..n {
         let (_, si, _, li) = copy_info[i];
         let read_end = si + li;
-        // Find first write whose start >= read_end
+        // Two binary searches exploit the fact that dst intervals are
+        // non-overlapping (each output byte written exactly once):
+        //   lo = first write with dst >= si
+        //   hi = first write with dst >= read_end
+        // Writes in [lo, hi) start within [si, read_end) and thus always
+        // overlap the read interval.  The write at lo-1 (if any) starts
+        // before si; it overlaps iff its end exceeds si.
+        let lo = write_starts.partition_point(|&ws| ws < si);
         let hi = write_starts.partition_point(|&ws| ws < read_end);
-        for k in 0..hi {
-            let j = write_sorted[k];
-            if i == j {
-                continue;
+        if lo > 0 {
+            let j = write_sorted[lo - 1];
+            if j != i {
+                let (_, _, dj, lj) = copy_info[j];
+                if dj + lj > si {
+                    adj[i].push(j);
+                    in_deg[j] += 1;
+                    stats.edges += 1;
+                }
             }
-            let (_, _, dj, lj) = copy_info[j];
-            if dj + lj > si {
+        }
+        for k in lo..hi {
+            let j = write_sorted[k];
+            if j != i {
                 adj[i].push(j);
                 in_deg[j] += 1;
                 stats.edges += 1;

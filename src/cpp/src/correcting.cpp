@@ -35,10 +35,12 @@ std::vector<Command> diff_correcting(
 
     // ── Checkpointing parameters (Section 8.1, pp. 347-348) ─────────
     size_t num_seeds = (r.size() >= p) ? (r.size() - p + 1) : 0;
+    size_t max_table = opts.max_table;
     // Auto-size: 2x factor for correcting's |F|=2L convention.
+    // Capped at max_table to prevent runaway allocation on huge inputs.
     size_t cap = (num_seeds > 0)
-        ? next_prime(std::max(q, 2 * num_seeds / p))
-        : next_prime(q); // |C|
+        ? next_prime(std::min(max_table, std::max(q, 2 * num_seeds / p)))
+        : next_prime(std::min(q, max_table)); // |C|
     uint64_t f_size = (num_seeds > 0)
         ? static_cast<uint64_t>(next_prime(2 * num_seeds))
         : 1; // |F|

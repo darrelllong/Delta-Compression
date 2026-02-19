@@ -1,11 +1,11 @@
 package delta;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
-import java.util.HashMap;
+import java.util.Deque;
 import java.util.List;
-import java.util.Map;
 import java.util.PriorityQueue;
 
 import static delta.Types.*;
@@ -137,10 +137,19 @@ public final class Apply {
     /**
      * Convert standard delta commands to in-place executable commands.
      *
-     * Algorithm:
+     * A CRWI (Copy-Read/Write-Intersection) edge i→j means copy i reads
+     * from a region that copy j will overwrite, so i must execute before j.
+     * When the digraph is acyclic, a topological order gives a valid serial
+     * schedule and no conversion is needed.  A cycle i₁→i₂→…→iₖ→i₁ creates
+     * a circular dependency with no valid schedule; breaking it materializes
+     * one copy as a literal add (reading source bytes from R before they are
+     * overwritten).
+     *
+     * Algorithm (Burns, Long, Stockmeyer, IEEE TKDE 2003):
      *   1. Annotate each command with its write offset
      *   2. Build CRWI digraph on copy commands (Section 4.2)
-     *   3. Topological sort; break cycles by converting copies to adds
+     *   3. Topological sort (Kahn); when heap empties with remaining nodes,
+     *      find the cycle and convert the minimum-length copy to an add
      *   4. Output: copies in topological order, then all adds
      */
     public static List<PlacedCommand> makeInplace(byte[] r, List<Command> commands,
@@ -183,21 +192,32 @@ public final class Apply {
         for (int i = 0; i < n; i++) {
             int si = copies.get(i)[1], li = copies.get(i)[3];
             int readEnd = si + li;
-            // Binary search: find first writeStarts[k] >= readEnd
+            // Two binary searches exploit the fact that dst intervals are
+            // non-overlapping (each output byte written exactly once):
+            //   lo = first write with dst >= si
+            //   hi = first write with dst >= readEnd
+            // Writes in [lo, hi) start within [si, readEnd) and thus always
+            // overlap the read interval.  The write at lo-1 (if any) starts
+            // before si; it overlaps iff its end exceeds si.
             int lo = 0, hi = n;
-            while (lo < hi) {
-                int mid = lo + (hi - lo) / 2;
-                if (writeStarts[mid] < readEnd) lo = mid + 1;
-                else hi = mid;
-            }
-            for (int k = 0; k < lo; k++) {
-                int j = writeSorted[k];
-                if (i == j) continue;
-                int dj = copies.get(j)[2], lj = copies.get(j)[3];
-                if (dj + lj > si) {
-                    adj.get(i).add(j);
-                    inDeg[j]++;
+            { int a = 0, b = n;
+              while (a < b) { int m = a + (b - a) / 2;
+                if (writeStarts[m] < si) a = m + 1; else b = m; }
+              lo = a; }
+            { int a = lo, b = n;
+              while (a < b) { int m = a + (b - a) / 2;
+                if (writeStarts[m] < readEnd) a = m + 1; else b = m; }
+              hi = a; }
+            if (lo > 0) {
+                int j = writeSorted[lo - 1];
+                if (j != i) {
+                    int dj = copies.get(j)[2], lj = copies.get(j)[3];
+                    if (dj + lj > si) { adj.get(i).add(j); inDeg[j]++; }
                 }
+            }
+            for (int k = lo; k < hi; k++) {
+                int j = writeSorted[k];
+                if (j != i) { adj.get(i).add(j); inDeg[j]++; }
             }
         }
 
@@ -289,30 +309,55 @@ public final class Apply {
         return result;
     }
 
-    /** Find a cycle in the subgraph of non-removed vertices. */
+    /**
+     * Find a cycle in the subgraph of non-removed vertices.
+     *
+     * Iterative DFS with three-color marking (0=unvisited, 1=on-path, 2=done).
+     * A back-edge to an on-path vertex signals a cycle.
+     */
     private static List<Integer> findCycle(List<List<Integer>> adj,
                                            boolean[] removed, int n) {
+        int[] color = new int[n]; // 0=unvisited, 1=on current path, 2=done
+        List<Integer> path = new ArrayList<>();
+
         for (int start = 0; start < n; start++) {
-            if (removed[start]) continue;
-            Map<Integer, Integer> visited = new HashMap<>();
-            List<Integer> path = new ArrayList<>();
-            Integer curr = start;
-            int step = 0;
+            if (removed[start] || color[start] != 0) continue;
 
-            while (curr != null) {
-                if (visited.containsKey(curr)) {
-                    int cycleIdx = visited.get(curr);
-                    return path.subList(cycleIdx, path.size());
-                }
-                visited.put(curr, step);
-                path.add(curr);
-                step++;
+            color[start] = 1;
+            path.add(start);
+            // Stack of [vertex, next_neighbor_index]
+            Deque<int[]> stack = new ArrayDeque<>();
+            stack.push(new int[]{start, 0});
 
-                Integer next = null;
-                for (int w : adj.get(curr)) {
-                    if (!removed[w]) { next = w; break; }
+            while (!stack.isEmpty()) {
+                int[] top = stack.peek();
+                int v = top[0];
+                List<Integer> neighbors = adj.get(v);
+                boolean advanced = false;
+
+                while (top[1] < neighbors.size()) {
+                    int w = neighbors.get(top[1]++);
+                    if (removed[w]) continue;
+                    if (color[w] == 1) {
+                        // Back-edge: cycle found.
+                        int pos = path.indexOf(w);
+                        return new ArrayList<>(path.subList(pos, path.size()));
+                    }
+                    if (color[w] == 0) {
+                        color[w] = 1;
+                        path.add(w);
+                        stack.push(new int[]{w, 0});
+                        advanced = true;
+                        break;
+                    }
+                    // color[w] == 2: already done, skip
                 }
-                curr = next;
+
+                if (!advanced) {
+                    stack.pop();
+                    color[v] = 2;
+                    path.remove(path.size() - 1);
+                }
             }
         }
         return null;

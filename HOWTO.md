@@ -182,6 +182,30 @@ delta encode correcting old.bin new.bin delta.bin --table-size 25013
 delta encode correcting old.bin new.bin delta.bin --table-size 8388593
 ```
 
+### --max-table (default: 1073741827)
+
+Maximum hash table capacity for the correcting algorithm's auto-sizing
+formula.  The actual size is `next_prime(min(max_table, 2 * num_seeds / p))`.
+Without a cap, a very large reference file would cause the formula to request
+a huge allocation; the default ceiling of ~1B entries limits consumption
+to ~24 GB.  The default is 1073741827 (a prime near 2^30).
+
+Accepts `k`, `M`, and `B` decimal suffixes (1k = 1,000; 1M = 1,000,000;
+1B = 1,000,000,000).
+
+```bash
+# Cap at 128M entries (~3 GB RAM) for a memory-constrained system
+delta encode correcting old.bin new.bin delta.bin --max-table 128M
+
+# Allow a larger table on a high-memory server
+delta encode correcting old.bin new.bin delta.bin --max-table 2B
+```
+
+The table size directly controls compression quality: a smaller cap
+increases the checkpoint stride m = ⌈|F|/|C|⌉, making the checkpoint
+filter coarser and causing the algorithm to miss more matches.  See the
+`--max-table` benchmark below for measured ratios across table sizes.
+
 ### --verbose
 
 Print hash table sizing, match statistics, and copy-length summary
@@ -734,31 +758,98 @@ while onepass time grows with permutation as it emits more adds.
 
 **Inplace vs normal — 16 MB, onepass and correcting**
 
-| Algorithm | Perm% | Ratio-N | Ratio-IP | Adds-N | Adds-IP | Time-N | Time-IP |
-|-----------|------:|--------:|---------:|-------:|--------:|-------:|--------:|
-| onepass | 0% | 0.0000 | 0.0000 | 0 | 0 | 0.009s | 0.008s |
-| onepass | 25% | 0.2580 | 0.2580 | 6,063 | 6,063 | 0.194s | 0.215s |
-| onepass | 50% | 0.5115 | 0.5115 | 8,066 | 8,066 | 0.384s | 0.411s |
-| onepass | 75% | 0.7588 | 0.7588 | 6,025 | 6,025 | 0.544s | 0.576s |
-| onepass | 100% | 0.9921 | 0.9921 | 268 | 268 | 0.835s | 0.832s |
-| correcting | 0% | 0.0000 | 0.0000 | 0 | 0 | 0.131s | 0.127s |
-| correcting | 25% | 0.0112 | 0.8164 | 0 | 10,297 | 0.131s | 53.580s |
-| correcting | 50% | 0.0191 | 0.6306 | 0 | 13,422 | 0.142s | 111.461s |
-| correcting | 75% | 0.0238 | 0.4587 | 0 | 12,791 | 0.138s | 174.946s |
-| correcting | 100% | 0.0254 | 0.4028 | 0 | 12,014 | 0.142s | 164.815s |
+"Cycles" counts copy commands converted to literal adds to break CRWI
+dependency cycles.
+
+| Algorithm | Perm% | Ratio-N | Ratio-IP | Adds-N | Adds-IP | Time-N | Time-IP | Cycles |
+|-----------|------:|--------:|---------:|-------:|--------:|-------:|--------:|-------:|
+| onepass | 0% | 0.0000 | 0.0000 | 0 | 0 | 0.008s | 0.008s | 0 |
+| onepass | 25% | 0.2580 | 0.2580 | 6,063 | 6,063 | 0.172s | 0.167s | 0 |
+| onepass | 50% | 0.5115 | 0.5115 | 8,066 | 8,066 | 0.319s | 0.327s | 0 |
+| onepass | 75% | 0.7588 | 0.7588 | 6,025 | 6,025 | 0.455s | 0.466s | 0 |
+| onepass | 100% | 0.9921 | 0.9921 | 268 | 268 | 0.741s | 0.737s | 0 |
+| correcting | 0% | 0.0000 | 0.0000 | 0 | 0 | 0.104s | 0.112s | 0 |
+| correcting | 25% | 0.0112 | 0.1520 | 0 | 4,847 | 0.110s | 0.173s | 4,847 |
+| correcting | 50% | 0.0191 | 0.2409 | 0 | 8,569 | 0.116s | 0.234s | 8,569 |
+| correcting | 75% | 0.0238 | 0.2529 | 0 | 9,841 | 0.115s | 0.283s | 9,841 |
+| correcting | 100% | 0.0254 | 0.2569 | 0 | 10,265 | 0.119s | 0.308s | 10,265 |
 
 onepass has zero inplace overhead: it already emits adds for displaced
 blocks, so the remaining copies don't create cycles in the CRWI graph.
 
-correcting pays a severe penalty.  Because block sizes vary (uniform in
-[256, 768] B), permuting blocks shifts the cumulative byte offsets of
-every subsequent block.  Even blocks that stay in the same order land
-at different byte positions in R vs V.  correcting emits copy commands
-for all matched blocks, but virtually all of them have src ≠ dst in
-byte coordinates, producing a dense CRWI dependency graph riddled with
-cycles.  At 25% permutation the in-place ratio balloons from 0.0112 to
-0.8164 — 73× more data emitted as adds to break the cycles — and the
-conversion time grows from 0.131 s to 54 s.
+correcting's inplace ratio is higher than standard because it encodes
+all transpositions as copies in standard mode, but those copies create
+CRWI cycles (copy A reads the region copy B will write; copy B reads the
+region copy A will write).  "Cycles broken" counts copy-to-add
+conversions: each time the topological sort stalls, the cycle finder
+locates one cycle and converts one copy to a literal add to break it.
+Because a single converted node could participate in multiple cycles,
+the number of conversions is at most — and possibly less than — the
+number of distinct cycles in the graph.  The count equals Adds-IP
+exactly, since correcting's standard output has zero adds.  At 25%
+permutation 4,847 copies are converted, raising the ratio from 0.0112
+to 0.1520 (~14×).  The conversion itself is fast (0.173 s) because the
+iterative DFS cycle finder correctly identifies only the vertices that
+are genuinely in a cycle, not arbitrary non-cyclic nodes.
+
+**Inplace scaling — correcting, 16 → 64 MB (512 B mean blocks)**
+
+| Size | Perm% | Ratio-N | Ratio-IP | Adds-IP | Time-N | Time-IP |
+|-----:|------:|--------:|---------:|--------:|-------:|--------:|
+| 16 MB | 0% | 0.0000 | 0.0000 | 0 | 0.103s | 0.101s |
+| 16 MB | 25% | 0.0112 | 0.1520 | 4,847 | 0.111s | 0.181s |
+| 16 MB | 50% | 0.0191 | 0.2409 | 8,569 | 0.114s | 0.235s |
+| 16 MB | 75% | 0.0238 | 0.2529 | 9,841 | 0.115s | 0.279s |
+| 16 MB | 100% | 0.0254 | 0.2569 | 10,265 | 0.126s | 0.308s |
+| 32 MB | 0% | 0.0000 | 0.0000 | 0 | 0.259s | 0.240s |
+| 32 MB | 25% | 0.0111 | 0.1584 | 10,138 | 0.263s | 0.458s |
+| 32 MB | 50% | 0.0191 | 0.2413 | 17,238 | 0.261s | 0.769s |
+| 32 MB | 75% | 0.0238 | 0.2491 | 19,411 | 0.270s | 0.904s |
+| 32 MB | 100% | 0.0254 | 0.2573 | 20,585 | 0.281s | 1.050s |
+| 64 MB | 0% | 0.0000 | 0.0000 | 0 | 0.518s | 0.511s |
+| 64 MB | 25% | 0.0111 | 0.1531 | 19,275 | 0.538s | 1.730s |
+| 64 MB | 50% | 0.0190 | 0.2368 | 34,053 | 0.559s | 3.009s |
+| 64 MB | 75% | 0.0238 | 0.2542 | 39,652 | 0.581s | 3.704s |
+| 64 MB | 100% | 0.0254 | 0.2576 | 41,191 | 0.581s | 3.995s |
+
+The CRWI graph build is `O(n log n + E)`: two binary searches per copy
+exploit the non-overlapping `dst` intervals to find the exact range of
+overlapping writes without a linear scan.  Standard-mode correcting time
+scales linearly (2× per doubling), confirming the graph build.  Inplace
+time grows somewhat faster (~3.4–3.8× per doubling at high permutation)
+because the iterative DFS cycle finder is called once per copy-to-add
+conversion, and conversions scale with n, giving `O(n × cycles_broken)`
+total DFS work in the worst case.
+
+### Effect of `--max-table` on correcting ratio (1 GB, 128 B blocks)
+
+Delta ratio as a function of `--max-table` cap, across all five
+permutation levels.  Each cell is the correcting ratio for that
+(permutation, table size) pair.
+
+| Max table | 0% | 25% | 50% | 75% | 100% |
+|----------:|---:|----:|----:|----:|-----:|
+| 1M | 0.0000 | 0.8844 | 0.9422 | 0.9550 | 0.9589 |
+| 2M | 0.0000 | 0.7933 | 0.8898 | 0.9129 | 0.9198 |
+| 4M | 0.0000 | 0.6596 | 0.7989 | 0.8358 | 0.8474 |
+| 8M | 0.0000 | 0.4946 | 0.6569 | 0.7065 | 0.7230 |
+| 16M | 0.0000 | 0.3262 | 0.4683 | 0.5188 | 0.5368 |
+| 32M | 0.0000 | 0.1853 | 0.2744 | 0.3098 | 0.3230 |
+| 64M | 0.0000 | 0.0988 | 0.1425 | 0.1601 | 0.1668 |
+| 128M | 0.0000 | 0.0689 | 0.0954 | 0.1052 | 0.1090 |
+| 256M+ | 0.0000 | 0.0689 | 0.0954 | 0.1052 | 0.1090 |
+
+Ratios are stable at 128M entries and above — that is the natural table
+size for this dataset (8M blocks of 128 B with p=16 seeds per block).
+The "knee" of the curve lies around 32–64M entries; below that the ratio
+climbs steeply as the checkpoint stride grows coarser and the filter
+misses an increasing fraction of blocks.
+
+At 1M entries the algorithm operates in the same regime as small-table
+configurations in the original paper (Ajtai et al. 2002, Section 8):
+checkpointing is so coarse that most blocks are missed and the ratio
+approaches 1 for highly-permuted inputs.  A 128M-entry table uses
+roughly 3 GB of RAM (~24 bytes per entry).
 
 ## References
 

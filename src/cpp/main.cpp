@@ -102,6 +102,18 @@ static void write_file(const std::string& path, std::span<const uint8_t> data) {
     f.write(reinterpret_cast<const char*>(data.data()), data.size());
 }
 
+/// Parse a size string with optional k/M/B suffix (decimal multipliers).
+static size_t parse_size_suffix(const std::string& s) {
+    if (s.empty()) { return 0; }
+    size_t mult = 1;
+    std::string num = s;
+    char last = s.back();
+    if (last == 'k' || last == 'K') { mult = 1000ULL;           num = s.substr(0, s.size() - 1); }
+    else if (last == 'M' || last == 'm') { mult = 1'000'000ULL;         num = s.substr(0, s.size() - 1); }
+    else if (last == 'B' || last == 'b') { mult = 1'000'000'000ULL;     num = s.substr(0, s.size() - 1); }
+    return static_cast<size_t>(std::stoull(num)) * mult;
+}
+
 // ── main ─────────────────────────────────────────────────────────────────
 
 int main(int argc, char** argv) {
@@ -120,7 +132,10 @@ int main(int argc, char** argv) {
     size_t enc_seed_len = SEED_LEN;
     enc->add_option("--seed-len", enc_seed_len, "Seed length");
     size_t enc_table_size = TABLE_SIZE;
-    enc->add_option("--table-size", enc_table_size, "Hash table size");
+    enc->add_option("--table-size", enc_table_size, "Hash table floor size");
+    std::string enc_max_table_str = std::to_string(MAX_TABLE_SIZE);
+    enc->add_option("--max-table", enc_max_table_str,
+                    "Max hash table size (k/M/B suffix: e.g. 512M, 2B)");
     bool enc_inplace = false;
     enc->add_flag("--inplace", enc_inplace, "Produce in-place delta");
     std::string enc_policy_str = "localmin";
@@ -174,10 +189,15 @@ int main(int argc, char** argv) {
         auto r = r_file.span();
         auto v = v_file.span();
 
+        if (enc_seed_len == 0) {
+            std::fprintf(stderr, "error: --seed-len must be >= 1\n");
+            return 1;
+        }
         auto t0 = std::chrono::steady_clock::now();
         DiffOptions opts;
         opts.p = enc_seed_len;
         opts.q = enc_table_size;
+        opts.max_table = parse_size_suffix(enc_max_table_str);
         opts.verbose = enc_verbose;
         opts.use_splay = enc_splay;
         auto commands = diff(algo, r, v, opts);

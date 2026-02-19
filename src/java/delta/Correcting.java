@@ -44,9 +44,10 @@ public final class Correcting {
 
         // ── Checkpointing parameters (Section 8.1, pp. 347-348) ─────
         int numSeeds = r.length >= p ? r.length - p + 1 : 0;
+        int maxTable = opts.maxTable > 0 ? opts.maxTable : MAX_TABLE_SIZE;
         int cap = numSeeds > 0
-            ? (int) Hash.nextPrime(Math.max(q, 2 * numSeeds / p))
-            : (int) Hash.nextPrime(q);
+            ? (int) Hash.nextPrime(Math.min(maxTable, Math.max(q, 2 * numSeeds / p)))
+            : (int) Hash.nextPrime(Math.min(q, maxTable));
         long fSize = numSeeds > 0 ? Hash.nextPrime(2 * numSeeds) : 1;
         long m = fSize <= cap ? 1 : (fSize + cap - 1) / cap;
         long k = v.length >= p

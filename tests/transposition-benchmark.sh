@@ -43,18 +43,19 @@ mkdir -p "$WORKDIR"
 # ── Helpers ───────────────────────────────────────────────────────────────
 
 # encode_and_measure <algo> <ref> <ver> <delta> [extra-flags...]
-# Prints: ratio copies adds time
+# Prints: ratio copies adds time cycles_broken
 encode_and_measure() {
     local algo="$1" ref="$2" ver="$3" delta="$4"
     shift 4
     local out
     out=$("$DELTA" encode "$algo" "$ref" "$ver" "$delta" "$@" 2>/dev/null)
-    local ratio copies adds elapsed
-    ratio=$(echo "$out"   | awk '/^Compression/ { print $2 }')
-    copies=$(echo "$out"  | awk '/^Commands/    { print $2 }')
-    adds=$(echo "$out"    | awk '/^Commands/    { print $4 }')
-    elapsed=$(echo "$out" | awk '/^Time/        { print $2 }')
-    echo "$ratio $copies $adds $elapsed"
+    local ratio copies adds elapsed cycles
+    ratio=$(echo "$out"   | awk '/^Compression/   { print $2 }')
+    copies=$(echo "$out"  | awk '/^Commands/      { print $2 }')
+    adds=$(echo "$out"    | awk '/^Commands/      { print $4 }')
+    elapsed=$(echo "$out" | awk '/^Time/          { print $2 }')
+    cycles=$(echo "$out"  | awk '/^Cycles broken/ { print $3 }')
+    echo "$ratio $copies $adds $elapsed ${cycles:-0}"
 }
 
 print_header() {
@@ -71,15 +72,15 @@ print_row() {
 }
 
 print_inplace_header() {
-    printf "  %-12s  %7s  %9s  %9s  %9s  %9s  %8s  %8s\n" \
-        "Algorithm" "Perm%" "Ratio-N" "Ratio-IP" "Adds-N" "Adds-IP" "Time-N" "Time-IP"
-    printf "  %-12s  %7s  %9s  %9s  %9s  %9s  %8s  %8s\n" \
-        "---------" "-----" "-------" "--------" "------" "-------" "------" "-------"
+    printf "  %-12s  %7s  %9s  %9s  %9s  %9s  %8s  %8s  %8s\n" \
+        "Algorithm" "Perm%" "Ratio-N" "Ratio-IP" "Adds-N" "Adds-IP" "Time-N" "Time-IP" "Cycles"
+    printf "  %-12s  %7s  %9s  %9s  %9s  %9s  %8s  %8s  %8s\n" \
+        "---------" "-----" "-------" "--------" "------" "-------" "------" "-------" "------"
 }
 
 print_inplace_row() {
-    printf "  %-12s  %7s  %9s  %9s  %9s  %9s  %8s  %8s\n" \
-        "$1" "${2}%" "$3" "$4" "$5" "$6" "$7" "$8"
+    printf "  %-12s  %7s  %9s  %9s  %9s  %9s  %8s  %8s  %8s\n" \
+        "$1" "${2}%" "$3" "$4" "$5" "$6" "$7" "$8" "$9"
 }
 
 PERMS="0 25 50 75 100"
@@ -106,7 +107,7 @@ for algo in greedy onepass correcting; do
         ref="$WORKDIR/16mb-ref-${pct}.bin"
         ver="$WORKDIR/16mb-ver-${pct}.bin"
         delta="$WORKDIR/16mb-${algo}-${pct}.delta"
-        read -r ratio copies adds elapsed \
+        read -r ratio copies adds elapsed _ \
             < <(encode_and_measure "$algo" "$ref" "$ver" "$delta")
         print_row "$algo" "$pct" "$ratio" "$copies" "$adds" "$elapsed"
     done
@@ -131,11 +132,11 @@ for algo in onepass correcting; do
         ver="$WORKDIR/16mb-ver-${pct}.bin"
         delta_n="$WORKDIR/16mb-${algo}-${pct}.delta"
         delta_ip="$WORKDIR/16mb-${algo}-ip-${pct}.delta"
-        read -r rn cn an tn \
+        read -r rn cn an tn _cn \
             < <(encode_and_measure "$algo" "$ref" "$ver" "$delta_n")
-        read -r ri ci ai ti \
+        read -r ri ci ai ti cycles \
             < <(encode_and_measure "$algo" "$ref" "$ver" "$delta_ip" --inplace)
-        print_inplace_row "$algo" "$pct" "$rn" "$ri" "$an" "$ai" "$tn" "$ti"
+        print_inplace_row "$algo" "$pct" "$rn" "$ri" "$an" "$ai" "$tn" "$ti" "$cycles"
     done
     last_algo="$algo"
 done
@@ -143,7 +144,57 @@ done
 echo ""
 echo ""
 
-# ── 16 GB dataset — onepass and correcting ────────────────────────────────
+# ── Inplace scaling — correcting, 16 / 32 / 64 MB ────────────────────────
+
+echo "=== Inplace scaling (correcting, 16 → 64 MB) ==="
+echo "    ~512 B mean blocks"
+echo ""
+
+printf "  %-8s  %7s  %9s  %9s  %9s  %8s  %8s\n" \
+    "Size" "Perm%" "Ratio-N" "Ratio-IP" "Adds-IP" "Time-N" "Time-IP"
+printf "  %-8s  %7s  %9s  %9s  %9s  %8s  %8s\n" \
+    "----" "-----" "-------" "--------" "-------" "------" "-------"
+
+for size_mb in 16 32 64; do
+    if [[ "$size_mb" -eq 16 ]]; then
+        nblocks=32000; mean=512; tag="16mb"
+    elif [[ "$size_mb" -eq 32 ]]; then
+        nblocks=64000; mean=512; tag="32mb"
+    else
+        nblocks=128000; mean=512; tag="64mb"
+    fi
+
+    for pct in $PERMS; do
+        ref="$WORKDIR/${tag}-ref-${pct}.bin"
+        ver="$WORKDIR/${tag}-ver-${pct}.bin"
+        if [[ ! -f "$ref" ]]; then
+            python3 "$GEN" "$nblocks" "$mean" "$pct" "$ref" "$ver" > /dev/null
+        fi
+    done
+
+    first=1
+    for pct in $PERMS; do
+        ref="$WORKDIR/${tag}-ref-${pct}.bin"
+        ver="$WORKDIR/${tag}-ver-${pct}.bin"
+        delta_n="$WORKDIR/${tag}-correcting-${pct}.delta"
+        delta_ip="$WORKDIR/${tag}-correcting-ip-${pct}.delta"
+        read -r rn cn an tn _ \
+            < <(encode_and_measure correcting "$ref" "$ver" "$delta_n")
+        read -r ri ci ai ti cycles \
+            < <(encode_and_measure correcting "$ref" "$ver" "$delta_ip" --inplace)
+        if [[ "$first" -eq 1 ]]; then
+            size_label="${size_mb} MB"
+            first=0
+        else
+            size_label=""
+        fi
+        printf "  %-8s  %7s  %9s  %9s  %9s  %8s  %8s\n" \
+            "$size_label" "${pct}%" "$rn" "$ri" "$ai" "$tn" "$ti"
+    done
+    echo ""
+done
+
+# ── 1 GB dataset — onepass and correcting ─────────────────────────────────
 
 echo "=== 1 GB (onepass, correcting) ==="
 echo "    8,000,000 blocks × 128 B mean"
@@ -167,7 +218,7 @@ for algo in onepass correcting; do
         ref="$WORKDIR/1gb-ref-${pct}.bin"
         ver="$WORKDIR/1gb-ver-${pct}.bin"
         delta="$WORKDIR/1gb-${algo}-${pct}.delta"
-        read -r ratio copies adds elapsed \
+        read -r ratio copies adds elapsed _ \
             < <(encode_and_measure "$algo" "$ref" "$ver" "$delta")
         print_row "$algo" "$pct" "$ratio" "$copies" "$adds" "$elapsed"
     done
