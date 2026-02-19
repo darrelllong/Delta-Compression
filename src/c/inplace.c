@@ -2,7 +2,14 @@
  * inplace.c — In-place delta conversion (Burns, Long, Stockmeyer —
  *             IEEE TKDE 2003)
  *
- * CRWI digraph + topological sort (Kahn's algorithm) + cycle breaking.
+ * A CRWI (Copy-Read/Write-Intersection) digraph is built over the copy
+ * commands: edge i→j means copy i reads from a region that copy j will
+ * overwrite, so i must execute before j.  When the digraph is acyclic, a
+ * topological order provides a valid serial schedule with no conversion
+ * needed.  A cycle i₁→i₂→…→iₖ→i₁ represents a circular dependency with
+ * no valid schedule; breaking it materializes one copy as a literal add
+ * (reading its bytes from R before the buffer is modified).
+ * Kahn's topological sort + iterative-DFS cycle detection + cycle breaking.
  */
 
 #include "delta.h"
@@ -16,74 +23,129 @@ typedef struct {
 	size_t idx, src, dst, length;
 } copy_info_t;
 
-/* ── Find a cycle in the subgraph of non-removed vertices ──────────── */
+/* ── Dynamic arrays used by find_cycle ─────────────────────────────── */
 
+typedef struct { size_t v; size_t ni; } stk_entry_t;
+
+/* ── (dst, idx) pair used to sort writes by destination ─────────────── */
+
+typedef struct { size_t dst; size_t idx; } write_pair_t;
+
+static int cmp_write_pair(const void *a, const void *b)
+{
+	size_t da = ((const write_pair_t *)a)->dst;
+	size_t db = ((const write_pair_t *)b)->dst;
+	return (da > db) - (da < db);
+}
+
+typedef struct {
+	size_t *data;
+	size_t  len;
+	size_t  cap;
+} size_buf_t;
+
+typedef struct {
+	stk_entry_t *data;
+	size_t       len;
+	size_t       cap;
+} stk_buf_t;
+
+static void size_buf_init(size_buf_t *b) { b->data = NULL; b->len = 0; b->cap = 0; }
+static void size_buf_free(size_buf_t *b) { free(b->data); }
+static void size_buf_push(size_buf_t *b, size_t v) {
+	if (b->len == b->cap) {
+		b->cap = b->cap ? b->cap * 2 : 16;
+		b->data = delta_realloc(b->data, b->cap * sizeof(*b->data));
+	}
+	b->data[b->len++] = v;
+}
+
+static void stk_buf_init(stk_buf_t *b) { b->data = NULL; b->len = 0; b->cap = 0; }
+static void stk_buf_free(stk_buf_t *b) { free(b->data); }
+static void stk_buf_push(stk_buf_t *b, size_t v, size_t ni) {
+	if (b->len == b->cap) {
+		b->cap = b->cap ? b->cap * 2 : 16;
+		b->data = delta_realloc(b->data, b->cap * sizeof(*b->data));
+	}
+	b->data[b->len].v  = v;
+	b->data[b->len].ni = ni;
+	b->len++;
+}
+
+/* ── Find a cycle in the subgraph of non-removed vertices ──────────── */
+/*
+ * Iterative DFS with three-color marking (0=unvisited, 1=on-path, 2=done).
+ * A back-edge to an on-path vertex signals a cycle.
+ * Returns a heap-allocated array of cycle vertex indices (caller frees),
+ * or NULL if the subgraph is acyclic.  *cycle_len is set on success.
+ */
 static size_t *
 find_cycle(size_t **adj, size_t *adj_len, const bool *removed,
            size_t n, size_t *cycle_len)
 {
-	size_t start, step, c;
-	size_t *visited_step;  /* maps vertex -> step when first visited */
-	size_t *path;
-	size_t path_len, path_cap;
+	uint8_t    *color  = NULL;
+	size_buf_t  path;
+	stk_buf_t   stk;
+	size_t     *result = NULL;
+	size_t      start;
 
 	*cycle_len = 0;
-	visited_step = delta_malloc(n * sizeof(*visited_step));
+	color = delta_calloc(n, sizeof(*color));
+	size_buf_init(&path);
+	stk_buf_init(&stk);
 
 	for (start = 0; start < n; start++) {
-		size_t i;
-		if (removed[start]) { continue; }
+		if (removed[start] || color[start] != 0) { continue; }
 
-		/* Reset visited for this traversal */
-		for (i = 0; i < n; i++) { visited_step[i] = (size_t)-1; }
+		color[start] = 1;
+		size_buf_push(&path, start);
+		stk_buf_push(&stk, start, 0);
 
-		path = NULL;
-		path_len = 0;
-		path_cap = 0;
-		step = 0;
-		c = start;
+		while (stk.len > 0) {
+			size_t v  = stk.data[stk.len - 1].v;
+			size_t ni = stk.data[stk.len - 1].ni;
+			bool   advanced = false;
+			size_t j;
 
-		for (;;) {
-			if (visited_step[c] != (size_t)-1) {
-				/* Found a cycle starting at visited_step[c] */
-				size_t cstart = visited_step[c];
-				*cycle_len = path_len - cstart;
-				size_t *result = delta_malloc(*cycle_len * sizeof(*result));
-				memcpy(result, &path[cstart],
-				       *cycle_len * sizeof(*result));
-				free(path);
-				free(visited_step);
-				return result;
-			}
-
-			visited_step[c] = step;
-			/* push c onto path */
-			if (path_len == path_cap) {
-				path_cap = path_cap ? path_cap * 2 : 16;
-				path = delta_realloc(path, path_cap * sizeof(*path));
-			}
-			path[path_len++] = c;
-			step++;
-
-			/* Find next non-removed neighbor */
-			{
-				size_t next = (size_t)-1;
-				size_t j;
-				for (j = 0; j < adj_len[c]; j++) {
-					if (!removed[adj[c][j]]) {
-						next = adj[c][j];
-						break;
+			for (j = ni; j < adj_len[v]; j++) {
+				size_t w = adj[v][j];
+				if (removed[w]) { continue; }
+				if (color[w] == 1) {
+					/* Back-edge: cycle found. */
+					size_t ci;
+					for (ci = 0; ci < path.len; ci++) {
+						if (path.data[ci] == w) { break; }
 					}
+					*cycle_len = path.len - ci;
+					result = delta_malloc(*cycle_len * sizeof(*result));
+					memcpy(result, path.data + ci,
+					       *cycle_len * sizeof(*result));
+					goto done;
 				}
-				if (next == (size_t)-1) { break; }
-				c = next;
+				if (color[w] == 0) {
+					stk.data[stk.len - 1].ni = j + 1;
+					color[w] = 1;
+					size_buf_push(&path, w);
+					stk_buf_push(&stk, w, 0);
+					advanced = true;
+					break;
+				}
+				/* color[w] == 2: already done, skip */
+			}
+
+			if (!advanced) {
+				color[v] = 2;
+				path.len--;
+				stk.len--;
 			}
 		}
-		free(path);
 	}
 
-	free(visited_step);
-	return NULL;
+done:
+	size_buf_free(&path);
+	stk_buf_free(&stk);
+	free(color);
+	return result;
 }
 
 /* ── Make in-place ─────────────────────────────────────────────────── */
@@ -170,57 +232,76 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 	adj_cap = delta_calloc(n, sizeof(*adj_cap));
 	in_deg = delta_calloc(n, sizeof(*in_deg));
 
-	/* O(n log n + E) sweep-line: sort writes by start, then for each read
-	 * interval binary-search into the sorted writes to find overlaps. */
+	/* O(n log n + E) sweep-line: sort writes by dst, then for each read
+	 * interval use two binary searches to find all overlapping writes.
+	 * dst intervals are non-overlapping (each output byte written once),
+	 * so the overlapping writes form a contiguous range in sorted order:
+	 *   [lo, hi)  — writes whose dst start falls within [si, read_end)
+	 * plus at most one write at lo-1 that starts before si but extends
+	 * past it. */
 	{
-		size_t *write_sorted = delta_malloc(n * sizeof(*write_sorted));
-		size_t *write_starts = delta_malloc(n * sizeof(*write_starts));
-		for (i = 0; i < n; i++) { write_sorted[i] = i; }
+		write_pair_t *pairs   = delta_malloc(n * sizeof(*pairs));
+		size_t       *write_sorted = delta_malloc(n * sizeof(*write_sorted));
+		size_t       *write_starts = delta_malloc(n * sizeof(*write_starts));
 
-		/* Sort write_sorted by dst (insertion sort for simplicity;
-		 * qsort would need a global or thread-local for copies ptr) */
-		for (i = 1; i < n; i++) {
-			size_t tmp = write_sorted[i];
-			size_t key = copies[tmp].dst;
-			j = i;
-			while (j > 0 && copies[write_sorted[j - 1]].dst > key) {
-				write_sorted[j] = write_sorted[j - 1];
-				j--;
+		for (i = 0; i < n; i++) {
+			pairs[i].dst = copies[i].dst;
+			pairs[i].idx = i;
+		}
+		qsort(pairs, n, sizeof(*pairs), cmp_write_pair);
+		for (i = 0; i < n; i++) {
+			write_sorted[i] = pairs[i].idx;
+			write_starts[i] = pairs[i].dst;
+		}
+		free(pairs);
+
+		for (i = 0; i < n; i++) {
+			size_t si       = copies[i].src;
+			size_t read_end = si + copies[i].length;
+
+			/* lo = first k with write_starts[k] >= si */
+			size_t lo_lo = 0, lo_hi = n;
+			while (lo_lo < lo_hi) {
+				size_t mid = lo_lo + (lo_hi - lo_lo) / 2;
+				if (write_starts[mid] < si) lo_lo = mid + 1;
+				else lo_hi = mid;
 			}
-			write_sorted[j] = tmp;
-		}
-		for (i = 0; i < n; i++) {
-			write_starts[i] = copies[write_sorted[i]].dst;
-		}
+			size_t lo = lo_lo;
 
-		for (i = 0; i < n; i++) {
-			size_t read_end = copies[i].src + copies[i].length;
-			/* Binary search: find first write_starts[k] >= read_end */
-			size_t lo = 0, hi = n;
-			while (lo < hi) {
-				size_t mid = lo + (hi - lo) / 2;
-				if (write_starts[mid] < read_end) {
-					lo = mid + 1;
-				} else {
-					hi = mid;
+			/* hi = first k with write_starts[k] >= read_end */
+			size_t hi_lo = lo, hi_hi = n;
+			while (hi_lo < hi_hi) {
+				size_t mid = hi_lo + (hi_hi - hi_lo) / 2;
+				if (write_starts[mid] < read_end) hi_lo = mid + 1;
+				else hi_hi = mid;
+			}
+			size_t hi = hi_lo;
+
+#define ADD_EDGE(jj) \
+			do { \
+				if (adj_len[i] == adj_cap[i]) { \
+					adj_cap[i] = adj_cap[i] ? adj_cap[i] * 2 : 4; \
+					adj[i] = delta_realloc(adj[i], \
+					    adj_cap[i] * sizeof(*adj[i])); \
+				} \
+				adj[i][adj_len[i]++] = (jj); \
+				in_deg[(jj)]++; \
+			} while (0)
+
+			/* Write at lo-1 starts before si; overlaps iff end > si */
+			if (lo > 0) {
+				size_t jj = write_sorted[lo - 1];
+				if (jj != i &&
+				    copies[jj].dst + copies[jj].length > si) {
+					ADD_EDGE(jj);
 				}
 			}
-			for (j = 0; j < lo; j++) {
+			/* All writes in [lo, hi) start within [si, read_end) */
+			for (j = lo; j < hi; j++) {
 				size_t jj = write_sorted[j];
-				if (i == jj) { continue; }
-				if (copies[jj].dst + copies[jj].length >
-				    copies[i].src) {
-					if (adj_len[i] == adj_cap[i]) {
-						adj_cap[i] = adj_cap[i]
-						    ? adj_cap[i] * 2 : 4;
-						adj[i] = delta_realloc(adj[i],
-						    adj_cap[i] *
-						    sizeof(*adj[i]));
-					}
-					adj[i][adj_len[i]++] = jj;
-					in_deg[jj]++;
-				}
+				if (jj != i) { ADD_EDGE(jj); }
 			}
+#undef ADD_EDGE
 		}
 		free(write_sorted);
 		free(write_starts);

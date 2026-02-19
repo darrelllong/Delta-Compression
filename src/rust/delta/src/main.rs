@@ -13,6 +13,22 @@ use delta::{
     placed_summary,
 };
 
+/// Parse a size with optional k/M/B suffix (decimal: k=1000, M=1_000_000, B=1_000_000_000).
+fn parse_size_suffix(s: &str) -> Result<usize, String> {
+    let s = s.trim();
+    let (num_str, mult) = match s.as_bytes().last() {
+        Some(b'k') | Some(b'K') => (&s[..s.len() - 1], 1_000usize),
+        Some(b'M') | Some(b'm') => (&s[..s.len() - 1], 1_000_000usize),
+        Some(b'B') | Some(b'b') => (&s[..s.len() - 1], 1_000_000_000usize),
+        _ => (s, 1usize),
+    };
+    let n: usize = num_str
+        .parse()
+        .map_err(|_| format!("invalid number: '{}'", num_str))?;
+    n.checked_mul(mult)
+        .ok_or_else(|| format!("'{}' overflows usize", s))
+}
+
 // ── mmap helpers ─────────────────────────────────────────────────────────
 
 /// Memory-map a file for reading.  Returns `None` for empty files.
@@ -104,13 +120,21 @@ enum Commands {
         /// Output delta file
         delta_file: String,
 
-        /// Seed length
-        #[arg(long, default_value_t = delta::SEED_LEN)]
+        /// Seed length (must be >= 1; default 16 balances collision rate and match quality)
+        #[arg(long, default_value_t = delta::SEED_LEN,
+              value_parser = |s: &str| s.parse::<usize>()
+                  .map_err(|e| e.to_string())
+                  .and_then(|n| if n >= 1 { Ok(n) }
+                            else { Err("--seed-len must be >= 1".to_string()) }))]
         seed_len: usize,
 
-        /// Hash table size
+        /// Hash table floor size
         #[arg(long, default_value_t = delta::TABLE_SIZE)]
         table_size: usize,
+
+        /// Maximum hash table size; accepts k/M/B suffix (e.g. 512M, 2B)
+        #[arg(long, default_value = "1073741827", value_parser = parse_size_suffix)]
+        max_table: usize,
 
         /// Produce in-place reconstructible delta
         #[arg(long)]
@@ -181,6 +205,7 @@ fn main() {
             delta_file,
             seed_len,
             table_size,
+            max_table,
             inplace,
             policy,
             verbose,
@@ -203,6 +228,7 @@ fn main() {
             let opts = DiffOptions {
                 p: seed_len,
                 q: table_size,
+                max_table,
                 verbose,
                 use_splay: splay,
                 ..DiffOptions::default()
@@ -210,8 +236,10 @@ fn main() {
             let commands = delta::diff(algo, r, v, &opts);
 
             let pol: CyclePolicy = policy.into();
+            let mut cycles_broken = 0usize;
             let placed = if inplace {
-                let (p, _stats) = make_inplace(r, &commands, pol);
+                let (p, stats) = make_inplace(r, &commands, pol);
+                cycles_broken = stats.cycles_broken;
                 p
             } else {
                 place_commands(&commands)
@@ -246,6 +274,9 @@ fn main() {
                 "Commands:     {} copies, {} adds",
                 stats.num_copies, stats.num_adds
             );
+            if inplace {
+                println!("Cycles broken: {}", cycles_broken);
+            }
             println!("Copy bytes:   {}", stats.copy_bytes);
             println!("Add bytes:    {}", stats.add_bytes);
             println!("Time:         {:.3}s", elapsed.as_secs_f64());

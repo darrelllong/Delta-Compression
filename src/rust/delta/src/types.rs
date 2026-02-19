@@ -13,8 +13,9 @@ use std::fmt;
 // ============================================================================
 
 pub const SEED_LEN: usize = 16;
-pub const TABLE_SIZE: usize = 1048573; // largest prime < 2^20
-                                       // Section 8: correcting uses checkpointing to fit any |R|
+pub const TABLE_SIZE: usize = 1048573;      // largest prime < 2^20
+pub const MAX_TABLE_SIZE: usize = 1_073_741_827; // prime near 2^30; default ceiling for auto-sizing
+                                                  // Section 8: correcting uses checkpointing to fit any |R|
 pub const HASH_BASE: u64 = 263;
 pub const HASH_MOD: u64 = (1 << 61) - 1; // Mersenne prime 2^61-1
 pub const DELTA_MAGIC: &[u8; 4] = b"DLT\x01";
@@ -111,6 +112,8 @@ pub struct DiffOptions {
     pub buf_cap: usize,
     pub verbose: bool,
     pub use_splay: bool,
+    /// Maximum hash table entries; auto-sizing never exceeds this.
+    pub max_table: usize,
 }
 
 impl Default for DiffOptions {
@@ -121,6 +124,7 @@ impl Default for DiffOptions {
             buf_cap: DELTA_BUF_CAP,
             verbose: false,
             use_splay: false,
+            max_table: MAX_TABLE_SIZE,
         }
     }
 }

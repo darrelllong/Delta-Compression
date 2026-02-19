@@ -5,7 +5,8 @@ public final class Types {
     private Types() {}
 
     public static final int SEED_LEN = 16;
-    public static final int TABLE_SIZE = 1048573; // largest prime < 2^20
+    public static final int TABLE_SIZE = 1048573;       // largest prime < 2^20
+    public static final int MAX_TABLE_SIZE = 1073741827; // prime near 2^30; default ceiling for auto-sizing
     public static final long HASH_BASE = 263;
     public static final long HASH_MOD = (1L << 61) - 1; // Mersenne prime
 
@@ -64,6 +65,7 @@ public final class Types {
         public int bufCap = DELTA_BUF_CAP;
         public boolean verbose = false;
         public boolean useSplay = false;
+        public int maxTable = MAX_TABLE_SIZE;
     }
 
     // ── Statistics ──

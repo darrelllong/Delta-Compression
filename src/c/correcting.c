@@ -114,9 +114,15 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 
 	/* Checkpointing parameters (Section 8.1, pp. 347-348) */
 	num_seeds = (r_len >= p) ? (r_len - p + 1) : 0;
-	cap = num_seeds > 0
-	    ? delta_next_prime(q > 2 * num_seeds / p ? q : 2 * num_seeds / p)
-	    : delta_next_prime(q);
+	{
+		size_t max_table = opts->max_table > 0
+		    ? opts->max_table : DELTA_MAX_TABLE_SIZE;
+		size_t raw = num_seeds > 0
+		    ? (q > 2 * num_seeds / p ? q : 2 * num_seeds / p)
+		    : q;
+		if (raw > max_table) { raw = max_table; }
+		cap = delta_next_prime(raw);
+	}
 	f_size = num_seeds > 0
 	    ? (uint64_t)delta_next_prime(2 * num_seeds)
 	    : 1;

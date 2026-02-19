@@ -115,8 +115,9 @@ PlacedCommand = Union[PlacedCopy, PlacedAdd]
 # ============================================================================
 
 SEED_LEN = 16
-TABLE_SIZE = 1048573  # hash table capacity (largest prime < 2^20)
-                      # Section 8: correcting uses checkpointing to fit any |R|
+TABLE_SIZE = 1048573        # hash table capacity (largest prime < 2^20)
+                            # Section 8: correcting uses checkpointing to fit any |R|
+MAX_TABLE_SIZE = 1_073_741_827  # prime near 2^30; default ceiling for auto-sizing
 HASH_BASE = 263      # small prime, avoids b=256 which makes low bits depend only on last byte
 HASH_MOD = (1 << 61) - 1  # Mersenne prime 2^61-1: ~2.3 * 10^18
 DELTA_BUF_CAP = 256       # lookback buffer capacity for correcting algorithm
@@ -129,6 +130,7 @@ class DiffOptions:
     q: int = TABLE_SIZE
     buf_cap: int = DELTA_BUF_CAP
     verbose: bool = False
+    max_table: int = MAX_TABLE_SIZE
 
 # ── Primality testing ─────────────────────────────────────────────────────
 
@@ -603,8 +605,10 @@ def diff_correcting(R: bytes, V: bytes,
     Backward extension (Section 8.2, p. 349) recovers true match starts
     that fall between checkpoint positions.
     """
+    max_table = MAX_TABLE_SIZE
     if opts is not None:
         p, q, buf_cap, verbose = opts.p, opts.q, opts.buf_cap, opts.verbose
+        max_table = opts.max_table
     commands: List[Command] = []
     if not V:
         return commands
@@ -612,7 +616,8 @@ def diff_correcting(R: bytes, V: bytes,
     # ── Checkpointing parameters (Section 8.1, pp. 347-348) ──────────
     num_seeds = max(0, len(R) - p + 1)
     # Auto-size: 2x factor for correcting's |F|=2L convention.
-    q = _next_prime(max(q, 2 * num_seeds // p))
+    # Capped at max_table to prevent runaway allocation on huge inputs.
+    q = _next_prime(min(max_table, max(q, 2 * num_seeds // p)))
     C = q                                                # |C|
     F = _next_prime(2 * num_seeds) if num_seeds > 0 else 1  # |F|
     m = max(1, -(-F // C))                               # ceil(|F| / |C|)
@@ -1054,51 +1059,82 @@ def apply_binary(R: bytes, delta: bytes) -> bytes:
 # the new version is reconstructed in the same buffer that holds the
 # reference, without requiring scratch space.
 #
+# Why overlaps don't always require add conversion:
+#   When copy i reads from [src_i, src_i+len_i) and copy j writes to
+#   [dst_j, dst_j+len_j), and these intervals overlap, copy i MUST execute
+#   before j overwrites its source data.  This creates a directed edge i→j
+#   in the CRWI (Copy-Read/Write-Intersection) digraph.  When the graph is
+#   acyclic, a topological order exists — every copy can be executed before
+#   any copy that would clobber its data.  No conversion is needed.
+#
+#   A cycle i₁→i₂→...→iₖ→i₁ means each copy needs to run before the next,
+#   forming a circular dependency with no valid serial schedule.  Breaking
+#   the cycle requires materializing one copy as a literal add (reading its
+#   source bytes from R before the buffer is modified), which removes that
+#   edge and makes the remaining graph schedulable.
+#
 # Algorithm:
-#   1. Annotate each command with its write offset in the output
-#   2. Build CRWI (Copy-Read/Write-Intersection) digraph on copy commands
-#      (Section 4.2) — edge from i to j when i's read interval overlaps
-#      j's write interval (i must execute before j)
-#   3. Topological sort; break cycles by converting copies to adds
+#   1. Annotate each copy command with its write offset in the output
+#   2. Build CRWI digraph: edge i→j iff i's read interval intersects j's
+#      write interval (Section 4.2)
+#   3. Topological sort (Kahn); when the heap empties with nodes remaining,
+#      a cycle exists — find it and convert the minimum copy to an add
 #   4. Output: copies in topological order, then all adds
 #
 # Cycle-breaking policies (Section 4.3):
-#   - constant: pick any vertex when a cycle is detected (O(1) per break)
+#   - constant: pick any remaining vertex when a cycle is detected
 #   - localmin: pick the minimum-length vertex in the cycle (less compression loss)
 # ============================================================================
 
 def _find_cycle(adj, removed, n):
     """Find a cycle in the subgraph of non-removed vertices.
 
-    Follows forward edges from each non-removed vertex until we revisit
-    one (cycle found) or reach a dead end (try next start vertex).
+    Iterative DFS with three-color marking (0=unvisited, 1=on-path, 2=done).
+    A back-edge to an on-path vertex signals a cycle.
     Returns a list of vertex indices forming the cycle, or None.
     """
+    color = [0] * n  # 0=unvisited, 1=on current path, 2=done
+    path = []
+
     for start in range(n):
-        if removed[start]:
+        if removed[start] or color[start] != 0:
             continue
-        visited = {}
-        path = []
-        curr = start
-        step = 0
-        while curr is not None and curr not in visited:
-            visited[curr] = step
-            path.append(curr)
-            step += 1
-            next_v = None
-            for w in adj[curr]:
-                if not removed[w]:
-                    next_v = w
+
+        color[start] = 1
+        path.append(start)
+        stack = [(start, 0)]  # (vertex, next_neighbor_index)
+
+        while stack:
+            v, ni = stack[-1]
+            advanced = False
+            while ni < len(adj[v]):
+                w = adj[v][ni]
+                ni += 1
+                if removed[w]:
+                    continue
+                if color[w] == 1:
+                    # Back-edge: cycle found.
+                    pos = path.index(w)
+                    return path[pos:]
+                if color[w] == 0:
+                    stack[-1] = (v, ni)  # save progress
+                    color[w] = 1
+                    path.append(w)
+                    stack.append((w, 0))
+                    advanced = True
                     break
-            curr = next_v
-        if curr is not None and curr in visited:
-            cycle_idx = visited[curr]
-            return path[cycle_idx:]
+                # color[w] == 2: already done, skip
+            if not advanced:
+                stack.pop()
+                color[v] = 2
+                path.pop()
+
     return None
 
 
 def make_inplace(R: bytes, commands: List[Command],
-                 policy: str = 'localmin') -> List[PlacedCommand]:
+                 policy: str = 'localmin',
+                 return_stats: bool = False):
     """Convert standard delta commands to in-place executable commands.
 
     The returned commands can be applied to a buffer initialized with R
@@ -1109,9 +1145,11 @@ def make_inplace(R: bytes, commands: List[Command],
            a copy is converted to an add during cycle breaking).
         commands: Standard delta commands (CopyCmd / AddCmd).
         policy: 'localmin' (default, better compression) or 'constant'.
+        return_stats: If True, return (commands, {'cycles_broken': N}).
 
     Returns:
-        List of PlacedCopy / PlacedAdd in safe execution order.
+        List of PlacedCopy / PlacedAdd in safe execution order, or a
+        (list, stats_dict) tuple if return_stats is True.
     """
     if not commands:
         return []
@@ -1148,14 +1186,23 @@ def make_inplace(R: bytes, commands: List[Command],
     for i in range(n):
         si, li = copy_info[i][1], copy_info[i][3]
         read_end = si + li
-        # Find first write whose start < read_end
+        # Two binary searches exploit the fact that dst intervals are
+        # non-overlapping (each output byte written exactly once):
+        #   lo = first write with dst >= si
+        #   hi = first write with dst >= read_end
+        # Writes in [lo, hi) start within [si, read_end) and thus always
+        # overlap the read interval.  The write at lo-1 (if any) starts
+        # before si; it overlaps iff its end exceeds si.
+        lo = bisect.bisect_left(write_starts, si)
         hi = bisect.bisect_left(write_starts, read_end)
-        for k in range(hi):
+        if lo > 0:
+            j = write_sorted[lo - 1]
+            if i != j and copy_info[j][2] + copy_info[j][3] > si:
+                adj[i].append(j)
+                in_deg[j] += 1
+        for k in range(lo, hi):
             j = write_sorted[k]
-            if i == j:
-                continue
-            dj, lj = copy_info[j][2], copy_info[j][3]
-            if dj + lj > si:  # write_end > read_start
+            if i != j:
                 adj[i].append(j)
                 in_deg[j] += 1
 
@@ -1164,7 +1211,7 @@ def make_inplace(R: bytes, commands: List[Command],
     # ready copy first, giving a deterministic topological ordering.
     removed = [False] * n
     topo_order = []
-    converted = set()
+    cycles_broken = 0
 
     heap = []  # min-heap of (copy_length, index)
     for i in range(n):
@@ -1204,7 +1251,7 @@ def make_inplace(R: bytes, commands: List[Command],
         # Convert victim: materialize its copy data as a literal add
         _, src, dst, length = copy_info[victim]
         add_info.append((dst, bytes(R[src:src + length])))
-        converted.add(victim)
+        cycles_broken += 1
         removed[victim] = True
         processed += 1
 
@@ -1226,6 +1273,8 @@ def make_inplace(R: bytes, commands: List[Command],
     for dst, data in add_info:
         result.append(PlacedAdd(dst=dst, data=data))
 
+    if return_stats:
+        return result, {'cycles_broken': cycles_broken}
     return result
 
 
@@ -1314,18 +1363,44 @@ def mmap_create(path, size):
 
 
 # ============================================================================
+# CLI helpers
+# ============================================================================
+
+def _parse_size_suffix(s: str) -> int:
+    """Parse a size string with optional k/M/B suffix (decimal multipliers)."""
+    s = s.strip()
+    if not s:
+        raise argparse.ArgumentTypeError("empty size value")
+    multipliers = {'k': 1_000, 'K': 1_000, 'm': 1_000_000, 'M': 1_000_000,
+                   'b': 1_000_000_000, 'B': 1_000_000_000}
+    if s[-1] in multipliers:
+        return int(s[:-1]) * multipliers[s[-1]]
+    return int(s)
+
+
+# ============================================================================
 # CLI
 # ============================================================================
 
 def cmd_encode(args):
+    if args.seed_len < 1:
+        raise SystemExit("error: --seed-len must be >= 1")
     algo = ALGORITHMS[args.algorithm]
+    opts = DiffOptions(
+        p=args.seed_len,
+        q=args.table_size,
+        verbose=args.verbose,
+        max_table=args.max_table,
+    )
     with mmap_open(args.reference) as R, mmap_open(args.version) as V:
         t0 = time.time()
-        commands = algo(R, V, p=args.seed_len, q=args.table_size,
-                        verbose=args.verbose)
+        commands = algo(R, V, opts=opts)
 
+        cycles_broken = 0
         if args.inplace:
-            placed = make_inplace(R, commands, policy=args.policy)
+            placed, ip_stats = make_inplace(R, commands, policy=args.policy,
+                                            return_stats=True)
+            cycles_broken = ip_stats.get('cycles_broken', 0)
         else:
             placed = place_commands(commands)
         elapsed = time.time() - t0
@@ -1346,6 +1421,8 @@ def cmd_encode(args):
         print(f"Delta:        {args.delta} ({len(delta):,} bytes)")
         print(f"Compression:  {ratio:.4f} (delta/version)")
         print(f"Commands:     {stats['num_copies']} copies, {stats['num_adds']} adds")
+        if args.inplace:
+            print(f"Cycles broken: {cycles_broken}")
         print(f"Copy bytes:   {stats['copy_bytes']:,}")
         print(f"Add bytes:    {stats['add_bytes']:,}")
         print(f"Time:         {elapsed:.3f}s")
@@ -1444,6 +1521,8 @@ def main():
     enc.add_argument('delta', help='Output delta file')
     enc.add_argument('--seed-len', type=int, default=SEED_LEN)
     enc.add_argument('--table-size', type=int, default=TABLE_SIZE)
+    enc.add_argument('--max-table', type=_parse_size_suffix, default=MAX_TABLE_SIZE,
+                     metavar='N', help='Max hash table size (k/M/B suffix: 512M, 2B)')
     enc.add_argument('--inplace', action='store_true',
                      help='Produce in-place reconstructible delta')
     enc.add_argument('--policy', choices=['localmin', 'constant'],

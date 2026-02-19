@@ -23,7 +23,8 @@ namespace delta {
 // ============================================================================
 
 inline constexpr size_t SEED_LEN = 16;
-inline constexpr size_t TABLE_SIZE = 1048573; // largest prime < 2^20
+inline constexpr size_t TABLE_SIZE = 1048573;       // largest prime < 2^20
+inline constexpr size_t MAX_TABLE_SIZE = 1073741827; // prime near 2^30; default ceiling for auto-sizing
 inline constexpr uint64_t HASH_BASE = 263;
 inline constexpr uint64_t HASH_MOD = (1ULL << 61) - 1; // Mersenne prime 2^61-1
 inline constexpr uint8_t DELTA_MAGIC[4] = {'D', 'L', 'T', 0x01};
@@ -119,6 +120,7 @@ struct DiffOptions {
     size_t buf_cap = DELTA_BUF_CAP;
     bool verbose = false;
     bool use_splay = false;
+    size_t max_table = MAX_TABLE_SIZE;
 };
 
 } // namespace delta

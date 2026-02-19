@@ -68,11 +68,13 @@ pub fn diff_correcting(
 
     // ── Checkpointing parameters (Section 8.1, pp. 347-348) ─────────
     let num_seeds = if r.len() >= p { r.len() - p + 1 } else { 0 };
+    let max_table = opts.max_table;
     // Auto-size: 2x factor for correcting's |F|=2L convention.
+    // Capped at max_table to prevent runaway allocation on huge inputs.
     let cap = if num_seeds > 0 {
-        next_prime(q.max(2 * num_seeds / p))
+        next_prime(max_table.min(q.max(2 * num_seeds / p)))
     } else {
-        next_prime(q)
+        next_prime(q.min(max_table))
     }; // |C|
     let f_size: u64 = if num_seeds > 0 {
         next_prime(2 * num_seeds) as u64 // |F|
