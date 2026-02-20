@@ -533,14 +533,6 @@ indistinguishable from common Elizabethan function phrases.  His
 authenticated corpus (~24 poems) is the smallest; the Oxfordian theory is
 essentially unfalsifiable by this method.
 
-**Francis Manners, 6th Earl of Rutland** (and his brother Roger, 5th Earl,
-the more commonly cited authorship candidate) cannot be evaluated.  Neither
-earl left any authenticated literary writing.  Francis's only documented
-connection to Shakespeare is a 1613 payment of 44 shillings to Shakespeare
-and Burbage for painting his tournament shield; Roger's is a 1600 trip to
-Denmark cited as inspiration for Elsinore.  Neither is a corpus.
-Ratio: undefined.  The compression oracle declines to comment.
-
 The compression oracle says: Shakespeare wrote Shakespeare.
 
 ---
