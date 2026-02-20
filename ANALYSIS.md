@@ -554,10 +554,16 @@ surviving work (Psalms 44–150) is available only as OCR.
 shortest mean copy, coverage barely above de Vere's.  Natural philosophy and
 moral essays share only function-word sequences with blank verse drama.
 
-**de Vere** remains last.  After normalization his coverage rises to 5.6%,
-but with a mean copy of only 36 bytes it is indistinguishable from noise.
-His authenticated corpus (~24 poems) is the smallest of any candidate; the
+**de Vere** is second to last.  After normalization his coverage rises to
+5.6%, but with a mean copy of only 36 bytes it is indistinguishable from
+noise.  His authenticated corpus (~24 poems) is among the smallest; the
 Oxfordian theory is essentially unfalsifiable by this method.
+
+**William Stanley, 6th Earl of Derby** cannot be evaluated at all.  His
+entire candidacy rests on a single 1599 Jesuit spy's report that he was
+"busied only in penning comedies for the common players."  No plays, poems,
+or prose survive under his name.  There is no corpus to compress.
+Ratio: undefined.  The compression oracle declines to comment.
 
 The compression oracle says: Shakespeare wrote Shakespeare.
 
