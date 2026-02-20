@@ -92,6 +92,9 @@ static void scc_result_free(scc_result_t *s)
 {
 	free(s->data);
 	free(s->offsets);
+	s->data    = NULL;
+	s->offsets = NULL;
+	s->n_sccs  = 0;
 }
 
 /* ── Tarjan SCC (iterative) ─────────────────────────────────────────── */
