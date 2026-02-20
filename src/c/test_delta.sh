@@ -17,6 +17,7 @@ TESTS=0
 RUST_DELTA=""
 CPP_DELTA=""
 PY_DELTA=""
+JAVA_DELTA=""
 
 if [ -x "../../src/rust/delta/target/release/delta" ]; then
     RUST_DELTA="../../src/rust/delta/target/release/delta"
@@ -30,6 +31,10 @@ fi
 
 if [ -f "../python/delta.py" ]; then
     PY_DELTA="python3 ../python/delta.py"
+fi
+
+if [ -d "../java/out" ] && [ -f "../java/out/delta/Delta.class" ]; then
+    JAVA_DELTA="java -cp ../java/out delta.Delta"
 fi
 
 check() {
@@ -223,6 +228,18 @@ else
     echo "  (Python not found, skipping)"
 fi
 
+if [ -n "$JAVA_DELTA" ]; then
+    for algo in onepass correcting; do
+        c_d="$tmpdir/c-${algo}4.delta"
+        j_d="$tmpdir/java-${algo}.delta"
+        $DELTA encode $algo "$ref" "$ver" "$c_d"
+        $JAVA_DELTA encode $algo "$ref" "$ver" "$j_d"
+        check "C vs Java $algo byte-identical" diff -q "$c_d" "$j_d"
+    done
+else
+    echo "  (Java classes not found, skipping)"
+fi
+
 echo ""
 echo "=== Cross-language decode ==="
 
@@ -243,6 +260,24 @@ if [ -n "$RUST_DELTA" ]; then
         $RUST_DELTA encode $algo "$ref" "$ver" "$r_d"
         $DELTA decode "$ref" "$r_d" "$c_out"
         check "Rust encode -> C decode ($algo)" diff -q "$ver" "$c_out"
+    done
+fi
+
+if [ -n "$JAVA_DELTA" ]; then
+    for algo in onepass correcting; do
+        c_d="$tmpdir/c-jdec-${algo}.delta"
+        j_out="$tmpdir/java-from-c-${algo}.out"
+        $DELTA encode $algo "$ref" "$ver" "$c_d"
+        $JAVA_DELTA decode "$ref" "$c_d" "$j_out"
+        check "C encode -> Java decode ($algo)" diff -q "$ver" "$j_out"
+    done
+
+    for algo in onepass correcting; do
+        j_d="$tmpdir/java-cdec-${algo}.delta"
+        c_out="$tmpdir/c-from-java-${algo}.out"
+        $JAVA_DELTA encode $algo "$ref" "$ver" "$j_d"
+        $DELTA decode "$ref" "$j_d" "$c_out"
+        check "Java encode -> C decode ($algo)" diff -q "$ver" "$c_out"
     done
 fi
 

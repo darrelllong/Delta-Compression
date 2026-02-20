@@ -476,25 +476,22 @@ byte[] recovered = Apply.applyDeltaInplace(r, ip, v.length);
 cd src/python
 python3 test_delta.py
 
-# Rust — 35 integration tests
+# Rust — 38 integration tests
 cd src/rust/delta
 cargo test
 
-# C++ — 35 test cases (276 assertions)
+# C++ — 46 test cases
 cd src/cpp
 cmake -B build && cmake --build build
 ctest --test-dir build
 
-# C — 26 integration tests
+# C — 39 integration tests
 cd src/c
 make test
 
-# Java — roundtrip verification via CLI
+# Java — 39 integration tests
 cd src/java
-javac -d out delta/*.java
-java -cp out delta.Delta encode onepass ref.bin ver.bin delta.bin
-java -cp out delta.Delta decode ref.bin delta.bin recovered.bin
-diff ver.bin recovered.bin
+make test
 ```
 
 A kernel tarball benchmark (`tests/kernel-delta-test.sh`) exercises
