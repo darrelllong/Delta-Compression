@@ -81,6 +81,13 @@ typedef struct {
 	size_t  n_sccs;
 } scc_result_t;
 
+static void scc_result_init(scc_result_t *s)
+{
+	s->data = NULL;
+	s->offsets = NULL;
+	s->n_sccs = 0;
+}
+
 static void scc_result_free(scc_result_t *s)
 {
 	free(s->data);
@@ -96,7 +103,8 @@ static void scc_result_free(scc_result_t *s)
 static scc_result_t
 tarjan_scc(size_t **adj, size_t *adj_len, size_t n)
 {
-	scc_result_t res = {NULL, NULL, 0};
+	scc_result_t res;
+	scc_result_init(&res);
 	size_t *idx_arr;    /* index_arr[v] = discovery index, SIZE_MAX = unvisited */
 	size_t *lowlink;
 	bool   *on_stk;
@@ -206,7 +214,7 @@ tarjan_scc(size_t **adj, size_t *adj_len, size_t n)
  *      vertex removal can only reduce edges, so color=2 is monotone-correct.
  *   3. *scan_start: outer loop resumes where it left off, O(|SCC|) total.
  *
- * Returns 1 if a cycle was found (*cycle_out/*cycle_len populated, caller
+ * Returns 1 if a cycle was found (*cycle_out and *cycle_len populated, caller
  * must free *cycle_out).  Returns 0 if no cycle (SCC is acyclic).
  * color[] entries for path vertices are reset to 0 on cycle found.
  * color=2 entries persist in both cases (monotone-correct).
