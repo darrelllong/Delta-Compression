@@ -488,11 +488,12 @@ We downloaded the complete works from Project Gutenberg and ran correcting
 in both directions (Shakespeare as reference, candidate as version; and vice
 versa).  All sizes are bytes of raw UTF-8 plain text.
 
-| Corpus | Size |
-|--------|-----:|
-| Shakespeare complete works (PG #100) | 5,638,525 B |
-| Marlowe: 7 major works (PG #779, 901, 1094, 1496, 1589, 18781, 20288) | 1,016,834 B |
-| Bacon: 6 major works (PG #56463, 5500, 45988, 2434, 3290, 46964) | 2,240,861 B |
+| Corpus | Size | Source |
+|--------|-----:|--------|
+| Shakespeare complete works | 5,638,525 B | PG #100 |
+| Marlowe: 7 major works | 1,016,834 B | PG #779, 901, 1094, 1496, 1589, 18781, 20288 |
+| Bacon: 6 major works | 2,240,861 B | PG #56463, 5500, 45988, 2434, 3290, 46964 |
+| de Vere: ~24 poems (OCR) | 90,753 B | Internet Archive, Looney ed. 1921 |
 
 ### Results (correcting algorithm, Shakespeare as reference)
 
@@ -500,14 +501,15 @@ versa).  All sizes are bytes of raw UTF-8 plain text.
 |-----------|----------:|------:|--------------:|-------:|----------:|------------:|
 | Marlowe | 884,620 B | 87.0% | 15.9% | 1,324 | 121.8 B | 18 B |
 | Bacon | 2,134,603 B | 95.3% | 7.3% | 2,597 | 62.9 B | 17 B |
+| de Vere | 90,772 B | 100.0% | 0.0% | 0 | — | — |
 
 Neither achieves meaningful compression.  For reference, successive Linux
 kernel point releases (which genuinely share 99%+ of their content) compress
-to 0.5–1.0% of the version size; Shakespeare-vs-candidate ratios of 87–95%
+to 0.5–1.0% of the version size; Shakespeare-vs-candidate ratios of 87–100%
 indicate almost no shared structure beyond common English function phrases.
 
-**Marlowe** is the better candidate by every metric: higher copy coverage
-(15.9% vs 7.3%), longer mean copy (121.8 B vs 62.9 B), and lower delta ratio.
+**Marlowe** is the best candidate by every metric: highest copy coverage
+(15.9%), longest mean copy (121.8 B), lowest delta ratio (87.0%).
 This is expected — Marlowe and Shakespeare were contemporaries writing blank
 verse drama with overlapping imagery and diction — but 84% of Marlowe's text
 still has to be transmitted as raw adds.  Shared genre is not shared authorship.
@@ -516,11 +518,20 @@ still has to be transmitted as raw adds.  Shared genre is not shared authorship.
 his mean is only 62.9 B vs 121.8 B, and copy coverage is less than half.
 Bacon was writing natural philosophy and essays in a register utterly unlike
 dramatic blank verse; the compressor finds only the common stock of English
-function words.  The ghost-authorship theory is not supported.
+function words.
 
-Running Marlowe or Bacon as reference against Shakespeare is even more
-hopeless: the candidate corpora are 18–40% of Shakespeare's size, so even
-perfect coverage of the reference would leave 60–82% as adds.
+**de Vere** is last.  His authenticated surviving output is ~24 short poems,
+totalling roughly 90 KB in a 1921 digitized edition (itself OCR-noisy, with
+extra spaces and mid-word hyphenation from the typesetting).  The correcting
+algorithm issues zero copy commands: the OCR noise prevents any 16-byte exact
+match from forming, and the corpus is too small to matter even if it were clean.
+This is the starkest result: even greedy finds nothing to copy.  The Oxfordian
+theory cannot be evaluated by this method because de Vere left almost no
+authenticated writing — which is, of course, central to the theory.
+
+Running any candidate as reference against Shakespeare is even more
+hopeless: the corpora are 1.6–18% of Shakespeare's size, so even perfect
+coverage of the reference would leave 82–98% as adds.
 
 The compression oracle says: Shakespeare wrote Shakespeare.
 
