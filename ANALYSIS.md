@@ -484,80 +484,53 @@ exactly what the correcting algorithm is designed to find.  Short common-word
 matches (median ≤ 17 bytes, i.e. "of the", "in the") are noise; long matches
 (mean >> 100 bytes) are signal.
 
-We downloaded the complete works from Project Gutenberg and ran correcting
-in both directions (Shakespeare as reference, candidate as version; and vice
-versa).  All sizes are bytes of raw UTF-8 plain text.
+We downloaded the complete works from Project Gutenberg and ran the
+correcting algorithm with Shakespeare as the reference.  All corpora were
+normalized before comparison: whitespace runs collapsed to a single space
+(`tr -s '[:space:]'`), eliminating OCR artefacts (extra spaces,
+mid-word hyphenation) that would otherwise suppress exact-match runs
+artificially.  Sizes below are post-normalization.
 
-| Corpus | Size | Source |
-|--------|-----:|--------|
-| Shakespeare complete works | 5,638,525 B | PG #100 |
-| Marlowe: 7 major works | 1,016,834 B | PG #779, 901, 1094, 1496, 1589, 18781, 20288 |
-| Bacon: 6 major works | 2,240,861 B | PG #56463, 5500, 45988, 2434, 3290, 46964 |
-| Mary Sidney: Discourse + Antonius (clean) | 185,647 B | PG #21789 |
-| Mary Sidney: Psalms 44–150 + above (OCR) | 482,766 B | IA + PG #21789 |
-| de Vere: ~24 poems (OCR) | 90,753 B | Internet Archive, Looney ed. 1921 |
+| Corpus | Norm. size | Source |
+|--------|----------:|--------|
+| Shakespeare complete works | 5,379,937 B | PG #100 |
+| Marlowe: 7 major works | 914,849 B | PG #779, 901, 1094, 1496, 1589, 18781, 20288 |
+| Bacon: 6 major works | 2,090,019 B | PG #56463, 5500, 45988, 2434, 3290, 46964 |
+| Mary Sidney: Psalms 44–150 + Discourse + Antonius | 420,964 B | IA + PG #21789 |
+| de Vere: ~24 poems | 73,957 B | Internet Archive, Looney ed. 1921 |
 
-### Results (correcting algorithm, Shakespeare as reference)
+### Results (correcting algorithm, Shakespeare as reference, all corpora normalized)
 
-Raw text (as downloaded from Project Gutenberg / Internet Archive):
-
-| Candidate | Corpus | Delta size | Ratio | Coverage | Copies | Mean copy |
-|-----------|--------|----------:|------:|---------:|-------:|----------:|
-| Marlowe | 1.0 MB clean | 884,620 B | 87.0% | 15.9% | 1,324 | 121.8 B |
-| Mary Sidney | 186 KB clean | 166,529 B | 89.7% | 11.4% | 91 | 232.1 B |
-| Mary Sidney | 483 KB mixed | 463,678 B | 96.0% | 4.4% | 88 | 239.0 B |
-| Bacon | 2.2 MB clean | 2,134,603 B | 95.3% | 7.3% | 2,597 | 62.9 B |
-| de Vere | 91 KB OCR | 90,772 B | 100.0% | 0.0% | 0 | — |
-
-OCR-scanned texts (de Vere 1921, Mary Sidney Psalms 1960) contain runs of
-extra spaces and mid-word hyphenation from the typesetting, which break the
-16-byte exact-match requirement and suppress copy counts artificially.
-Collapsing all whitespace runs to a single space (`tr -s '[:space:]'`) gives
-a fairer comparison:
-
-| Candidate | Corpus | Ratio | Coverage | Copies | Mean copy |
-|-----------|--------|------:|---------:|-------:|----------:|
+| Candidate | Norm. size | Ratio | Coverage | Copies | Mean copy |
+|-----------|----------:|------:|---------:|-------:|----------:|
 | Marlowe | 915 KB | 86.1% | 17.4% | 1,460 | 108.8 B |
 | Mary Sidney | 421 KB | 95.8% | 5.4% | 218 | 103.9 B |
 | Bacon | 2.09 MB | 95.1% | 7.7% | 2,627 | 60.9 B |
 | de Vere | 74 KB | 97.8% | 5.6% | 114 | 36.1 B |
-
-Normalization has little effect on already-clean texts (Marlowe: 15.9→17.4%,
-Bacon: 7.3→7.7%) but dramatically unblocks OCR texts: de Vere goes from 0
-to 114 copies and from 100% to 97.8% ratio, and Mary Sidney's combined corpus
-improves from 88 to 218 copies.  Both effects confirm OCR noise was the
-primary obstacle, not the absence of shared content.
-
-That said, the signal once unblocked is weak.  De Vere's 114 copies average
-only 36 bytes each — the threshold is 16 bytes, so these are short function
-phrases ("and the", "of his"), not literary kinship.  Mary Sidney's 218 copies
-average 104 bytes each, a longer signal, but still covering only 5.4% of her
-text.  Marlowe's 1,460 copies at 109 bytes mean and 17.4% coverage remain the
-clear high-water mark.
 
 None achieves meaningful compression.  Successive Linux kernel point releases,
 which genuinely share 99%+ of their content, compress to 0.5–1.0%; all
 Shakespeare-vs-candidate ratios lie above 86%, indicating almost no shared
 structure beyond common Elizabethan English.
 
-**Marlowe** leads by every metric: highest coverage, most copies, lowest
-ratio.  Shared genre (blank verse drama) produces the best result, but 83%
-of his text still requires raw adds.  Shared genre is not shared authorship.
+**Marlowe** leads by every metric: highest coverage (17.4%), most copies
+(1,460), lowest ratio (86.1%).  Shared genre (blank verse drama) produces
+the best result, but 83% of his text still requires raw adds.  Shared genre
+is not shared authorship.
 
-**Mary Sidney** is the most structurally interesting result: the longest mean
-copy (104–232 B depending on corpus and normalization), reflecting shared
+**Mary Sidney** has the second-longest mean copy (103.9 B), reflecting shared
 classical sources (Petrarch, Garnier, Mornay) that Shakespeare also drew on.
-Her authenticated prose corpus is small (~186 KB clean), and the bulk of her
-surviving work (Psalms 44–150) is available only as OCR.
+Her corpus is the second-smallest (~421 KB) and half of it is OCR-derived.
 
-**Bacon** has the largest corpus (2.2 MB) yet the weakest signal per byte:
-shortest mean copy, coverage barely above de Vere's.  Natural philosophy and
-moral essays share only function-word sequences with blank verse drama.
+**Bacon** has the largest corpus (2.09 MB) yet the weakest signal per byte:
+shortest mean copy (60.9 B), coverage barely above de Vere's.  Natural
+philosophy and moral essays share only function-word sequences with blank
+verse drama.
 
-**de Vere** is last among evaluable candidates.  After normalization his
-coverage rises to 5.6%, but with a mean copy of only 36 bytes it is
-indistinguishable from noise.  His authenticated corpus (~24 poems) is the
-smallest of any candidate that can be run; the Oxfordian theory is
+**de Vere** is last among evaluable candidates.  Coverage is 5.6% but mean
+copy length is only 36.1 B — just above the 16-byte detection floor,
+indistinguishable from common Elizabethan function phrases.  His
+authenticated corpus (~24 poems) is the smallest; the Oxfordian theory is
 essentially unfalsifiable by this method.
 
 **Francis Manners, 6th Earl of Rutland** (and his brother Roger, 5th Earl,
