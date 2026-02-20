@@ -85,7 +85,14 @@ delta_encode(const delta_placed_commands_t *cmds, bool inplace,
 	return result;
 }
 
-/* ── delta_buffer_t destructor ─────────────────────────────────────── */
+/* ── delta_buffer_t constructor / destructor ───────────────────────── */
+
+void
+delta_buffer_init(delta_buffer_t *buf)
+{
+	buf->data = NULL;
+	buf->len = 0;
+}
 
 void
 delta_buffer_free(delta_buffer_t *buf)
@@ -103,9 +110,7 @@ delta_decode(const uint8_t *data, size_t len)
 	delta_decode_result_t result;
 	size_t pos;
 
-	delta_placed_commands_init(&result.commands);
-	result.inplace = false;
-	result.version_size = 0;
+	delta_decode_result_init(&result);
 
 	if (len < DELTA_HEADER_SIZE
 	    || memcmp(data, DELTA_MAGIC, sizeof(DELTA_MAGIC)) != 0) {
@@ -162,7 +167,15 @@ delta_decode(const uint8_t *data, size_t len)
 	return result;
 }
 
-/* ── delta_decode_result_t destructor ──────────────────────────────── */
+/* ── delta_decode_result_t constructor / destructor ────────────────── */
+
+void
+delta_decode_result_init(delta_decode_result_t *dr)
+{
+	delta_placed_commands_init(&dr->commands);
+	dr->inplace = false;
+	dr->version_size = 0;
+}
 
 void
 delta_decode_result_free(delta_decode_result_t *dr)
