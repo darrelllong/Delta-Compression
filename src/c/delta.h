@@ -295,6 +295,7 @@ typedef struct {
 
 delta_buffer_t delta_encode(const delta_placed_commands_t *cmds,
                             bool inplace, size_t version_size);
+void           delta_buffer_init(delta_buffer_t *buf);
 void           delta_buffer_free(delta_buffer_t *buf);
 
 typedef struct {
@@ -304,6 +305,7 @@ typedef struct {
 } delta_decode_result_t;
 
 delta_decode_result_t delta_decode(const uint8_t *data, size_t len);
+void                  delta_decode_result_init(delta_decode_result_t *dr);
 void                  delta_decode_result_free(delta_decode_result_t *dr);
 
 /* ====================================================================

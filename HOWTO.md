@@ -419,26 +419,24 @@ delta_commands_t cmds = delta_diff(ALGO_ONEPASS, r, r_len, v, v_len, &opts);
 
 /* Standard binary delta */
 delta_placed_commands_t placed = delta_place_commands(&cmds);
-size_t delta_len;
-uint8_t *delta_bytes = delta_encode(&placed, false, v_len, &delta_len);
+delta_buffer_t encoded = delta_encode(&placed, false, v_len);
 
 /* Decode and reconstruct */
-delta_decode_result_t res = delta_decode(delta_bytes, delta_len);
-uint8_t *output = delta_calloc(res.version_size, 1);
-delta_apply_placed(r, r_len, &res.commands, output);
+delta_decode_result_t res = delta_decode(encoded.data, encoded.len);
+delta_buffer_t output = delta_apply_placed(r, &res.commands, res.version_size);
 
 /* In-place delta */
 delta_placed_commands_t ip = delta_make_inplace(r, r_len, &cmds, POLICY_LOCALMIN);
-size_t ip_len;
-uint8_t *ip_delta = delta_encode(&ip, true, v_len, &ip_len);
+delta_buffer_t ip_encoded = delta_encode(&ip, true, v_len);
 
 /* Cleanup */
 delta_commands_free(&cmds);
 delta_placed_commands_free(&placed);
+delta_buffer_free(&encoded);
+delta_decode_result_free(&res);
+delta_buffer_free(&output);
 delta_placed_commands_free(&ip);
-free(delta_bytes);
-free(ip_delta);
-free(output);
+delta_buffer_free(&ip_encoded);
 ```
 
 ### Java

@@ -11,6 +11,8 @@ src/c/delta
 
 # Java compiled classes
 src/java/out/
+src/java/**/*.class
+*.class
 
 # C++ alternate builds
 src/cpp/build-release/
