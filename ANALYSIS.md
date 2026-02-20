@@ -273,6 +273,64 @@ cold mmap cache on the first run; subsequent pairs drop to 0.7–0.8s.
 Correcting times are nearly uniform (~14s) because encoding is dominated
 by the build phase over the 831 MB reference.
 
+### Extended kernel benchmark (linux-5.1.0–5.1.7, Rust)
+
+Three reference modes run with `tests/kernel-delta-test.sh` (Rust, default
+flags).  All tarballs are ~831 MB post-gunzip.
+
+**From base: 5.1.0 → 5.1.{1..7}** — fixed reference, cumulative divergence
+
+| Version | onepass ratio | onepass time | correcting ratio | correcting time |
+|---------|-------------:|------------:|-----------------:|----------------:|
+| 5.1.1 | 0.58% | 1s | 0.80% | 6s |
+| 5.1.2 | 0.65% | 1s | 1.00% | 6s |
+| 5.1.3 | 0.66% | 1s | 1.04% | 5s |
+| 5.1.4 | 0.69% | 1s | 1.06% | 5s |
+| 5.1.5 | 0.70% | 1s | 0.86% | 6s |
+| 5.1.6 | 0.73% | 1s | 1.00% | 5s |
+| 5.1.7 | 0.73% | 1s | 0.88% | 5s |
+
+Onepass ratios climb steadily as versions accumulate changes from the fixed
+5.1.0 base.  Correcting ratios fluctuate: each version's checkpoint bias k
+(derived from the midpoint fingerprint of V) varies, affecting how many
+seeds survive the checkpoint filter and hence how many matches are found.
+
+**Successive / chain: 5.1.n → 5.1.n+1** — each version against its predecessor
+
+| Transition | onepass ratio | onepass time | correcting ratio | correcting time |
+|------------|-------------:|------------:|-----------------:|----------------:|
+| 5.1.0→5.1.1 | 0.58% | 1s | 0.80% | 6s |
+| 5.1.1→5.1.2 | 0.53% | 1s | 0.85% | 6s |
+| 5.1.2→5.1.3 | 0.47% | 1s | 1.01% | 6s |
+| 5.1.3→5.1.4 | 0.50% | 1s | 0.82% | 6s |
+| 5.1.4→5.1.5 | 0.48% | 1s | 0.79% | 6s |
+| 5.1.5→5.1.6 | 0.49% | 1s | 0.78% | 6s |
+| 5.1.6→5.1.7 | 0.47% | 1s | 0.86% | 6s |
+
+Successive onepass deltas (0.47–0.58%) are consistently smaller than
+from-base deltas to the same version (0.58–0.73%): each adjacent pair of
+kernel releases shares more content than either does with 5.1.0.  Correcting
+ratios stay in a similar range either way, showing the algorithm is less
+sensitive to reference choice when the checkpoint filter is tuned to the
+reference size.
+
+**From 5.1.1: 5.1.1 → 5.1.{2..7}** — fixed non-zero reference, growing divergence
+
+| Version | onepass ratio | onepass time | correcting ratio | correcting time |
+|---------|-------------:|------------:|-----------------:|----------------:|
+| 5.1.2 | 0.53% | 1s | 0.85% | 6s |
+| 5.1.3 | 0.54% | 1s | 0.81% | 6s |
+| 5.1.4 | 0.58% | 1s | 0.97% | 6s |
+| 5.1.5 | 0.58% | 1s | 0.82% | 6s |
+| 5.1.6 | 0.62% | 1s | 0.87% | 6s |
+| 5.1.7 | 0.62% | 1s | 0.82% | 6s |
+
+Using 5.1.1 as reference, onepass ratios grow gradually from 0.53% to 0.62%
+as versions diverge further — slower growth than from base 5.1.0, since 5.1.1
+is inherently closer to all later versions.  The 5.1.1→5.1.2 successive delta
+(0.53%) equals the 5.1.1→5.1.2 from-5.1.1 delta by definition; from there
+the from-5.1.1 ratios grow while successive ratios stay flat (0.47–0.50%).
+
 ### Splay tree: correcting compression ratio
 
 The correcting+splay cross-version kernel results (same six pairs, ~831 MB):
