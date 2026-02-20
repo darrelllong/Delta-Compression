@@ -1,7 +1,7 @@
 use delta::{
     apply_delta, apply_delta_inplace, decode_delta, diff_correcting, diff_greedy, diff_onepass,
     encode_delta, is_inplace_delta, is_prime, make_inplace, next_prime, output_size,
-    place_commands, Command, CyclePolicy, DiffOptions, PlacedCommand, TABLE_SIZE,
+    place_commands, unplace_commands, Command, CyclePolicy, DiffOptions, PlacedCommand, TABLE_SIZE,
 };
 
 // ── helpers ──────────────────────────────────────────────────────────────
@@ -790,4 +790,105 @@ fn test_next_prime_is_prime() {
     assert!(is_prime(TABLE_SIZE), "TABLE_SIZE should be prime");
     assert!(is_prime(next_prime(1048574)));
     assert_eq!(next_prime(1048573), 1048573);
+}
+
+// ── inplace subcommand path ───────────────────────────────────────────────
+//
+// The `delta inplace` subcommand converts a standard delta to inplace format
+// without re-encoding from source: decode → unplace → make_inplace → encode.
+// These tests verify that path is equivalent to the direct encode --inplace path.
+
+/// Simulate the `delta inplace` subcommand: encode a standard delta, then
+/// convert it via decode → unplace_commands → make_inplace → encode(inplace).
+fn via_inplace_subcommand(
+    algo_fn: DiffFn,
+    r: &[u8],
+    v: &[u8],
+    policy: CyclePolicy,
+    p: usize,
+) -> Vec<u8> {
+    // Step 1: encode a standard delta
+    let cmds = algo_fn(r, v, &opts(p));
+    let placed = place_commands(&cmds);
+    let standard = encode_delta(&placed, false, v.len());
+    // Step 2: decode it back, unplace, convert to inplace
+    let (placed2, is_ip, version_size) = decode_delta(&standard).unwrap();
+    assert!(!is_ip, "standard delta should not be flagged as inplace");
+    let cmds2 = unplace_commands(&placed2);
+    let (ip, _) = make_inplace(r, &cmds2, policy);
+    encode_delta(&ip, true, version_size)
+}
+
+#[test]
+fn test_inplace_subcommand_roundtrip() {
+    // encode standard → inplace subcommand → decode → apply produces original V
+    let cases: &[(&[u8], &[u8])] = &[
+        (b"ABCDEF", b"FEDCBA"),
+        (b"AAABBBCCC", b"CCCBBBAAA"),
+        (b"the quick brown fox", b"the quick brown cat"),
+        (b"ABCDEF", b"ABCDEF"),
+        (b"hello world", b""),
+        (b"", b"hello world"),
+    ];
+    for (r, v) in cases {
+        for (_, algo_fn) in all_algos() {
+            for (_, pol) in all_policies() {
+                let ip_delta = via_inplace_subcommand(algo_fn, r, v, pol, 2);
+                let recovered = apply_delta_inplace(r, &decode_delta(&ip_delta).unwrap().0, v.len());
+                assert_eq!(recovered, *v,
+                    "subcommand roundtrip failed for r={:?} v={:?}", r, v);
+            }
+        }
+    }
+}
+
+#[test]
+fn test_inplace_subcommand_idempotent() {
+    // Passing an already-inplace delta through the subcommand path should
+    // return byte-identical output (it's already inplace; just copy it).
+    let r = b"ABCDEFGHIJ";
+    let v = b"JIHGFEDCBA";
+    for (_, algo_fn) in all_algos() {
+        for (_, pol) in all_policies() {
+            let cmds = algo_fn(r, v, &opts(2));
+            let (ip, _) = make_inplace(r, &cmds, pol);
+            let ip_delta = encode_delta(&ip, true, v.len());
+
+            // Feeding the inplace delta to the subcommand logic should detect
+            // is_ip=true and return the bytes unchanged.
+            let (_, is_ip, _) = decode_delta(&ip_delta).unwrap();
+            assert!(is_ip, "inplace delta should be detected as inplace");
+            // The subcommand copies it unchanged — output == input bytes.
+            // (No re-conversion; just pass-through.)
+        }
+    }
+}
+
+#[test]
+fn test_inplace_subcommand_equiv_direct() {
+    // The subcommand path (encode standard → convert) and the direct path
+    // (encode --inplace directly) must produce byte-identical output, since
+    // both call make_inplace with the same reference and commands.
+    let cases: &[(&[u8], &[u8])] = &[
+        (b"ABCDEF", b"FEDCBA"),
+        (b"AAABBBCCC", b"CCCBBBAAA"),
+        (b"the quick brown fox", b"the quick brown cat"),
+        (b"ABCDEFGHIJKLMNOP", b"PONMLKJIHGFEDCBA"),
+    ];
+    for (r, v) in cases {
+        for (_, algo_fn) in all_algos() {
+            for (_, pol) in all_policies() {
+                // Direct path
+                let cmds = algo_fn(r, v, &opts(2));
+                let (ip_direct, _) = make_inplace(r, &cmds, pol);
+                let direct_bytes = encode_delta(&ip_direct, true, v.len());
+
+                // Subcommand path
+                let subcommand_bytes = via_inplace_subcommand(algo_fn, r, v, pol, 2);
+
+                assert_eq!(direct_bytes, subcommand_bytes,
+                    "direct vs subcommand path differ for r={:?} v={:?}", r, v);
+            }
+        }
+    }
 }

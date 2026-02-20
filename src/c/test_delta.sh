@@ -132,6 +132,59 @@ $DELTA decode "$ref" "$d" "$out"
 check "identical files roundtrip" diff -q "$ref" "$out"
 
 echo ""
+echo "=== Inplace subcommand tests ==="
+
+for algo in greedy onepass correcting; do
+    # 1. encode standard → inplace subcommand → decode roundtrip
+    std_d="$tmpdir/${algo}-sub-std.delta"
+    ip_d="$tmpdir/${algo}-sub-ip.delta"
+    out="$tmpdir/${algo}-sub.out"
+    $DELTA encode $algo "$ref" "$ver" "$std_d"
+    $DELTA inplace "$ref" "$std_d" "$ip_d"
+    $DELTA decode "$ref" "$ip_d" "$out"
+    check "$algo inplace subcommand roundtrip" diff -q "$ver" "$out"
+
+    # 2. idempotency: already-inplace delta passed to subcommand → still correct
+    ip_d2="$tmpdir/${algo}-sub-ip2.delta"
+    out2="$tmpdir/${algo}-sub2.out"
+    $DELTA inplace "$ref" "$ip_d" "$ip_d2"
+    $DELTA decode "$ref" "$ip_d2" "$out2"
+    check "$algo inplace subcommand idempotent" diff -q "$ver" "$out2"
+
+    # 3. byte-identical: encode --inplace vs encode then inplace subcommand
+    direct_d="$tmpdir/${algo}-direct-ip.delta"
+    $DELTA encode $algo "$ref" "$ver" "$direct_d" --inplace
+    check "$algo inplace subcommand byte-identical to --inplace" diff -q "$direct_d" "$ip_d"
+done
+
+echo ""
+echo "=== Cross-language inplace subcommand ==="
+
+if [ -n "$RUST_DELTA" ]; then
+    for algo in onepass correcting; do
+        # C encode standard → Rust inplace subcommand → C decode
+        c_std="$tmpdir/c-std-${algo}.delta"
+        r_ip="$tmpdir/rust-ip-from-c-${algo}.delta"
+        c_out="$tmpdir/c-out-from-rust-ip-${algo}.out"
+        $DELTA encode $algo "$ref" "$ver" "$c_std"
+        $RUST_DELTA inplace "$ref" "$c_std" "$r_ip"
+        $DELTA decode "$ref" "$r_ip" "$c_out"
+        check "C encode -> Rust inplace -> C decode ($algo)" diff -q "$ver" "$c_out"
+
+        # Rust encode standard → C inplace subcommand → Rust decode
+        r_std="$tmpdir/rust-std-${algo}.delta"
+        c_ip="$tmpdir/c-ip-from-rust-${algo}.delta"
+        r_out="$tmpdir/rust-out-from-c-ip-${algo}.out"
+        $RUST_DELTA encode $algo "$ref" "$ver" "$r_std"
+        $DELTA inplace "$ref" "$r_std" "$c_ip"
+        $RUST_DELTA decode "$ref" "$c_ip" "$r_out"
+        check "Rust encode -> C inplace -> Rust decode ($algo)" diff -q "$ver" "$r_out"
+    done
+else
+    echo "  (Rust binary not found, skipping)"
+fi
+
+echo ""
 echo "=== Byte-identical deltas (C vs other implementations) ==="
 
 if [ -n "$RUST_DELTA" ]; then
