@@ -3,6 +3,7 @@ package delta;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.Deque;
 import java.util.List;
@@ -178,7 +179,6 @@ public final class Apply {
 
         // Step 2: build CRWI digraph
         List<List<Integer>> adj = new ArrayList<>();
-        int[] inDeg = new int[n];
         for (int i = 0; i < n; i++) adj.add(new ArrayList<>());
 
         // O(n log n + E) sweep-line: sort writes by start, then for each read
@@ -212,30 +212,59 @@ public final class Apply {
                 int j = writeSorted[lo - 1];
                 if (j != i) {
                     int dj = copies.get(j)[2], lj = copies.get(j)[3];
-                    if (dj + lj > si) { adj.get(i).add(j); inDeg[j]++; }
+                    if (dj + lj > si) { adj.get(i).add(j); }
                 }
             }
             for (int k = lo; k < hi; k++) {
                 int j = writeSorted[k];
-                if (j != i) { adj.get(i).add(j); inDeg[j]++; }
+                if (j != i) { adj.get(i).add(j); }
             }
         }
 
-        // Step 3: topological sort with cycle breaking (Kahn's algorithm)
-        // Priority queue keyed on copy length — always process the smallest
-        // ready copy first, giving a deterministic topological ordering.
+        // Step 3: Kahn topological sort with Tarjan-scoped cycle breaking.
+        //
+        // Global Kahn preserves the cascade effect (converting a victim
+        // decrements in_deg globally, potentially freeing vertices across SCC
+        // boundaries).  findCycleInScc restricts DFS to one SCC via three
+        // amortizations: sccId filter (no O(|SCC|) set/clear), color=2
+        // persistence, and scanStart resumption.  Total: O(n+E) cycle-breaking.
+        // R.E. Tarjan, SIAM J. Comput., 1(2):146-160, June 1972.
+        List<List<Integer>> sccs = tarjanScc(adj, n);
+
+        int[] inDeg = new int[n];
+        for (int i = 0; i < n; i++) {
+            for (int j : adj.get(i)) { inDeg[j]++; }
+        }
+
+        int[] sccId = new int[n];
+        Arrays.fill(sccId, -1); // -1 = trivial (no cycle)
+        List<List<Integer>> sccList = new ArrayList<>(); // non-trivial SCCs only
+        int[] sccActive = new int[sccs.size()]; // live member count per SCC
+
+        for (List<Integer> scc : sccs) {
+            if (scc.size() > 1) {
+                int sid = sccList.size();
+                for (int v : scc) { sccId[v] = sid; }
+                sccActive[sid] = scc.size();
+                sccList.add(scc);
+            }
+        }
+
         boolean[] removed = new boolean[n];
         List<Integer> topoOrder = new ArrayList<>();
+        int[] color = new int[n]; // 0=unvisited, 1=on-path, 2=done
+        int sccPtr = 0;
+        int[] scanPos = {0}; // mutable scan position within sccList.get(sccPtr)
 
-        // Min-heap: compare by (copy_length, index) for deterministic ordering.
         PriorityQueue<int[]> heap = new PriorityQueue<>(
             Comparator.<int[]>comparingInt(e -> e[0]).thenComparingInt(e -> e[1]));
         for (int i = 0; i < n; i++) {
             if (inDeg[i] == 0) heap.add(new int[]{copies.get(i)[3], i});
         }
-
         int processed = 0;
+
         while (processed < n) {
+            // Drain all ready vertices.
             while (!heap.isEmpty()) {
                 int[] entry = heap.poll();
                 int v = entry[1];
@@ -243,61 +272,72 @@ public final class Apply {
                 removed[v] = true;
                 topoOrder.add(v);
                 processed++;
+                if (sccId[v] != -1) { sccActive[sccId[v]]--; }
                 for (int w : adj.get(v)) {
                     if (!removed[w]) {
                         inDeg[w]--;
-                        if (inDeg[w] == 0) heap.add(new int[]{copies.get(w)[3], w});
+                        if (inDeg[w] == 0)
+                            heap.add(new int[]{copies.get(w)[3], w});
                     }
                 }
             }
 
             if (processed >= n) break;
 
-            // Cycle detected — choose a victim
-            int victim;
+            // Kahn stalled: all remaining vertices are in CRWI cycles.
+            // Choose a victim to convert from copy to add.
+            int victim = -1;
             if (policy == CyclePolicy.CONSTANT) {
-                victim = -1;
                 for (int i = 0; i < n; i++) {
                     if (!removed[i]) { victim = i; break; }
                 }
-            } else {
-                // LOCALMIN: find cycle, pick smallest copy
-                List<Integer> cycle = findCycle(adj, removed, n);
-                if (cycle != null) {
-                    // Key on (length, index) for deterministic tie-breaking
-                    // — same composite key as the Kahn's PQ above.
-                    victim = cycle.get(0);
-                    int minLen = copies.get(victim)[3];
-                    for (int idx : cycle) {
-                        int len = copies.get(idx)[3];
-                        if (len < minLen || (len == minLen && idx < victim)) {
-                            minLen = len;
-                            victim = idx;
-                        }
+            } else { // LOCALMIN
+                while (victim == -1) {
+                    while (sccPtr < sccList.size() && sccActive[sccPtr] == 0) {
+                        sccPtr++; scanPos[0] = 0;
                     }
-                } else {
-                    victim = -1;
-                    for (int i = 0; i < n; i++) {
-                        if (!removed[i]) { victim = i; break; }
+                    if (sccPtr >= sccList.size()) {
+                        // Safety fallback — should not happen with a correct graph.
+                        for (int i = 0; i < n; i++) {
+                            if (!removed[i]) { victim = i; break; }
+                        }
+                        break;
+                    }
+                    List<Integer> cycle = findCycleInScc(
+                        adj, sccList.get(sccPtr), sccPtr,
+                        sccId, removed, color, scanPos);
+                    if (cycle != null) {
+                        victim = cycle.get(0);
+                        for (int v : cycle) {
+                            if (copies.get(v)[3] < copies.get(victim)[3] ||
+                                (copies.get(v)[3] == copies.get(victim)[3] && v < victim)) {
+                                victim = v;
+                            }
+                        }
+                    } else {
+                        // SCC's remaining subgraph is acyclic; advance.
+                        sccPtr++; scanPos[0] = 0;
                     }
                 }
             }
 
-            // Convert victim: materialize copy data as literal add
+            // Convert victim: materialize copy data as literal add.
             int[] ci = copies.get(victim);
             byte[] data = new byte[ci[3]];
             System.arraycopy(r, ci[1], data, 0, ci[3]);
             adds.add(new PlacedAdd(ci[2], data));
             removed[victim] = true;
             processed++;
+            if (sccId[victim] != -1) { sccActive[sccId[victim]]--; }
 
             for (int w : adj.get(victim)) {
                 if (!removed[w]) {
                     inDeg[w]--;
-                    if (inDeg[w] == 0) heap.add(new int[]{copies.get(w)[3], w});
+                    if (inDeg[w] == 0)
+                        heap.add(new int[]{copies.get(w)[3], w});
                 }
             }
-        }
+        } // while processed < n
 
         // Step 4: assemble result — copies in topo order, then all adds
         List<PlacedCommand> result = new ArrayList<>();
@@ -310,56 +350,143 @@ public final class Apply {
     }
 
     /**
-     * Find a cycle in the subgraph of non-removed vertices.
+     * Compute SCCs using iterative Tarjan's algorithm.
      *
-     * Iterative DFS with three-color marking (0=unvisited, 1=on-path, 2=done).
-     * A back-edge to an on-path vertex signals a cycle.
+     * Returns SCCs in reverse topological order (sinks first); caller
+     * reverses for source-first processing order.
+     *
+     * R.E. Tarjan, "Depth-first search and linear graph algorithms,"
+     * SIAM Journal on Computing, 1(2):146-160, June 1972.
      */
-    private static List<Integer> findCycle(List<List<Integer>> adj,
-                                           boolean[] removed, int n) {
-        int[] color = new int[n]; // 0=unvisited, 1=on current path, 2=done
-        List<Integer> path = new ArrayList<>();
+    private static List<List<Integer>> tarjanScc(List<List<Integer>> adj, int n) {
+        int[] index = new int[n];
+        Arrays.fill(index, -1); // -1 = unvisited
+        int[] lowlink = new int[n];
+        boolean[] onStack = new boolean[n];
+        Deque<Integer> tarjanStack = new ArrayDeque<>();
+        List<List<Integer>> sccs = new ArrayList<>();
+        int[] counter = {0};
+        // DFS call stack: int[]{vertex, next_neighbor_index}
+        Deque<int[]> callStack = new ArrayDeque<>();
 
         for (int start = 0; start < n; start++) {
-            if (removed[start] || color[start] != 0) continue;
+            if (index[start] != -1) continue;
+
+            index[start] = lowlink[start] = counter[0]++;
+            onStack[start] = true;
+            tarjanStack.push(start);
+            callStack.push(new int[]{start, 0});
+
+            while (!callStack.isEmpty()) {
+                int[] frame = callStack.peek();
+                int v = frame[0];
+                int ni = frame[1];
+                List<Integer> neighbors = adj.get(v);
+
+                if (ni < neighbors.size()) {
+                    int w = neighbors.get(ni);
+                    frame[1]++;
+                    if (index[w] == -1) {
+                        // Tree edge: descend into w
+                        index[w] = lowlink[w] = counter[0]++;
+                        onStack[w] = true;
+                        tarjanStack.push(w);
+                        callStack.push(new int[]{w, 0});
+                    } else if (onStack[w]) {
+                        // Back-edge into current SCC
+                        if (index[w] < lowlink[v]) lowlink[v] = index[w];
+                    }
+                } else {
+                    callStack.pop();
+                    if (!callStack.isEmpty()) {
+                        int parent = callStack.peek()[0];
+                        if (lowlink[v] < lowlink[parent])
+                            lowlink[parent] = lowlink[v];
+                    }
+                    if (lowlink[v] == index[v]) {
+                        List<Integer> scc = new ArrayList<>();
+                        int w;
+                        do {
+                            w = tarjanStack.pop();
+                            onStack[w] = false;
+                            scc.add(w);
+                        } while (w != v);
+                        sccs.add(scc);
+                    }
+                }
+            }
+        }
+        return sccs; // sinks first; caller reverses for source-first order
+    }
+
+    /**
+     * Find a cycle in the active subgraph of one SCC.
+     *
+     * Three amortizations give O(|SCC| + E_SCC) total work per SCC:
+     *   1. sccId filter: O(1) per neighbor check, no O(|SCC|) set/clear sweep.
+     *   2. color persistence: color=2 (fully explored) persists across calls;
+     *      vertex removal can only reduce edges, so color=2 is monotone-correct.
+     *   3. scanStart[0]: outer loop resumes from last position, O(|SCC|) total.
+     *
+     * On cycle found: resets path (color=1) vertices to 0; color=2 intact.
+     * On null (acyclic): color=2 persists (sccId filter isolates SCCs).
+     */
+    private static List<Integer> findCycleInScc(
+            List<List<Integer>> adj, List<Integer> scc, int sid,
+            int[] sccId, boolean[] removed, int[] color, int[] scanStart) {
+        List<Integer> path = new ArrayList<>();
+        int scan = scanStart[0];
+        int sccLen = scc.size();
+
+        while (scan < sccLen) {
+            int start = scc.get(scan);
+            if (removed[start] || color[start] != 0) { scan++; continue; }
 
             color[start] = 1;
             path.add(start);
-            // Stack of [vertex, next_neighbor_index]
+            // Stack entries: int[]{vertex, next_neighbor_index}
             Deque<int[]> stack = new ArrayDeque<>();
             stack.push(new int[]{start, 0});
 
+            outer:
             while (!stack.isEmpty()) {
-                int[] top = stack.peek();
-                int v = top[0];
+                int[] frame = stack.peek();
+                int v = frame[0];
+                int ni = frame[1];
                 List<Integer> neighbors = adj.get(v);
                 boolean advanced = false;
 
-                while (top[1] < neighbors.size()) {
-                    int w = neighbors.get(top[1]++);
-                    if (removed[w]) continue;
+                while (ni < neighbors.size()) {
+                    int w = neighbors.get(ni++);
+                    if (sccId[w] != sid || removed[w]) { continue; }
                     if (color[w] == 1) {
                         // Back-edge: cycle found.
                         int pos = path.indexOf(w);
-                        return new ArrayList<>(path.subList(pos, path.size()));
+                        List<Integer> cycle = new ArrayList<>(path.subList(pos, path.size()));
+                        for (int u : path) { color[u] = 0; }
+                        scanStart[0] = scan;
+                        return cycle;
                     }
                     if (color[w] == 0) {
+                        frame[1] = ni;
                         color[w] = 1;
                         path.add(w);
                         stack.push(new int[]{w, 0});
                         advanced = true;
-                        break;
+                        continue outer;
                     }
-                    // color[w] == 2: already done, skip
                 }
-
                 if (!advanced) {
                     stack.pop();
-                    color[v] = 2;
+                    color[v] = 2; // Fully explored — persists across calls.
                     path.remove(path.size() - 1);
                 }
             }
+            // start's reachable SCC-subgraph fully explored; no cycle.
+            scan++;
         }
+
+        scanStart[0] = scan;
         return null;
     }
 

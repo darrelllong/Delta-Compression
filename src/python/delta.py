@@ -1086,23 +1086,98 @@ def apply_binary(R: bytes, delta: bytes) -> bytes:
 #   - localmin: pick the minimum-length vertex in the cycle (less compression loss)
 # ============================================================================
 
-def _find_cycle(adj, removed, n):
-    """Find a cycle in the subgraph of non-removed vertices.
+def _tarjan_scc(adj, n):
+    """Compute strongly connected components using iterative Tarjan's algorithm.
 
-    Iterative DFS with three-color marking (0=unvisited, 1=on-path, 2=done).
-    A back-edge to an on-path vertex signals a cycle.
-    Returns a list of vertex indices forming the cycle, or None.
+    Returns SCCs in reverse topological order (sinks first); caller reverses
+    for source-first processing order.
+
+    R.E. Tarjan, "Depth-first search and linear graph algorithms,"
+    SIAM Journal on Computing, 1(2):146-160, June 1972.
     """
-    color = [0] * n  # 0=unvisited, 1=on current path, 2=done
-    path = []
+    index_counter = 0
+    index = [-1] * n          # -1 = unvisited
+    lowlink = [0] * n
+    on_stack = [False] * n
+    tarjan_stack = []          # Tarjan's SCC stack
+    sccs = []
+    call_stack = []            # iterative DFS frames: [vertex, next_neighbor_idx]
 
     for start in range(n):
+        if index[start] != -1:
+            continue
+
+        index[start] = lowlink[start] = index_counter
+        index_counter += 1
+        on_stack[start] = True
+        tarjan_stack.append(start)
+        call_stack.append([start, 0])
+
+        while call_stack:
+            frame = call_stack[-1]
+            v = frame[0]
+            ni = frame[1]
+
+            if ni < len(adj[v]):
+                w = adj[v][ni]
+                frame[1] += 1
+                if index[w] == -1:
+                    # Tree edge: descend into w
+                    index[w] = lowlink[w] = index_counter
+                    index_counter += 1
+                    on_stack[w] = True
+                    tarjan_stack.append(w)
+                    call_stack.append([w, 0])
+                elif on_stack[w]:
+                    # Back-edge into current SCC
+                    if index[w] < lowlink[v]:
+                        lowlink[v] = index[w]
+            else:
+                # Done with v — backtrack
+                call_stack.pop()
+                if call_stack:
+                    parent = call_stack[-1][0]
+                    if lowlink[v] < lowlink[parent]:
+                        lowlink[parent] = lowlink[v]
+                # Root of an SCC?
+                if lowlink[v] == index[v]:
+                    scc = []
+                    while True:
+                        w = tarjan_stack.pop()
+                        on_stack[w] = False
+                        scc.append(w)
+                        if w == v:
+                            break
+                    sccs.append(scc)
+
+    return sccs  # sinks first; caller reverses for source-first order
+
+
+def _find_cycle_in_scc(adj, scc, sid, scc_id, removed, color, scan_start_ref):
+    """Find a cycle in the active subgraph of one SCC.
+
+    Three amortizations give O(|SCC| + E_SCC) total work per SCC:
+      1. scc_id filter: O(1) per neighbor, no O(|SCC|) set/clear sweep.
+      2. color persistence: color=2 (fully explored) persists across calls;
+         vertex removal can only reduce edges, so color=2 is monotone-correct.
+      3. scan_start_ref: outer loop resumes from last position, O(|SCC|) total.
+
+    On cycle found: resets path (color=1) vertices to 0; color=2 intact.
+    On None: color=2 persists harmlessly (scc_id filter isolates SCCs).
+    """
+    path = []
+    scan = scan_start_ref[0]
+    scc_len = len(scc)
+
+    while scan < scc_len:
+        start = scc[scan]
         if removed[start] or color[start] != 0:
+            scan += 1
             continue
 
         color[start] = 1
         path.append(start)
-        stack = [(start, 0)]  # (vertex, next_neighbor_index)
+        stack = [(start, 0)]
 
         while stack:
             v, ni = stack[-1]
@@ -1110,25 +1185,32 @@ def _find_cycle(adj, removed, n):
             while ni < len(adj[v]):
                 w = adj[v][ni]
                 ni += 1
-                if removed[w]:
+                if scc_id[w] != sid or removed[w]:
                     continue
                 if color[w] == 1:
-                    # Back-edge: cycle found.
+                    # Back-edge: cycle found
                     pos = path.index(w)
-                    return path[pos:]
+                    cycle = path[pos:]
+                    for u in path:
+                        color[u] = 0
+                    scan_start_ref[0] = scan
+                    return cycle
                 if color[w] == 0:
-                    stack[-1] = (v, ni)  # save progress
+                    stack[-1] = (v, ni)
                     color[w] = 1
                     path.append(w)
                     stack.append((w, 0))
                     advanced = True
                     break
-                # color[w] == 2: already done, skip
             if not advanced:
                 stack.pop()
-                color[v] = 2
+                color[v] = 2  # Fully explored — persists across calls.
                 path.pop()
 
+        # start's reachable SCC-subgraph fully explored; no cycle.
+        scan += 1
+
+    scan_start_ref[0] = scan
     return None
 
 
@@ -1175,7 +1257,6 @@ def make_inplace(R: bytes, commands: List[Command],
     # Edge i -> j means i's read interval [src_i, src_i+len_i) overlaps
     # j's write interval [dst_j, dst_j+len_j), so i must execute before j.
     adj = [[] for _ in range(n)]
-    in_deg = [0] * n
 
     # O(n log n + E) sweep-line: sort writes by start, then for each read
     # interval binary-search into the sorted writes to find overlaps.
@@ -1199,27 +1280,55 @@ def make_inplace(R: bytes, commands: List[Command],
             j = write_sorted[lo - 1]
             if i != j and copy_info[j][2] + copy_info[j][3] > si:
                 adj[i].append(j)
-                in_deg[j] += 1
         for k in range(lo, hi):
             j = write_sorted[k]
             if i != j:
                 adj[i].append(j)
-                in_deg[j] += 1
 
-    # Step 3: topological sort with cycle breaking (Kahn's algorithm)
-    # Priority queue keyed on copy length — always process the smallest
-    # ready copy first, giving a deterministic topological ordering.
+    # Step 3: Kahn topological sort with Tarjan-scoped cycle breaking.
+    #
+    # Tarjan SCC pre-decomposition identifies cyclic vertices.  Global Kahn
+    # preserves the cascade effect (converting a victim decrements in_deg
+    # globally, potentially freeing vertices across SCC boundaries without
+    # extra conversions).  _find_cycle_in_scc restricts DFS to one SCC using
+    # three amortizations: scc_id filter (no O(|SCC|) set/clear), color=2
+    # persistence, and scan_start resumption.  Total: O(n+E) cycle-breaking.
+    # R.E. Tarjan, SIAM J. Comput., 1(2):146-160, June 1972.
+    sccs = _tarjan_scc(adj, n)
+
+    in_deg = [0] * n
+    for i in range(n):
+        for j in adj[i]:
+            in_deg[j] += 1
+
+    scc_id = [None] * n   # None = trivial (no cycle)
+    scc_list = []          # non-trivial SCCs only
+    scc_active = []        # live member count per SCC
+
+    for scc in sccs:
+        if len(scc) > 1:
+            sid = len(scc_list)
+            for v in scc:
+                scc_id[v] = sid
+            scc_active.append(len(scc))
+            scc_list.append(scc)
+
     removed = [False] * n
     topo_order = []
     cycles_broken = 0
+    color = [0] * n
+    scc_ptr = 0
+    scan_pos = [0]  # mutable scan position within scc_list[scc_ptr]
 
-    heap = []  # min-heap of (copy_length, index)
+    heap = []
     for i in range(n):
         if in_deg[i] == 0:
             heapq.heappush(heap, (copy_info[i][3], i))
+
     processed = 0
 
     while processed < n:
+        # Drain all ready vertices.
         while heap:
             _, v = heapq.heappop(heap)
             if removed[v]:
@@ -1227,6 +1336,9 @@ def make_inplace(R: bytes, commands: List[Command],
             removed[v] = True
             topo_order.append(v)
             processed += 1
+            sid = scc_id[v]
+            if sid is not None:
+                scc_active[sid] -= 1
             for w in adj[v]:
                 if not removed[w]:
                     in_deg[w] -= 1
@@ -1236,24 +1348,39 @@ def make_inplace(R: bytes, commands: List[Command],
         if processed >= n:
             break
 
-        # Cycle detected — choose a victim to convert from copy to add
+        # Kahn stalled: all remaining vertices are in CRWI cycles.
+        # Choose a victim to convert from copy to add.
         if policy == 'constant':
             victim = next(i for i in range(n) if not removed[i])
         else:  # localmin
-            cycle = _find_cycle(adj, removed, n)
-            if cycle:
-                # Key on (length, index) for deterministic tie-breaking
-                # — same composite key as the Kahn's PQ above.
-                victim = min(cycle, key=lambda i: (copy_info[i][3], i))
-            else:
-                victim = next(i for i in range(n) if not removed[i])
+            victim = None
+            while victim is None:
+                while scc_ptr < len(scc_list) and scc_active[scc_ptr] == 0:
+                    scc_ptr += 1
+                    scan_pos[0] = 0
+                if scc_ptr >= len(scc_list):
+                    # Safety fallback — should not happen with a correct graph.
+                    victim = next(i for i in range(n) if not removed[i])
+                    break
+                cycle = _find_cycle_in_scc(
+                    adj, scc_list[scc_ptr], scc_ptr, scc_id,
+                    removed, color, scan_pos)
+                if cycle is not None:
+                    victim = min(cycle, key=lambda v: (copy_info[v][3], v))
+                else:
+                    # SCC's remaining subgraph is acyclic; advance.
+                    scc_ptr += 1
+                    scan_pos[0] = 0
 
-        # Convert victim: materialize its copy data as a literal add
+        # Convert victim: materialize its copy data as a literal add.
         _, src, dst, length = copy_info[victim]
         add_info.append((dst, bytes(R[src:src + length])))
         cycles_broken += 1
         removed[victim] = True
         processed += 1
+        sid = scc_id[victim]
+        if sid is not None:
+            scc_active[sid] -= 1
 
         for w in adj[victim]:
             if not removed[w]:
