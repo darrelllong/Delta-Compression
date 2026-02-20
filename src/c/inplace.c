@@ -52,7 +52,7 @@ typedef struct {
 } stk_buf_t;
 
 static void size_buf_init(size_buf_t *b) { b->data = NULL; b->len = 0; b->cap = 0; }
-static void size_buf_free(size_buf_t *b) { free(b->data); }
+static void size_buf_free(size_buf_t *b) { free(b->data); b->data = NULL; b->len = 0; b->cap = 0; }
 static void size_buf_push(size_buf_t *b, size_t v) {
 	if (b->len == b->cap) {
 		b->cap = b->cap ? b->cap * 2 : 16;
@@ -62,7 +62,7 @@ static void size_buf_push(size_buf_t *b, size_t v) {
 }
 
 static void stk_buf_init(stk_buf_t *b) { b->data = NULL; b->len = 0; b->cap = 0; }
-static void stk_buf_free(stk_buf_t *b) { free(b->data); }
+static void stk_buf_free(stk_buf_t *b) { free(b->data); b->data = NULL; b->len = 0; b->cap = 0; }
 static void stk_buf_push(stk_buf_t *b, size_t v, size_t ni) {
 	if (b->len == b->cap) {
 		b->cap = b->cap ? b->cap * 2 : 16;
