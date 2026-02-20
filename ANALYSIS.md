@@ -493,41 +493,50 @@ versa).  All sizes are bytes of raw UTF-8 plain text.
 | Shakespeare complete works | 5,638,525 B | PG #100 |
 | Marlowe: 7 major works | 1,016,834 B | PG #779, 901, 1094, 1496, 1589, 18781, 20288 |
 | Bacon: 6 major works | 2,240,861 B | PG #56463, 5500, 45988, 2434, 3290, 46964 |
+| Mary Sidney: Discourse + Antonius (clean) | 185,647 B | PG #21789 |
+| Mary Sidney: Psalms 44–150 + above (OCR) | 482,766 B | IA + PG #21789 |
 | de Vere: ~24 poems (OCR) | 90,753 B | Internet Archive, Looney ed. 1921 |
 
 ### Results (correcting algorithm, Shakespeare as reference)
 
-| Candidate | Delta size | Ratio | Copy coverage | Copies | Mean copy | Median copy |
-|-----------|----------:|------:|--------------:|-------:|----------:|------------:|
-| Marlowe | 884,620 B | 87.0% | 15.9% | 1,324 | 121.8 B | 18 B |
-| Bacon | 2,134,603 B | 95.3% | 7.3% | 2,597 | 62.9 B | 17 B |
-| de Vere | 90,772 B | 100.0% | 0.0% | 0 | — | — |
+| Candidate | Corpus | Delta size | Ratio | Coverage | Copies | Mean copy |
+|-----------|--------|----------:|------:|---------:|-------:|----------:|
+| Marlowe | 1.0 MB clean | 884,620 B | 87.0% | 15.9% | 1,324 | 121.8 B |
+| Mary Sidney | 186 KB clean | 166,529 B | 89.7% | 11.4% | 91 | 232.1 B |
+| Mary Sidney | 483 KB mixed | 463,678 B | 96.0% | 4.4% | 88 | 239.0 B |
+| Bacon | 2.2 MB clean | 2,134,603 B | 95.3% | 7.3% | 2,597 | 62.9 B |
+| de Vere | 91 KB OCR | 90,772 B | 100.0% | 0.0% | 0 | — |
 
-Neither achieves meaningful compression.  For reference, successive Linux
+None achieves meaningful compression.  For reference, successive Linux
 kernel point releases (which genuinely share 99%+ of their content) compress
-to 0.5–1.0% of the version size; Shakespeare-vs-candidate ratios of 87–100%
-indicate almost no shared structure beyond common English function phrases.
+to 0.5–1.0% of the version size.
 
-**Marlowe** is the best candidate by every metric: highest copy coverage
-(15.9%), longest mean copy (121.8 B), lowest delta ratio (87.0%).
-This is expected — Marlowe and Shakespeare were contemporaries writing blank
-verse drama with overlapping imagery and diction — but 84% of Marlowe's text
-still has to be transmitted as raw adds.  Shared genre is not shared authorship.
+**Marlowe** has the highest copy coverage (15.9%) and lowest ratio (87.0%),
+as expected — he and Shakespeare wrote in the same genre (blank verse drama)
+with overlapping imagery and diction.  But 84% of his text still transmits
+as raw adds; shared genre is not shared authorship.
 
-**Bacon** is worse.  His median copy length of 17 bytes matches Marlowe's, but
-his mean is only 62.9 B vs 121.8 B, and copy coverage is less than half.
-Bacon was writing natural philosophy and essays in a register utterly unlike
-dramatic blank verse; the compressor finds only the common stock of English
-function words.
+**Mary Sidney** is the most interesting result.  On clean text her mean copy
+length is 232 B, the highest of any candidate — she and Shakespeare share
+longer uninterrupted phrases than Marlowe does (121.8 B) or Bacon (62.9 B).
+Those long matches plausibly reflect Elizabethan prose conventions and shared
+classical sources (Petrarch, Garnier, Mornay) that Shakespeare also drew on.
+Her corpus is small, however: only 186 KB of clean text yields 91 copies
+covering 11.4% of the material, and half her available text (Psalms 44–150)
+survives only as noisy OCR, which kills matching — just 88 copies total when
+the Psalms are included, because the extra spaces and hyphenated line-breaks
+from the 1960 typesetting prevent exact 16-byte runs from forming.
 
-**de Vere** is last.  His authenticated surviving output is ~24 short poems,
-totalling roughly 90 KB in a 1921 digitized edition (itself OCR-noisy, with
-extra spaces and mid-word hyphenation from the typesetting).  The correcting
-algorithm issues zero copy commands: the OCR noise prevents any 16-byte exact
-match from forming, and the corpus is too small to matter even if it were clean.
-This is the starkest result: even greedy finds nothing to copy.  The Oxfordian
-theory cannot be evaluated by this method because de Vere left almost no
-authenticated writing — which is, of course, central to the theory.
+**Bacon** has the largest authenticated corpus (2.2 MB) yet the worst
+coverage (7.3%) and shortest mean copy (62.9 B) of the clean-text candidates.
+Natural philosophy and moral essays share only function-word sequences with
+blank verse drama; the theory is not supported.
+
+**de Vere** remains last.  His authenticated surviving output is ~24 short
+poems (~90 KB in a 1921 OCR scan).  The correcting algorithm issues zero
+copy commands: OCR noise prevents any 16-byte exact match from forming, and
+the corpus would be too small to matter even if clean.  The Oxfordian theory
+is unfalsifiable by this method — de Vere left almost no authenticated prose.
 
 Running any candidate as reference against Shakespeare is even more
 hopeless: the corpora are 1.6–18% of Shakespeare's size, so even perfect
