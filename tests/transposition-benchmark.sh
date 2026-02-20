@@ -14,6 +14,9 @@
 # onepass and correcting) to show the cost of in-place conversion under
 # increasing transposition pressure.
 #
+# A fourth section measures apply (decode) time for standard vs in-place
+# deltas at each permutation level (16 MB, onepass and correcting).
+#
 # Usage:
 #   ./tests/transposition-benchmark.sh
 #
@@ -140,6 +143,46 @@ for algo in onepass correcting; do
     done
     last_algo="$algo"
 done
+
+echo ""
+echo ""
+
+# ── Apply-phase performance — 16 MB, onepass and correcting ───────────────
+#
+# Measures decode time for standard vs in-place deltas produced above.
+# Uses the same delta files; writes decoded output to a scratch file.
+# Isolates the apply half of the encode+apply round trip.
+
+echo "=== Apply-phase performance (16 MB, onepass and correcting) ==="
+echo "    32,000 blocks × 512 B mean"
+echo ""
+
+printf "  %-12s  %7s  %9s  %9s\n" \
+    "Algorithm" "Perm%" "Apply-N" "Apply-IP"
+printf "  %-12s  %7s  %9s  %9s\n" \
+    "---------" "-----" "-------" "--------"
+
+apply_scratch="$WORKDIR/apply-scratch.bin"
+last_algo=""
+for algo in onepass correcting; do
+    [[ -n "$last_algo" ]] && echo ""
+    for pct in $PERMS; do
+        ref="$WORKDIR/16mb-ref-${pct}.bin"
+        delta_n="$WORKDIR/16mb-${algo}-${pct}.delta"
+        delta_ip="$WORKDIR/16mb-${algo}-ip-${pct}.delta"
+
+        out_n=$("$DELTA" decode "$ref" "$delta_n" "$apply_scratch" 2>/dev/null)
+        ta=$(echo "$out_n" | awk '/^Time/ { print $2 }')
+
+        out_ip=$("$DELTA" decode "$ref" "$delta_ip" "$apply_scratch" 2>/dev/null)
+        tb=$(echo "$out_ip" | awk '/^Time/ { print $2 }')
+
+        printf "  %-12s  %7s  %9s  %9s\n" \
+            "$algo" "${pct}%" "$ta" "$tb"
+    done
+    last_algo="$algo"
+done
+rm -f "$apply_scratch"
 
 echo ""
 echo ""
