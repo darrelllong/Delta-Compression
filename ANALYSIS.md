@@ -499,6 +499,8 @@ versa).  All sizes are bytes of raw UTF-8 plain text.
 
 ### Results (correcting algorithm, Shakespeare as reference)
 
+Raw text (as downloaded from Project Gutenberg / Internet Archive):
+
 | Candidate | Corpus | Delta size | Ratio | Coverage | Copies | Mean copy |
 |-----------|--------|----------:|------:|---------:|-------:|----------:|
 | Marlowe | 1.0 MB clean | 884,620 B | 87.0% | 15.9% | 1,324 | 121.8 B |
@@ -507,40 +509,55 @@ versa).  All sizes are bytes of raw UTF-8 plain text.
 | Bacon | 2.2 MB clean | 2,134,603 B | 95.3% | 7.3% | 2,597 | 62.9 B |
 | de Vere | 91 KB OCR | 90,772 B | 100.0% | 0.0% | 0 | — |
 
-None achieves meaningful compression.  For reference, successive Linux
-kernel point releases (which genuinely share 99%+ of their content) compress
-to 0.5–1.0% of the version size.
+OCR-scanned texts (de Vere 1921, Mary Sidney Psalms 1960) contain runs of
+extra spaces and mid-word hyphenation from the typesetting, which break the
+16-byte exact-match requirement and suppress copy counts artificially.
+Collapsing all whitespace runs to a single space (`tr -s '[:space:]'`) gives
+a fairer comparison:
 
-**Marlowe** has the highest copy coverage (15.9%) and lowest ratio (87.0%),
-as expected — he and Shakespeare wrote in the same genre (blank verse drama)
-with overlapping imagery and diction.  But 84% of his text still transmits
-as raw adds; shared genre is not shared authorship.
+| Candidate | Corpus | Ratio | Coverage | Copies | Mean copy |
+|-----------|--------|------:|---------:|-------:|----------:|
+| Marlowe | 915 KB | 86.1% | 17.4% | 1,460 | 108.8 B |
+| Mary Sidney | 421 KB | 95.8% | 5.4% | 218 | 103.9 B |
+| Bacon | 2.09 MB | 95.1% | 7.7% | 2,627 | 60.9 B |
+| de Vere | 74 KB | 97.8% | 5.6% | 114 | 36.1 B |
 
-**Mary Sidney** is the most interesting result.  On clean text her mean copy
-length is 232 B, the highest of any candidate — she and Shakespeare share
-longer uninterrupted phrases than Marlowe does (121.8 B) or Bacon (62.9 B).
-Those long matches plausibly reflect Elizabethan prose conventions and shared
+Normalization has little effect on already-clean texts (Marlowe: 15.9→17.4%,
+Bacon: 7.3→7.7%) but dramatically unblocks OCR texts: de Vere goes from 0
+to 114 copies and from 100% to 97.8% ratio, and Mary Sidney's combined corpus
+improves from 88 to 218 copies.  Both effects confirm OCR noise was the
+primary obstacle, not the absence of shared content.
+
+That said, the signal once unblocked is weak.  De Vere's 114 copies average
+only 36 bytes each — the threshold is 16 bytes, so these are short function
+phrases ("and the", "of his"), not literary kinship.  Mary Sidney's 218 copies
+average 104 bytes each, a longer signal, but still covering only 5.4% of her
+text.  Marlowe's 1,460 copies at 109 bytes mean and 17.4% coverage remain the
+clear high-water mark.
+
+None achieves meaningful compression.  Successive Linux kernel point releases,
+which genuinely share 99%+ of their content, compress to 0.5–1.0%; all
+Shakespeare-vs-candidate ratios lie above 86%, indicating almost no shared
+structure beyond common Elizabethan English.
+
+**Marlowe** leads by every metric: highest coverage, most copies, lowest
+ratio.  Shared genre (blank verse drama) produces the best result, but 83%
+of his text still requires raw adds.  Shared genre is not shared authorship.
+
+**Mary Sidney** is the most structurally interesting result: the longest mean
+copy (104–232 B depending on corpus and normalization), reflecting shared
 classical sources (Petrarch, Garnier, Mornay) that Shakespeare also drew on.
-Her corpus is small, however: only 186 KB of clean text yields 91 copies
-covering 11.4% of the material, and half her available text (Psalms 44–150)
-survives only as noisy OCR, which kills matching — just 88 copies total when
-the Psalms are included, because the extra spaces and hyphenated line-breaks
-from the 1960 typesetting prevent exact 16-byte runs from forming.
+Her authenticated prose corpus is small (~186 KB clean), and the bulk of her
+surviving work (Psalms 44–150) is available only as OCR.
 
-**Bacon** has the largest authenticated corpus (2.2 MB) yet the worst
-coverage (7.3%) and shortest mean copy (62.9 B) of the clean-text candidates.
-Natural philosophy and moral essays share only function-word sequences with
-blank verse drama; the theory is not supported.
+**Bacon** has the largest corpus (2.2 MB) yet the weakest signal per byte:
+shortest mean copy, coverage barely above de Vere's.  Natural philosophy and
+moral essays share only function-word sequences with blank verse drama.
 
-**de Vere** remains last.  His authenticated surviving output is ~24 short
-poems (~90 KB in a 1921 OCR scan).  The correcting algorithm issues zero
-copy commands: OCR noise prevents any 16-byte exact match from forming, and
-the corpus would be too small to matter even if clean.  The Oxfordian theory
-is unfalsifiable by this method — de Vere left almost no authenticated prose.
-
-Running any candidate as reference against Shakespeare is even more
-hopeless: the corpora are 1.6–18% of Shakespeare's size, so even perfect
-coverage of the reference would leave 82–98% as adds.
+**de Vere** remains last.  After normalization his coverage rises to 5.6%,
+but with a mean copy of only 36 bytes it is indistinguishable from noise.
+His authenticated corpus (~24 poems) is the smallest of any candidate; the
+Oxfordian theory is essentially unfalsifiable by this method.
 
 The compression oracle says: Shakespeare wrote Shakespeare.
 
