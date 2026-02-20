@@ -704,3 +704,11 @@ candidate close enough to be consistent with shared authorship.
 - R.A. Wagner and M.J. Fischer.
   The string-to-string correction problem.
   *Journal of the ACM*, 21(1):168-173, January 1974.
+
+- J. Burrows.
+  Delta: A measure of stylistic difference and a guide to likely authorship.
+  *Literary and Linguistic Computing*, 17(3):267-287, 2002.
+
+- S. Argamon.
+  Interpreting Burrows's Delta: Geometric and probabilistic foundations.
+  *Literary and Linguistic Computing*, 23(2):131-147, 2008.
