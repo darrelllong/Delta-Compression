@@ -475,6 +475,57 @@ roughly 3 GB of RAM (~24 bytes per entry).
 
 ---
 
+## Just for fun: the Shakespeare authorship question
+
+Delta compression makes a reasonable (if tongue-in-cheek) stylometric probe.
+If author A ghostwrote the works attributed to author B, their texts should
+share long, structured runs of vocabulary, phrasing, and syntactic idiom —
+exactly what the correcting algorithm is designed to find.  Short common-word
+matches (median ≤ 17 bytes, i.e. "of the", "in the") are noise; long matches
+(mean >> 100 bytes) are signal.
+
+We downloaded the complete works from Project Gutenberg and ran correcting
+in both directions (Shakespeare as reference, candidate as version; and vice
+versa).  All sizes are bytes of raw UTF-8 plain text.
+
+| Corpus | Size |
+|--------|-----:|
+| Shakespeare complete works (PG #100) | 5,638,525 B |
+| Marlowe: 7 major works (PG #779, 901, 1094, 1496, 1589, 18781, 20288) | 1,016,834 B |
+| Bacon: 6 major works (PG #56463, 5500, 45988, 2434, 3290, 46964) | 2,240,861 B |
+
+### Results (correcting algorithm, Shakespeare as reference)
+
+| Candidate | Delta size | Ratio | Copy coverage | Copies | Mean copy | Median copy |
+|-----------|----------:|------:|--------------:|-------:|----------:|------------:|
+| Marlowe | 884,620 B | 87.0% | 15.9% | 1,324 | 121.8 B | 18 B |
+| Bacon | 2,134,603 B | 95.3% | 7.3% | 2,597 | 62.9 B | 17 B |
+
+Neither achieves meaningful compression.  For reference, successive Linux
+kernel point releases (which genuinely share 99%+ of their content) compress
+to 0.5–1.0% of the version size; Shakespeare-vs-candidate ratios of 87–95%
+indicate almost no shared structure beyond common English function phrases.
+
+**Marlowe** is the better candidate by every metric: higher copy coverage
+(15.9% vs 7.3%), longer mean copy (121.8 B vs 62.9 B), and lower delta ratio.
+This is expected — Marlowe and Shakespeare were contemporaries writing blank
+verse drama with overlapping imagery and diction — but 84% of Marlowe's text
+still has to be transmitted as raw adds.  Shared genre is not shared authorship.
+
+**Bacon** is worse.  His median copy length of 17 bytes matches Marlowe's, but
+his mean is only 62.9 B vs 121.8 B, and copy coverage is less than half.
+Bacon was writing natural philosophy and essays in a register utterly unlike
+dramatic blank verse; the compressor finds only the common stock of English
+function words.  The ghost-authorship theory is not supported.
+
+Running Marlowe or Bacon as reference against Shakespeare is even more
+hopeless: the candidate corpora are 18–40% of Shakespeare's size, so even
+perfect coverage of the reference would leave 60–82% as adds.
+
+The compression oracle says: Shakespeare wrote Shakespeare.
+
+---
+
 ## References
 
 - M. Ajtai, R. Burns, R. Fagin, D.D.E. Long, and L. Stockmeyer.
