@@ -554,15 +554,18 @@ surviving work (Psalms 44–150) is available only as OCR.
 shortest mean copy, coverage barely above de Vere's.  Natural philosophy and
 moral essays share only function-word sequences with blank verse drama.
 
-**de Vere** is second to last.  After normalization his coverage rises to
-5.6%, but with a mean copy of only 36 bytes it is indistinguishable from
-noise.  His authenticated corpus (~24 poems) is among the smallest; the
-Oxfordian theory is essentially unfalsifiable by this method.
+**de Vere** is last among evaluable candidates.  After normalization his
+coverage rises to 5.6%, but with a mean copy of only 36 bytes it is
+indistinguishable from noise.  His authenticated corpus (~24 poems) is the
+smallest of any candidate that can be run; the Oxfordian theory is
+essentially unfalsifiable by this method.
 
-**William Stanley, 6th Earl of Derby** cannot be evaluated at all.  His
-entire candidacy rests on a single 1599 Jesuit spy's report that he was
-"busied only in penning comedies for the common players."  No plays, poems,
-or prose survive under his name.  There is no corpus to compress.
+**Francis Manners, 6th Earl of Rutland** (and his brother Roger, 5th Earl,
+the more commonly cited authorship candidate) cannot be evaluated.  Neither
+earl left any authenticated literary writing.  Francis's only documented
+connection to Shakespeare is a 1613 payment of 44 shillings to Shakespeare
+and Burbage for painting his tournament shield; Roger's is a 1600 trip to
+Denmark cited as inspiration for Elsinore.  Neither is a corpus.
 Ratio: undefined.  The compression oracle declines to comment.
 
 The compression oracle says: Shakespeare wrote Shakespeare.
