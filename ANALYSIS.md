@@ -535,6 +535,64 @@ essentially unfalsifiable by this method.
 
 The compression oracle says: Shakespeare wrote Shakespeare.
 
+### Burrows' Delta cross-check
+
+Delta compression measures literal byte-level reuse.  Stylometrics asks a
+different question: do the authors use the same function words in the same
+proportions, unconsciously?  Burrows' Delta (Argamon 2008 z-score formulation)
+is the standard tool.  We ran it on the same whitespace-normalized corpora
+using `tests/burrows-delta.py` (stdlib-only Python, no external dependencies).
+
+Algorithm: top-N most frequent words across all corpora combined; per-corpus
+relative frequency (per 1000 words); z-scores using population std; linear
+Delta(A,B) = mean |z_A(w) − z_B(w)|.  Lower = more similar.  Values < 1.0
+are "close" in the literature; > 1.5 are "distant."
+
+Corpus word counts (post-normalization):
+
+| Corpus | Words |
+|--------|------:|
+| Shakespeare | 983,072 |
+| Marlowe | 158,862 |
+| Bacon | 355,406 |
+| Mary Sidney | 74,677 |
+| de Vere | 13,476 |
+
+Linear Delta from Shakespeare (N = 50 / 100 / 200 / 500 most frequent words):
+
+| Candidate | N=50 | N=100 | N=200 | N=500 | Rank |
+|-----------|-----:|------:|------:|------:|-----:|
+| Marlowe | **0.780** | **0.908** | **0.998** | **1.028** | 1 |
+| de Vere | 1.037 | 1.244 | 1.272 | 1.291 | 2 |
+| Mary Sidney | 1.310 | 1.411 | 1.467 | 1.416 | 3 |
+| Bacon | 1.902 | 1.760 | 1.678 | 1.622 | 4 |
+
+Rankings are completely stable across all N values.
+
+**Marlowe** is the only candidate below 1.0 at N=50 — genuinely "close"
+by stylometric standards.  Shared genre (blank verse drama) drives both
+this result and the delta-compression result; the function-word distributions
+of Elizabethan dramatic dialogue are tightly clustered regardless of author.
+
+**de Vere** ranks second here, which appears to contradict the delta-
+compression result (where he ranked last).  The discrepancy is a corpus-size
+artefact: z-score normalization partially corrects for size, but 13,476 words
+is too few for stable frequency estimates — 73 of the top-500 words have zero
+frequency in de Vere, contributing legitimate but noisy z-scores.  The rank-2
+result should be treated with caution.
+
+**Mary Sidney** ranks third by both methods.  Her function-word profile is
+closer to Shakespeare's than Bacon's across all N.
+
+**Bacon** is last by a large margin in both analyses.  His linear Delta
+(1.62–1.90) places him firmly in the "distant" zone.  Natural-philosophy
+prose and moral essays use function words in fundamentally different
+proportions from dramatic blank verse; no authorship theory survives either
+metric.
+
+Both methods agree on what matters: Marlowe closest, Bacon furthest, and no
+candidate close enough to be consistent with shared authorship.
+
 ---
 
 ## References
