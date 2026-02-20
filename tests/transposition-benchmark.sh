@@ -189,7 +189,7 @@ echo ""
 
 # ── Inplace scaling — correcting, 16 / 32 / 64 MB ────────────────────────
 
-echo "=== Inplace scaling (correcting, 16 → 64 MB) ==="
+echo "=== Inplace scaling (correcting, 16 → 256 MB) ==="
 echo "    ~512 B mean blocks"
 echo ""
 
@@ -198,13 +198,17 @@ printf "  %-8s  %7s  %9s  %9s  %9s  %8s  %8s\n" \
 printf "  %-8s  %7s  %9s  %9s  %9s  %8s  %8s\n" \
     "----" "-----" "-------" "--------" "-------" "------" "-------"
 
-for size_mb in 16 32 64; do
+for size_mb in 16 32 64 128 256; do
     if [[ "$size_mb" -eq 16 ]]; then
         nblocks=32000; mean=512; tag="16mb"
     elif [[ "$size_mb" -eq 32 ]]; then
         nblocks=64000; mean=512; tag="32mb"
-    else
+    elif [[ "$size_mb" -eq 64 ]]; then
         nblocks=128000; mean=512; tag="64mb"
+    elif [[ "$size_mb" -eq 128 ]]; then
+        nblocks=256000; mean=512; tag="128mb"
+    else
+        nblocks=512000; mean=512; tag="256mb"
     fi
 
     for pct in $PERMS; do
