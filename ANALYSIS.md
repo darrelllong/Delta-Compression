@@ -258,27 +258,14 @@ bytes and the maximum reaches 14 MB.  Most copies are short, but most
 All six ordered pairs of linux-5.1.1, 5.1.2, and 5.1.3 (~831 MB each),
 encoded with the C++ implementation (default flags):
 
-**onepass**
-
-| Ref → Ver | Ratio | Time |
-|-----------|------:|-----:|
-| 5.1.1 → 5.1.2 | 0.54% | 3.8s |
-| 5.1.1 → 5.1.3 | 0.55% | 2.1s |
-| 5.1.2 → 5.1.1 | 0.53% | 0.8s |
-| 5.1.2 → 5.1.3 | 0.47% | 0.7s |
-| 5.1.3 → 5.1.1 | 0.54% | 0.8s |
-| 5.1.3 → 5.1.2 | 0.47% | 0.7s |
-
-**correcting**
-
-| Ref → Ver | Ratio | Time |
-|-----------|------:|-----:|
-| 5.1.1 → 5.1.2 | 0.86% | 13.8s |
-| 5.1.1 → 5.1.3 | 0.81% | 13.9s |
-| 5.1.2 → 5.1.1 | 0.81% | 13.9s |
-| 5.1.2 → 5.1.3 | 1.02% | 14.0s |
-| 5.1.3 → 5.1.1 | 0.78% | 14.0s |
-| 5.1.3 → 5.1.2 | 0.85% | 14.0s |
+| Ref → Ver | onepass Ratio | onepass Time | correcting Ratio | correcting Time |
+|-----------|-------------:|------------:|-----------------:|----------------:|
+| 5.1.1 → 5.1.2 | 0.54% | 3.8s | 0.86% | 13.8s |
+| 5.1.1 → 5.1.3 | 0.55% | 2.1s | 0.81% | 13.9s |
+| 5.1.2 → 5.1.1 | 0.53% | 0.8s | 0.81% | 13.9s |
+| 5.1.2 → 5.1.3 | 0.47% | 0.7s | 1.02% | 14.0s |
+| 5.1.3 → 5.1.1 | 0.54% | 0.8s | 0.78% | 14.0s |
+| 5.1.3 → 5.1.2 | 0.47% | 0.7s | 0.85% | 14.0s |
 
 Onepass is 4–20× faster than correcting and achieves better ratios on
 every pair.  The 5.1.1 → 5.1.2 onepass time (3.8s) is elevated by a
@@ -394,7 +381,30 @@ The count equals Adds-IP exactly, since correcting's standard output has
 zero adds.  At 25% permutation 4,847 copies are converted, raising the
 ratio from 0.0112 to 0.1520 (~14×).
 
-**Inplace scaling — correcting, 16 → 64 MB (512 B mean blocks)**
+**Apply-phase performance — 16 MB, onepass and correcting**
+
+Decoding a standard delta and decoding an in-place delta should cost
+roughly the same: both walk the command list and emit bytes.  The data
+below confirms this.  For correcting, apply time is 5–7 ms at all
+permutation levels and is format-transparent.  The design goal holds:
+all the cost lives in CRWI construction and cycle-breaking at encode time,
+done once.  Apply is essentially free.
+
+| Algorithm | Perm% | Apply-N | Apply-IP |
+|-----------|------:|--------:|---------:|
+| correcting | 0% | 0.005s | 0.004s |
+| correcting | 25% | 0.005s | 0.006s |
+| correcting | 50% | 0.006s | 0.006s |
+| correcting | 75% | 0.006s | 0.006s |
+| correcting | 100% | 0.006s | 0.007s |
+
+onepass apply times are similar for small deltas (low permutation) but
+grow with delta size at high permutation: at 100% perm the onepass
+standard delta is ~15.9 MB of literal data (ratio 0.9921), requiring
+proportionally more I/O.  onepass apply-N and apply-IP remain within
+2 ms of each other at every level.
+
+**Inplace scaling — correcting, 16 → 256 MB (512 B mean blocks)**
 
 | Size | Perm% | Ratio-N | Ratio-IP | Adds-IP | Time-N | Time-IP |
 |-----:|------:|--------:|---------:|--------:|-------:|--------:|
@@ -413,14 +423,25 @@ ratio from 0.0112 to 0.1520 (~14×).
 | 64 MB | 50% | 0.0190 | 0.2368 | 34,053 | 0.673s | 0.887s |
 | 64 MB | 75% | 0.0238 | 0.2542 | 39,652 | 0.692s | 1.202s |
 | 64 MB | 100% | 0.0254 | 0.2576 | 41,191 | 0.702s | 1.426s |
+| 128 MB | 0% | 0.0000 | 0.0000 | 0 | 1.339s | 1.074s |
+| 128 MB | 25% | 0.0111 | 0.1576 | 39,388 | 1.424s | 1.991s |
+| 128 MB | 50% | 0.0190 | 0.2421 | 69,158 | 1.456s | 2.289s |
+| 128 MB | 75% | 0.0238 | 0.2555 | 79,538 | 1.468s | 3.074s |
+| 128 MB | 100% | 0.0254 | 0.2582 | 82,561 | 1.476s | 3.527s |
+| 256 MB | 0% | 0.0000 | 0.0000 | 0 | 2.641s | 2.170s |
+| 256 MB | 25% | 0.0111 | 0.1594 | 79,232 | 2.761s | 4.370s |
+| 256 MB | 50% | 0.0190 | 0.2430 | 138,716 | 2.953s | 5.353s |
+| 256 MB | 75% | 0.0238 | 0.2544 | 158,392 | 2.947s | 7.923s |
+| 256 MB | 100% | 0.0254 | 0.2579 | 164,877 | 3.011s | 9.738s |
 
 The CRWI graph build is O(n log n + E): the binary-search sweep exploits
 non-overlapping write intervals for exact overlap detection.
-Standard-mode correcting time scales linearly (2× per doubling).
-Inplace time at 100% permutation scales ~2.7× per doubling
-(0.200 → 0.538 → 1.426 s), reflecting the O(n log n + E) total
-complexity of the Tarjan + global Kahn + amortized DFS cycle-breaking
-algorithm.
+Standard-mode correcting time scales ~2× per doubling (linear in n).
+Inplace time at 100% permutation scales ~2.6× per doubling
+(0.200 → 0.538 → 1.426 → 3.527 → 9.738 s across 16 → 32 → 64 → 128 → 256 MB),
+reflecting the O(n log n + E) total complexity of the Tarjan + global
+Kahn + amortized DFS cycle-breaking algorithm.  At 256 MB with 512K
+blocks and 164K conversions, the total encode time is under 10 seconds.
 
 ### Effect of `--max-table` on correcting ratio (1 GB, 128 B blocks)
 
