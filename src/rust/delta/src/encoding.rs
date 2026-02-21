@@ -1,6 +1,6 @@
 use crate::types::{
     DeltaError, PlacedCommand, DELTA_ADD_HEADER, DELTA_CMD_ADD, DELTA_CMD_COPY, DELTA_CMD_END,
-    DELTA_COPY_PAYLOAD, DELTA_FLAG_INPLACE, DELTA_HASH_SIZE, DELTA_HEADER_SIZE, DELTA_MAGIC,
+    DELTA_COPY_PAYLOAD, DELTA_CRC_SIZE, DELTA_FLAG_INPLACE, DELTA_HEADER_SIZE, DELTA_MAGIC,
     DELTA_U32_SIZE,
 };
 
@@ -8,7 +8,7 @@ use crate::types::{
 ///
 /// Format:
 ///   Header: magic (4 bytes) + flags (1 byte) + version_size (u32 BE)
-///           + src_hash (16 bytes) + dst_hash (16 bytes)
+///           + src_crc (8 bytes) + dst_crc (8 bytes)
 ///   Commands:
 ///     END:  type=0
 ///     COPY: type=1, src:u32, dst:u32, len:u32
@@ -17,15 +17,15 @@ pub fn encode_delta(
     commands: &[PlacedCommand],
     inplace: bool,
     version_size: usize,
-    src_hash: &[u8; DELTA_HASH_SIZE],
-    dst_hash: &[u8; DELTA_HASH_SIZE],
+    src_crc: &[u8; DELTA_CRC_SIZE],
+    dst_crc: &[u8; DELTA_CRC_SIZE],
 ) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(DELTA_MAGIC);
     out.push(if inplace { DELTA_FLAG_INPLACE } else { 0 });
     out.extend_from_slice(&(version_size as u32).to_be_bytes());
-    out.extend_from_slice(src_hash);
-    out.extend_from_slice(dst_hash);
+    out.extend_from_slice(src_crc);
+    out.extend_from_slice(dst_crc);
 
     for cmd in commands {
         match cmd {
@@ -50,11 +50,11 @@ pub fn encode_delta(
 
 /// Decode the unified binary delta format.
 ///
-/// Returns (commands, inplace, version_size, src_hash, dst_hash).
-/// Hash validation is the caller's responsibility.
+/// Returns (commands, inplace, version_size, src_crc, dst_crc).
+/// CRC validation is the caller's responsibility.
 pub fn decode_delta(
     data: &[u8],
-) -> Result<(Vec<PlacedCommand>, bool, usize, [u8; DELTA_HASH_SIZE], [u8; DELTA_HASH_SIZE]), DeltaError> {
+) -> Result<(Vec<PlacedCommand>, bool, usize, [u8; DELTA_CRC_SIZE], [u8; DELTA_CRC_SIZE]), DeltaError> {
     if data.len() < DELTA_HEADER_SIZE || &data[..DELTA_MAGIC.len()] != DELTA_MAGIC {
         return Err(DeltaError::InvalidFormat("not a delta file".into()));
     }
@@ -67,11 +67,11 @@ pub fn decode_delta(
         data[DELTA_MAGIC.len() + 4],
     ]) as usize;
 
-    let hash_offset = DELTA_MAGIC.len() + 1 + DELTA_U32_SIZE;
-    let mut src_hash = [0u8; DELTA_HASH_SIZE];
-    let mut dst_hash = [0u8; DELTA_HASH_SIZE];
-    src_hash.copy_from_slice(&data[hash_offset..hash_offset + DELTA_HASH_SIZE]);
-    dst_hash.copy_from_slice(&data[hash_offset + DELTA_HASH_SIZE..hash_offset + 2 * DELTA_HASH_SIZE]);
+    let crc_offset = DELTA_MAGIC.len() + 1 + DELTA_U32_SIZE;
+    let mut src_crc = [0u8; DELTA_CRC_SIZE];
+    let mut dst_crc = [0u8; DELTA_CRC_SIZE];
+    src_crc.copy_from_slice(&data[crc_offset..crc_offset + DELTA_CRC_SIZE]);
+    dst_crc.copy_from_slice(&data[crc_offset + DELTA_CRC_SIZE..crc_offset + 2 * DELTA_CRC_SIZE]);
 
     let mut pos = DELTA_HEADER_SIZE;
     let mut commands = Vec::new();
@@ -133,7 +133,7 @@ pub fn decode_delta(
         }
     }
 
-    Ok((commands, inplace, version_size, src_hash, dst_hash))
+    Ok((commands, inplace, version_size, src_crc, dst_crc))
 }
 
 /// Check if binary data is an in-place delta.

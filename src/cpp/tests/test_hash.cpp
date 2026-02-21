@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
+#include <delta/crc64.h>
 #include <delta/hash.h>
-#include <delta/sha3.h>
 #include <delta/types.h>
 
 #include <array>
@@ -108,11 +108,11 @@ TEST_CASE("TABLE_SIZE is prime", "[hash]") {
     CHECK(is_prime(TABLE_SIZE));
 }
 
-// ── SHAKE128 NIST FIPS 202 test vectors ──────────────────────────────────
+// ── CRC-64/XZ check values ────────────────────────────────────────────────
 
-static std::string to_hex(const std::array<uint8_t, DELTA_HASH_SIZE>& h) {
+static std::string to_hex(const std::array<uint8_t, DELTA_CRC_SIZE>& h) {
     std::string s;
-    s.reserve(DELTA_HASH_SIZE * 2);
+    s.reserve(DELTA_CRC_SIZE * 2);
     for (auto b : h) {
         char buf[3];
         std::snprintf(buf, sizeof(buf), "%02x", b);
@@ -121,52 +121,35 @@ static std::string to_hex(const std::array<uint8_t, DELTA_HASH_SIZE>& h) {
     return s;
 }
 
-TEST_CASE("shake128_16 NIST vector: empty input", "[hash]") {
-    // NIST FIPS 202 SHAKE128 vector: empty input, first 16 bytes.
-    // SHA3-128("") = 47bce5c74f589f4867dbe57f31b68e5e — different domain
-    // separator (0x06 vs 0x1F); a sha3_128 substitution would fail here.
+TEST_CASE("crc64_xz empty input is all-zeros", "[hash]") {
+    // CRC-64/XZ of empty input = 0x0000000000000000.
     static const uint8_t kEmpty[1] = {};
-    auto h = shake128_16(kEmpty, 0);
-    CHECK(to_hex(h) == "7f9c2ba4e88f827d616045507605853e");
+    auto h = crc64_xz(kEmpty, 0);
+    CHECK(to_hex(h) == "0000000000000000");
 }
 
-TEST_CASE("shake128_16 is not SHA3-128", "[hash]") {
-    // SHAKE128 and SHA3-128 share the same permutation and rate but differ
-    // in domain separator (0x1F vs 0x06), producing different output.
-    static const uint8_t kEmpty[1] = {};
-    auto h = shake128_16(kEmpty, 0);
-    CHECK(to_hex(h) != "47bce5c74f589f4867dbe57f31b68e5e");
+TEST_CASE("crc64_xz standard check value", "[hash]") {
+    // Standard check value: CRC-64/XZ of b"123456789" = 0x995DC9BBDF1939FA.
+    static const uint8_t kCheck[] = {'1','2','3','4','5','6','7','8','9'};
+    auto h = crc64_xz(kCheck, sizeof(kCheck));
+    CHECK(to_hex(h) == "995dc9bbdf1939fa");
 }
 
-TEST_CASE("shake128_16 NIST vector: one byte 0xbd", "[hash]") {
-    // SHAKE128(b'\xbd', 16 bytes)
-    uint8_t data[] = {0xbd};
-    auto h = shake128_16(data, 1);
-    CHECK(to_hex(h) == "83388286b2c0065ed237fbe714fc3163");
-}
-
-TEST_CASE("shake128_16 NIST vector: 200 bytes of 0xa3", "[hash]") {
-    // SHAKE128(b'\xa3' * 200, 16 bytes)
-    std::vector<uint8_t> data(200, 0xa3);
-    auto h = shake128_16(data.data(), data.size());
-    CHECK(to_hex(h) == "131ab8d2b594946b9c81333f9bb6e0ce");
-}
-
-TEST_CASE("shake128_16 output length is DELTA_HASH_SIZE", "[hash]") {
+TEST_CASE("crc64_xz output length is DELTA_CRC_SIZE", "[hash]") {
     uint8_t data[] = {0x01, 0x02, 0x03};
-    auto h = shake128_16(data, 3);
-    CHECK(h.size() == DELTA_HASH_SIZE);
+    auto h = crc64_xz(data, 3);
+    CHECK(h.size() == DELTA_CRC_SIZE);
 }
 
-TEST_CASE("shake128_16 is deterministic", "[hash]") {
+TEST_CASE("crc64_xz is deterministic", "[hash]") {
     uint8_t data[] = {'h', 'e', 'l', 'l', 'o'};
-    auto h1 = shake128_16(data, 5);
-    auto h2 = shake128_16(data, 5);
+    auto h1 = crc64_xz(data, 5);
+    auto h2 = crc64_xz(data, 5);
     CHECK(h1 == h2);
 }
 
-TEST_CASE("shake128_16 differs on different input", "[hash]") {
+TEST_CASE("crc64_xz differs on different input", "[hash]") {
     uint8_t a[] = {'a', 'b', 'c'};
     uint8_t b[] = {'a', 'b', 'd'};
-    CHECK(shake128_16(a, 3) != shake128_16(b, 3));
+    CHECK(crc64_xz(a, 3) != crc64_xz(b, 3));
 }

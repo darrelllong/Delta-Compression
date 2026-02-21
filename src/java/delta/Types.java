@@ -11,13 +11,13 @@ public final class Types {
     public static final long HASH_MOD = (1L << 61) - 1; // Mersenne prime
 
     // Binary delta format constants
-    public static final byte[] DELTA_MAGIC = {'D', 'L', 'T', 0x02};
+    public static final byte[] DELTA_MAGIC = {'D', 'L', 'T', 0x03};
     public static final byte DELTA_FLAG_INPLACE = 0x01;
     public static final int DELTA_CMD_END  = 0;
     public static final int DELTA_CMD_COPY = 1;
     public static final int DELTA_CMD_ADD  = 2;
-    public static final int DELTA_HASH_SIZE = 16;   // SHAKE128(16) digest bytes
-    public static final int DELTA_HEADER_SIZE = 41; // magic(4)+flags(1)+version_size(4)+src_hash(16)+dst_hash(16)
+    public static final int DELTA_CRC_SIZE = 8;     // CRC-64/XZ digest bytes
+    public static final int DELTA_HEADER_SIZE = 25; // magic(4)+flags(1)+version_size(4)+src_crc(8)+dst_crc(8)
     public static final int DELTA_U32_SIZE = 4;
     public static final int DELTA_COPY_PAYLOAD = 12; // src(4) + dst(4) + len(4)
     public static final int DELTA_ADD_HEADER = 8;    // dst(4) + len(4)

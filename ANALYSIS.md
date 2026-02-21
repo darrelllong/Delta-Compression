@@ -91,7 +91,7 @@ The splay tree exploits this temporal locality: a recently-inserted seed
 is near the root, so the lookup is cheap.  On 871 MB kernel tarballs
 this gives a ~17% algorithm speedup (0.5s vs 0.6s), though in total
 wall time the benefit shrinks to ~5% (1.9s vs 2.0s) because ~1.44s of
-SHAKE128 hashing overhead now dominates both.
+hashing overhead (SHAKE128, since replaced by CRC-64/XZ) dominated both.
 
 **Why it hurts for correcting:** correcting's R pass inserts millions
 of checkpoint seeds in random order before any V lookups begin.  The
@@ -99,8 +99,8 @@ build phase has no locality benefit, and O(log n) per insertion is
 slower than O(1) hash table insertion.  Lookups during the V pass also
 lack the recent-access advantage.  On kernel tarballs, correcting+splay
 is ~3.3× slower in total wall time (50s vs 15s); hashing adds the
-same ~1.44s to both, reducing the ratio slightly from 3.5× (49s vs 14s)
-algorithm-only.
+same ~1.44s SHAKE128 overhead (since replaced by CRC-64/XZ) to both,
+reducing the ratio slightly from 3.5× (49s vs 14s) algorithm-only.
 
 **Why splay improves correcting ratio:** the hash table indexes seeds by
 `f / m` (where `f = fp % |F|`), so two seeds with the same `f / m`
@@ -124,67 +124,30 @@ the asymptotic ratio would suggest.
 
 ## Delta integrity verification
 
-Every delta file embeds two 16-byte SHAKE128 hashes in its header:
-`src_hash` (hash of the reference file) and `dst_hash` (hash of the
+Every delta file embeds two 8-byte CRC-64/XZ checksums in its header:
+`src_crc` (CRC of the reference file) and `dst_crc` (CRC of the
 reconstructed version).  Decode performs two checks:
 
-- **Pre-check** (before reconstruction): `shake128_16(ref) == src_hash`.
+- **Pre-check** (before reconstruction): `crc64_xz(ref) == src_crc`.
   Catches wrong-reference errors immediately, before any computation.
-- **Post-check** (after reconstruction): `shake128_16(output) == dst_hash`.
+- **Post-check** (after reconstruction): `crc64_xz(output) == dst_crc`.
   Catches corruption in the delta file itself or any bug in the apply
   phase.
 
-SHAKE128 (NIST FIPS 202) was chosen over a conventional hash for three
-reasons.  First, it is an extendable-output function (XOF): the output
-length is a parameter, and 16 bytes (128 bits) gives a 2^{-64}
-collision probability — low enough for integrity but cheap to compute.
-Second, it has no length-extension vulnerability (unlike MD5/SHA-1/SHA-2
-in Merkle-Damgård constructions), so the 16-byte truncation is
-cryptographically clean.  Third, the sponge construction runs in a
-single pass over the input with O(1) working memory beyond the 200-byte
-Keccak state, which fits the streaming write path: the hash is computed
-incrementally as bytes are written, with no second pass needed.
-
-Each implementation carries its own hand-written Keccak-p[1600,24]
-sponge so there are no external dependencies.  All five produce
-identical hashes for identical inputs (cross-language verified).
+CRC-64/XZ (ECMA-182 reflected, polynomial `0x42F0E1EBA9EA3693`)
+was chosen for speed: software implementations run at ~12 GB/s, making
+the overhead negligible even on multi-gigabyte kernel tarballs.  The
+8-byte output gives a 2^{-32} probability of an undetected random error,
+sufficient for accidental-error detection in delta workflows.  All five
+implementations use the same table-driven algorithm (reflected polynomial
+`0xC96C5795D7870F42`, init = xorout = `0xFFFFFFFFFFFFFFFF`), verified
+against the standard check value `crc64_xz(b"123456789") =
+0x995DC9BBDF1939FA`.
 
 The `--ignore-hash` decode flag replaces both error exits with stderr
 warnings and continues, providing an escape hatch for partial recovery
 from a corrupted or mismatched delta.  The library itself does not
-enforce the checks; hash validation is the caller's responsibility.
-
-### The SHA3-128 naming trap
-
-SHAKE128 and SHA3-128 share the same Keccak-p[1600,24] permutation,
-the same rate (1344 bits), and the same capacity (256 bits) — but they
-use different domain-separation padding bytes:
-
-- **SHAKE128**: `0x1F` (XOF suffix)
-- **SHA3-128**: `0x06` (SHA-3 suffix)
-
-Both produce 16 bytes.  A porter who reaches for the convenient
-"16-byte SHA-3 hash" in their language's standard library — Python's
-`hashlib.sha3_128`, Rust's `sha3::Sha3_128`, Java's
-`MessageDigest.getInstance("SHA3-128")` — gets a silently wrong answer
-that is byte-for-byte incompatible with SHAKE128.  The pre-check will
-always fail at decode time with "source file does not match delta",
-with no obvious indication of why.
-
-For example, SHA3-128 and SHAKE128 diverge immediately on the empty
-input:
-
-```
-SHAKE128(b"", 16 bytes) = 7f9c2ba4e88f827d616045507605853e
-SHA3-128(b"")           = 47bce5c74f589f4867dbe57f31b68e5e
-```
-
-The correct library calls are: `hashlib.shake_128(data).digest(16)`
-(Python), `sha3::Shake128` (Rust `sha3` crate), or a hand-written
-Keccak sponge with the `0x1F` domain separator.  All five existing
-implementations are verified against NIST FIPS 202 test vectors in
-their test suites, which pins the correct algorithm and would
-immediately catch a SHA3-128 substitution.
+enforce the checks; CRC validation is the caller's responsibility.
 
 ## In-place conversion: CRWI graph and cycle breaking
 
@@ -294,9 +257,9 @@ data requirements of the kernel tests.
 ### Kernel tarball benchmark (linux-5.1 → linux-5.1.1, 871 MB)
 
 All five implementations, same input pair, default flags.  All produce
-byte-identical delta files.  Times include ~1.44s of SHAKE128 hashing
-overhead (two 0.72s hashes on 871 MB at 1,214 MB/s); Python's 69–354s
-algorithm time makes the hashing negligible.
+byte-identical delta files.  CRC-64/XZ overhead is negligible (~70 ms
+total for two 871 MB files at ~12 GB/s); Python's 69–354s algorithm
+time dominates regardless.
 
 **onepass** (delta: 5.1 MB, ratio: 0.58%)
 
@@ -337,30 +300,16 @@ The copy-length distribution is heavy-tailed: median is 89–91 bytes
 bytes and the maximum reaches 14 MB.  Most copies are short, but most
 *bytes* come from long copies.
 
-### SHAKE128 hashing overhead
+### Integrity-check overhead
 
-Every encode and decode call computes two SHAKE128 hashes: one over the
-reference file (`src_hash`, pre-checked before reconstruction) and one
-over the version or output file (`dst_hash`, verified after).  At
-~1,214 MB/s throughput on this machine, hashing an 871 MB kernel
-tarball takes ~0.72 s — ~1.44 s total overhead per encode or decode.
+Every encode and decode call computes two CRC-64/XZ checksums: one over
+the reference file (`src_crc`, pre-checked before reconstruction) and
+one over the version or output file (`dst_crc`, verified after).  At
+~12 GB/s, checksumming an 871 MB kernel tarball takes ~35 ms — ~70 ms
+total overhead per encode or decode, negligible at any algorithm speed.
 
-Measured impact (Rust, linux-5.1 → 5.1.1, 871 MB):
-
-| Algorithm | Algorithm-only | With hashing | Overhead |
-|-----------|---------------:|-------------:|---------:|
-| onepass   |          0.6 s |        2.0 s | +1.4 s (+233%) |
-| correcting |         5.3 s |        7.0 s | +1.7 s  (+32%) |
-
-The asymmetry reflects effective throughput.  Onepass processes
-~1,450 MB/s — faster than SHAKE128 — so **hashing dominates onepass
-wall time at any file size**.  Correcting processes ~164 MB/s (far
-slower), making hashing a modest 27% surcharge regardless of size.
-
-For inputs under ~100 MB both hashes complete in under 200 ms,
-negligible relative to any algorithm time.  On large inputs where
-onepass latency matters, the two hashes can be computed in parallel
-(one thread per file), halving the overhead to ~0.72 s.
+The benchmarks above (SHAKE128 era, ~1.44 s overhead) were collected
+before the format switch.  Current timings are algorithm-dominated.
 
 ### Cross-version kernel benchmark (linux-5.1.x, C++)
 

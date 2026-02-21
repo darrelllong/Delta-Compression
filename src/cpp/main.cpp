@@ -103,9 +103,9 @@ static void write_file(const std::string& path, std::span<const uint8_t> data) {
     f.write(reinterpret_cast<const char*>(data.data()), data.size());
 }
 
-static std::string hex_str(const std::array<uint8_t, DELTA_HASH_SIZE>& bytes) {
+static std::string hex_str(const std::array<uint8_t, DELTA_CRC_SIZE>& bytes) {
     std::string s;
-    s.reserve(DELTA_HASH_SIZE * 2);
+    s.reserve(DELTA_CRC_SIZE * 2);
     char buf[3];
     for (auto b : bytes) {
         std::snprintf(buf, sizeof(buf), "%02x", b);
@@ -209,8 +209,8 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        auto src_hash = shake128_16(r.data(), r.size());
-        auto dst_hash = shake128_16(v.data(), v.size());
+        auto src_crc = crc64_xz(r.data(), r.size());
+        auto dst_crc = crc64_xz(v.data(), v.size());
 
         auto t0 = std::chrono::steady_clock::now();
         DiffOptions opts;
@@ -230,7 +230,7 @@ int main(int argc, char** argv) {
         auto t1 = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(t1 - t0).count();
 
-        auto delta_bytes = encode_delta(placed, enc_inplace, v.size(), src_hash, dst_hash);
+        auto delta_bytes = encode_delta(placed, enc_inplace, v.size(), src_crc, dst_crc);
         write_file(enc_delta, delta_bytes);
 
         auto stats = placed_summary(placed);
@@ -252,8 +252,8 @@ int main(int argc, char** argv) {
         std::printf("Commands:     %zu copies, %zu adds\n", stats.num_copies, stats.num_adds);
         std::printf("Copy bytes:   %zu\n", stats.copy_bytes);
         std::printf("Add bytes:    %zu\n", stats.add_bytes);
-        std::printf("Src hash:     %s\n", hex_str(src_hash).c_str());
-        std::printf("Dst hash:     %s\n", hex_str(dst_hash).c_str());
+        std::printf("Src CRC:      %s\n", hex_str(src_crc).c_str());
+        std::printf("Dst CRC:      %s\n", hex_str(dst_crc).c_str());
         std::printf("Time:         %.3fs\n", elapsed);
 
     } else if (dec->parsed()) {
@@ -261,18 +261,18 @@ int main(int argc, char** argv) {
         auto r = r_file.span();
         auto delta_bytes = read_file(dec_delta);
 
-        auto [placed, is_ip, version_size, src_hash, dst_hash] = decode_delta(delta_bytes);
+        auto [placed, is_ip, version_size, src_crc, dst_crc] = decode_delta(delta_bytes);
 
-        // Pre-check: verify reference file matches the embedded source hash.
-        auto r_hash = shake128_16(r.data(), r.size());
-        if (r_hash != src_hash) {
+        // Pre-check: verify reference file matches the embedded source CRC.
+        auto r_crc = crc64_xz(r.data(), r.size());
+        if (r_crc != src_crc) {
             if (!dec_ignore_hash) {
                 std::fprintf(stderr,
                     "source file does not match delta: expected %s, got %s\n",
-                    hex_str(src_hash).c_str(), hex_str(r_hash).c_str());
+                    hex_str(src_crc).c_str(), hex_str(r_crc).c_str());
                 return 1;
             }
-            std::fprintf(stderr, "warning: skipping source hash check (--ignore-hash)\n");
+            std::fprintf(stderr, "warning: skipping source CRC check (--ignore-hash)\n");
         }
 
         auto t0 = std::chrono::steady_clock::now();
@@ -286,14 +286,14 @@ int main(int argc, char** argv) {
         auto t1 = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(t1 - t0).count();
 
-        // Post-check: verify reconstructed output matches the embedded dest hash.
-        auto out_hash = shake128_16(out_bytes.data(), out_bytes.size());
-        if (out_hash != dst_hash) {
+        // Post-check: verify reconstructed output matches the embedded dest CRC.
+        auto out_crc = crc64_xz(out_bytes.data(), out_bytes.size());
+        if (out_crc != dst_crc) {
             if (!dec_ignore_hash) {
                 std::fprintf(stderr, "output integrity check failed\n");
                 return 1;
             }
-            std::fprintf(stderr, "warning: skipping output integrity check (--ignore-hash)\n");
+            std::fprintf(stderr, "warning: skipping output CRC check (--ignore-hash)\n");
         }
 
         write_file(dec_output, out_bytes);
@@ -304,22 +304,22 @@ int main(int argc, char** argv) {
         std::printf("Delta:        %s (%zu bytes)\n", dec_delta.c_str(), delta_bytes.size());
         std::printf("Output:       %s (%zu bytes)\n", dec_output.c_str(), version_size);
         if (!dec_ignore_hash) {
-            std::printf("Src hash:     %s  OK\n", hex_str(src_hash).c_str());
-            std::printf("Dst hash:     %s  OK\n", hex_str(dst_hash).c_str());
+            std::printf("Src CRC:      %s  OK\n", hex_str(src_crc).c_str());
+            std::printf("Dst CRC:      %s  OK\n", hex_str(dst_crc).c_str());
         }
         std::printf("Time:         %.3fs\n", elapsed);
 
     } else if (inf->parsed()) {
         auto delta_bytes = read_file(info_delta);
-        auto [placed, is_ip, version_size, src_hash, dst_hash] = decode_delta(delta_bytes);
+        auto [placed, is_ip, version_size, src_crc, dst_crc] = decode_delta(delta_bytes);
         auto stats = placed_summary(placed);
 
         const char* fmt = is_ip ? "in-place" : "standard";
         std::printf("Delta file:   %s (%zu bytes)\n", info_delta.c_str(), delta_bytes.size());
         std::printf("Format:       %s\n", fmt);
         std::printf("Version size: %zu bytes\n", version_size);
-        std::printf("Src hash:     %s\n", hex_str(src_hash).c_str());
-        std::printf("Dst hash:     %s\n", hex_str(dst_hash).c_str());
+        std::printf("Src CRC:      %s\n", hex_str(src_crc).c_str());
+        std::printf("Dst CRC:      %s\n", hex_str(dst_crc).c_str());
         std::printf("Commands:     %zu\n", stats.num_commands);
         std::printf("  Copies:     %zu (%zu bytes)\n", stats.num_copies, stats.copy_bytes);
         std::printf("  Adds:       %zu (%zu bytes)\n", stats.num_adds, stats.add_bytes);
@@ -333,7 +333,7 @@ int main(int argc, char** argv) {
         auto r = r_file.span();
         auto delta_bytes = read_file(inp_delta_in);
 
-        auto [placed, is_ip, version_size, src_hash, dst_hash] = decode_delta(delta_bytes);
+        auto [placed, is_ip, version_size, src_crc, dst_crc] = decode_delta(delta_bytes);
 
         if (is_ip) {
             write_file(inp_delta_out, delta_bytes);
@@ -347,7 +347,7 @@ int main(int argc, char** argv) {
         auto t1 = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(t1 - t0).count();
 
-        auto ip_delta = encode_delta(ip_placed, true, version_size, src_hash, dst_hash);
+        auto ip_delta = encode_delta(ip_placed, true, version_size, src_crc, dst_crc);
         write_file(inp_delta_out, ip_delta);
 
         auto stats = placed_summary(ip_placed);

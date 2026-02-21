@@ -1,7 +1,6 @@
 package delta;
 
 import java.io.IOException;
-import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -115,8 +114,8 @@ public final class Delta {
         byte[] r = readFile(refPath);
         byte[] v = readFile(verPath);
 
-        byte[] srcHash = Hash.Shake128.hash16(r);
-        byte[] dstHash = Hash.Shake128.hash16(v);
+        byte[] srcCrc = Hash.Crc64.hash8(r);
+        byte[] dstCrc = Hash.Crc64.hash8(v);
 
         long t0 = System.nanoTime();
         List<Command> commands = Diff.diff(algo, r, v, opts);
@@ -126,7 +125,7 @@ public final class Delta {
             : Apply.placeCommands(commands);
         long elapsed = System.nanoTime() - t0;
 
-        byte[] deltaBytes = Encoding.encodeDelta(placed, inplace, v.length, srcHash, dstHash);
+        byte[] deltaBytes = Encoding.encodeDelta(placed, inplace, v.length, srcCrc, dstCrc);
         writeFile(deltaPath, deltaBytes);
 
         PlacedSummary stats = Apply.placedSummary(placed);
@@ -146,8 +145,8 @@ public final class Delta {
         System.out.printf("Commands:     %d copies, %d adds%n", stats.numCopies, stats.numAdds);
         System.out.printf("Copy bytes:   %d%n", stats.copyBytes);
         System.out.printf("Add bytes:    %d%n", stats.addBytes);
-        System.out.printf("Src hash:     %s%n", toHex(srcHash));
-        System.out.printf("Dst hash:     %s%n", toHex(dstHash));
+        System.out.printf("Src CRC:      %s%n", toHex(srcCrc));
+        System.out.printf("Dst CRC:      %s%n", toHex(dstCrc));
         System.out.printf("Time:         %.3fs%n", elapsed / 1e9);
     }
 
@@ -168,15 +167,15 @@ public final class Delta {
 
         Encoding.DecodeResult result = Encoding.decodeDelta(deltaBytes);
 
-        /* Pre-check: verify reference matches embedded src_hash. */
-        byte[] rHash = Hash.Shake128.hash16(r);
-        if (!Arrays.equals(rHash, result.srcHash)) {
+        /* Pre-check: verify reference matches embedded src_crc. */
+        byte[] rCrc = Hash.Crc64.hash8(r);
+        if (!Arrays.equals(rCrc, result.srcCrc)) {
             if (!ignoreHash) {
                 System.err.printf("source file does not match delta: expected %s, got %s%n",
-                    toHex(result.srcHash), toHex(rHash));
+                    toHex(result.srcCrc), toHex(rCrc));
                 System.exit(1);
             }
-            System.err.println("warning: skipping source hash check (--ignore-hash)");
+            System.err.println("warning: skipping source CRC check (--ignore-hash)");
         }
 
         long t0 = System.nanoTime();
@@ -189,16 +188,17 @@ public final class Delta {
         }
         long elapsed = System.nanoTime() - t0;
 
-        /* Write output and compute hash in a single pass. */
-        byte[] outHash = writeFileHashed(outPath, out);
+        /* Write output and compute CRC. */
+        writeFile(outPath, out);
+        byte[] outCrc = Hash.Crc64.hash8(out);
 
-        /* Post-check: verify output matches embedded dst_hash. */
-        if (!Arrays.equals(outHash, result.dstHash)) {
+        /* Post-check: verify output matches embedded dst_crc. */
+        if (!Arrays.equals(outCrc, result.dstCrc)) {
             if (!ignoreHash) {
                 System.err.println("output integrity check failed");
                 System.exit(1);
             }
-            System.err.println("warning: skipping output integrity check (--ignore-hash)");
+            System.err.println("warning: skipping output CRC check (--ignore-hash)");
         }
 
         String fmt = result.inplace ? "in-place" : "standard";
@@ -207,8 +207,8 @@ public final class Delta {
         System.out.printf("Delta:        %s (%d bytes)%n", deltaPath, deltaBytes.length);
         System.out.printf("Output:       %s (%d bytes)%n", outPath, out.length);
         if (!ignoreHash) {
-            System.out.printf("Src hash:     %s  OK%n", toHex(result.srcHash));
-            System.out.printf("Dst hash:     %s  OK%n", toHex(result.dstHash));
+            System.out.printf("Src CRC:      %s  OK%n", toHex(result.srcCrc));
+            System.out.printf("Dst CRC:      %s  OK%n", toHex(result.dstCrc));
         }
         System.out.printf("Time:         %.3fs%n", elapsed / 1e9);
     }
@@ -226,8 +226,8 @@ public final class Delta {
         System.out.printf("Delta file:   %s (%d bytes)%n", deltaPath, deltaBytes.length);
         System.out.printf("Format:       %s%n", fmt);
         System.out.printf("Version size: %d bytes%n", result.versionSize);
-        System.out.printf("Src hash:     %s%n", toHex(result.srcHash));
-        System.out.printf("Dst hash:     %s%n", toHex(result.dstHash));
+        System.out.printf("Src CRC:      %s%n", toHex(result.srcCrc));
+        System.out.printf("Dst CRC:      %s%n", toHex(result.dstCrc));
         System.out.printf("Commands:     %d%n", stats.numCommands);
         System.out.printf("  Copies:     %d (%d bytes)%n", stats.numCopies, stats.copyBytes);
         System.out.printf("  Adds:       %d (%d bytes)%n", stats.numAdds, stats.addBytes);
@@ -268,7 +268,7 @@ public final class Delta {
         long elapsed = System.nanoTime() - t0;
 
         byte[] ipDelta = Encoding.encodeDelta(ipPlaced, true, result.versionSize,
-                                               result.srcHash, result.dstHash);
+                                               result.srcCrc, result.dstCrc);
         writeFile(deltaOutPath, ipDelta);
 
         PlacedSummary stats = Apply.placedSummary(ipPlaced);
@@ -301,22 +301,6 @@ public final class Delta {
 
     private static void writeFile(String path, byte[] data) throws IOException {
         Files.write(Path.of(path), data);
-    }
-
-    /** Write data to a file, returning its SHAKE128-16 hash computed during the write. */
-    private static byte[] writeFileHashed(String path, byte[] data) throws IOException {
-        Hash.Shake128 ctx = new Hash.Shake128();
-        int chunk = 65536;
-        int pos = 0;
-        try (OutputStream out = Files.newOutputStream(Path.of(path))) {
-            while (pos < data.length) {
-                int n = Math.min(chunk, data.length - pos);
-                out.write(data, pos, n);
-                ctx.update(data, pos, n);
-                pos += n;
-            }
-        }
-        return ctx.finish();
     }
 
     private static String toHex(byte[] bytes) {

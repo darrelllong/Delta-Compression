@@ -18,13 +18,13 @@ pub const MAX_TABLE_SIZE: usize = 1_073_741_827; // prime near 2^30; default cei
                                                   // Section 8: correcting uses checkpointing to fit any |R|
 pub const HASH_BASE: u64 = 263;
 pub const HASH_MOD: u64 = (1 << 61) - 1; // Mersenne prime 2^61-1
-pub const DELTA_MAGIC: &[u8; 4] = b"DLT\x02";
+pub const DELTA_MAGIC: &[u8; 4] = b"DLT\x03";
 pub const DELTA_FLAG_INPLACE: u8 = 0x01;
 pub const DELTA_CMD_END: u8 = 0;
 pub const DELTA_CMD_COPY: u8 = 1;
 pub const DELTA_CMD_ADD: u8 = 2;
-pub const DELTA_HASH_SIZE: usize = 16;
-pub const DELTA_HEADER_SIZE: usize = 41; // magic(4) + flags(1) + version_size(4) + src_hash(16) + dst_hash(16)
+pub const DELTA_CRC_SIZE: usize = 8;
+pub const DELTA_HEADER_SIZE: usize = 25; // magic(4) + flags(1) + version_size(4) + src_crc(8) + dst_crc(8)
 pub const DELTA_U32_SIZE: usize = 4;
 pub const DELTA_COPY_PAYLOAD: usize = 12; // src(4) + dst(4) + len(4)
 pub const DELTA_ADD_HEADER: usize = 8; // dst(4) + len(4)

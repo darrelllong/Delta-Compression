@@ -126,12 +126,12 @@ Cycle-breaking policies:
 Unified format used by all five implementations:
 
 ```
-Header (41 bytes):
-  DLT\x02        4-byte magic
+Header (25 bytes):
+  DLT\x03        4-byte magic
   flags           1 byte (bit 0 = in-place)
   version_size    uint32 big-endian
-  src_hash        16 bytes (SHAKE128 of reference file)
-  dst_hash        16 bytes (SHAKE128 of version file)
+  src_crc         8 bytes (CRC-64/XZ of reference file)
+  dst_crc         8 bytes (CRC-64/XZ of version file)
 
 Commands (repeated):
   type 0          END (1 byte)
@@ -143,9 +143,9 @@ All multi-byte integers are big-endian.  Commands carry explicit
 source and destination offsets.  The `flags` byte distinguishes
 standard deltas (flag 0x00) from in-place deltas (flag 0x01).
 
-The two 16-byte SHAKE128 hashes are verified on decode: `src_hash`
+The two 8-byte CRC-64/XZ checksums are verified on decode: `src_crc`
 is checked against the supplied reference file before reconstruction
-begins; `dst_hash` is checked against the reconstructed output
+begins; `dst_crc` is checked against the reconstructed output
 afterwards.  Pass `--ignore-hash` to decode to skip both checks and
 attempt recovery from a corrupted or mismatched delta.
 

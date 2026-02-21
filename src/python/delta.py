@@ -24,7 +24,6 @@ Usage:
 """
 
 import argparse
-import hashlib
 import heapq
 import mmap
 import os
@@ -885,12 +884,12 @@ def unplace_commands(placed: List[PlacedCommand]) -> List[Command]:
 # ============================================================================
 # Unified Binary Delta Format
 #
-# Header (v2):
-#   Magic:        4 bytes  b'DLT\x02'
+# Header (v3):
+#   Magic:        4 bytes  b'DLT\x03'
 #   Flags:        1 byte   (0x00 = standard, 0x01 = in-place)
 #   Version size: 4 bytes  uint32 BE
-#   Src hash:    16 bytes  SHAKE128(16) of reference file
-#   Dst hash:    16 bytes  SHAKE128(16) of version/output file
+#   Src CRC:      8 bytes  CRC-64/XZ of reference file (big-endian)
+#   Dst CRC:      8 bytes  CRC-64/XZ of version/output file (big-endian)
 #
 # Commands (in execution order):
 #   END:  type=0                                     (1 byte)
@@ -898,41 +897,59 @@ def unplace_commands(placed: List[PlacedCommand]) -> List[Command]:
 #   ADD:  type=2, dst:u32, len:u32, data             (9 + len bytes)
 # ============================================================================
 
-DELTA_MAGIC = b'DLT\x02'
+DELTA_MAGIC = b'DLT\x03'
 DELTA_FLAG_INPLACE = 0x01
 DELTA_CMD_END = 0
 DELTA_CMD_COPY = 1
 DELTA_CMD_ADD = 2
-DELTA_HASH_SIZE = 16
-DELTA_HEADER_SIZE = 41  # magic(4) + flags(1) + version_size(4) + src_hash(16) + dst_hash(16)
+DELTA_CRC_SIZE = 8
+DELTA_HEADER_SIZE = 25  # magic(4) + flags(1) + version_size(4) + src_crc(8) + dst_crc(8)
 DELTA_U32_SIZE = 4
 DELTA_COPY_PAYLOAD = 12 # src(4) + dst(4) + len(4)
 DELTA_ADD_HEADER = 8    # dst(4) + len(4)
 
+# ── CRC-64/XZ (ECMA-182 reflected) ───────────────────────────────────────────
+# Canonical polynomial: 0x42F0E1EBA9EA3693 (normal form)
+# Table generated with reflected polynomial: 0xC96C5795D7870F42
+# Init = XorOut = 0xFFFFFFFFFFFFFFFF; RefIn = RefOut = True
+# Check: crc64_xz(b"123456789") = 0x995DC9BBDF1939FA
+# Check: crc64_xz(b"")          = 0x0000000000000000
 
-def _shake128(data: bytes) -> bytes:
-    """Compute SHAKE128 hash with 16 bytes of output (FIPS 202 XOF).
+def _make_crc64_table():
+    poly = 0xC96C5795D7870F42
+    t = []
+    for i in range(256):
+        crc = i
+        for _ in range(8):
+            crc = (crc >> 1) ^ poly if crc & 1 else crc >> 1
+        t.append(crc)
+    return t
 
-    Uses hashlib.shake_128 (domain separator 0x1F), NOT hashlib.sha3_128
-    (domain separator 0x06).  Both produce 16 bytes but are incompatible.
-    """
-    return hashlib.shake_128(data).digest(DELTA_HASH_SIZE)
+_CRC64_TABLE = _make_crc64_table()
+
+
+def _crc64_xz(data: bytes) -> bytes:
+    """CRC-64/XZ of data; returns 8 bytes big-endian."""
+    crc = 0xFFFFFFFFFFFFFFFF
+    for b in data:
+        crc = _CRC64_TABLE[(crc ^ b) & 0xFF] ^ (crc >> 8)
+    return (crc ^ 0xFFFFFFFFFFFFFFFF).to_bytes(8, 'big')
 
 
 def encode_delta(commands: List[PlacedCommand], *,
                  inplace: bool = False, version_size: int,
-                 src_hash: bytes, dst_hash: bytes) -> bytes:
+                 src_crc: bytes, dst_crc: bytes) -> bytes:
     """Encode placed commands to the unified binary delta format.
 
-    src_hash and dst_hash must each be exactly DELTA_HASH_SIZE (16) bytes,
-    produced by _shake128() over the reference and version data respectively.
+    src_crc and dst_crc must each be exactly DELTA_CRC_SIZE (8) bytes,
+    produced by _crc64_xz() over the reference and version data respectively.
     """
     out = bytearray()
     out.extend(DELTA_MAGIC)
     out.append(DELTA_FLAG_INPLACE if inplace else 0)
     out.extend(struct.pack('>I', version_size))
-    out.extend(src_hash)
-    out.extend(dst_hash)
+    out.extend(src_crc)
+    out.extend(dst_crc)
 
     for cmd in commands:
         if isinstance(cmd, PlacedCopy):
@@ -950,17 +967,17 @@ def encode_delta(commands: List[PlacedCommand], *,
 def decode_delta(data: bytes):
     """Decode the unified binary delta format.
 
-    Returns (commands, inplace, version_size, src_hash, dst_hash).
-    Hash validation is the caller's responsibility.
+    Returns (commands, inplace, version_size, src_crc, dst_crc).
+    CRC validation is the caller's responsibility.
     """
     if len(data) < DELTA_HEADER_SIZE or data[:len(DELTA_MAGIC)] != DELTA_MAGIC:
         raise ValueError("Not a delta file")
 
     inplace = bool(data[len(DELTA_MAGIC)] & DELTA_FLAG_INPLACE)
     version_size = struct.unpack_from('>I', data, len(DELTA_MAGIC) + 1)[0]
-    hash_offset = len(DELTA_MAGIC) + 1 + DELTA_U32_SIZE
-    src_hash = bytes(data[hash_offset:hash_offset + DELTA_HASH_SIZE])
-    dst_hash = bytes(data[hash_offset + DELTA_HASH_SIZE:hash_offset + 2 * DELTA_HASH_SIZE])
+    crc_offset = len(DELTA_MAGIC) + 1 + DELTA_U32_SIZE
+    src_crc = bytes(data[crc_offset:crc_offset + DELTA_CRC_SIZE])
+    dst_crc = bytes(data[crc_offset + DELTA_CRC_SIZE:crc_offset + 2 * DELTA_CRC_SIZE])
     pos = DELTA_HEADER_SIZE
     commands: List[PlacedCommand] = []
 
@@ -979,7 +996,7 @@ def decode_delta(data: bytes):
             commands.append(PlacedAdd(dst=dst, data=data[pos:pos + length]))
             pos += length
 
-    return commands, inplace, version_size, src_hash, dst_hash
+    return commands, inplace, version_size, src_crc, dst_crc
 
 
 def is_inplace_delta(data: bytes) -> bool:
@@ -1069,7 +1086,7 @@ def apply_delta(R, commands: List[Command]) -> bytes:
 
 def apply_binary(R: bytes, delta: bytes) -> bytes:
     """Reconstruct version from reference + binary delta (auto-detects format)."""
-    commands, inplace, version_size, _src_hash, _dst_hash = decode_delta(delta)
+    commands, inplace, version_size, _src_crc, _dst_crc = decode_delta(delta)
     if inplace:
         return apply_placed_inplace(R, commands, version_size)
     else:
@@ -1476,25 +1493,26 @@ def placed_summary(commands: List[PlacedCommand]) -> dict:
 # File I/O helpers
 # ============================================================================
 
-def _read_with_hash(path: str):
-    """Read a file in one sequential pass, returning (data, shake128_16_hash).
+def _read_with_crc(path: str):
+    """Read a file in one sequential pass, returning (data, crc64_xz).
 
-    Hash is computed incrementally while reading so no second pass is needed.
+    CRC is computed incrementally while reading so no second pass is needed.
     Data is returned as bytes (may be large for big files).
     """
-    h = hashlib.shake_128()
+    crc = 0xFFFFFFFFFFFFFFFF
     size = os.path.getsize(path)
     if size == 0:
-        return b'', h.digest(DELTA_HASH_SIZE)
+        return b'', (crc ^ 0xFFFFFFFFFFFFFFFF).to_bytes(8, 'big')
     parts = []
     with open(path, 'rb') as f:
         while True:
             chunk = f.read(1 << 20)  # 1 MB chunks
             if not chunk:
                 break
-            h.update(chunk)
+            for b in chunk:
+                crc = _CRC64_TABLE[(crc ^ b) & 0xFF] ^ (crc >> 8)
             parts.append(chunk)
-    return b''.join(parts), h.digest(DELTA_HASH_SIZE)
+    return b''.join(parts), (crc ^ 0xFFFFFFFFFFFFFFFF).to_bytes(8, 'big')
 
 
 # ============================================================================
@@ -1569,9 +1587,9 @@ def cmd_encode(args):
         max_table=args.max_table,
     )
 
-    # Read files and compute SHAKE128 hashes in a single sequential pass each.
-    R, src_hash = _read_with_hash(args.reference)
-    V, dst_hash = _read_with_hash(args.version)
+    # Read files and compute CRC-64/XZ in a single sequential pass each.
+    R, src_crc = _read_with_crc(args.reference)
+    V, dst_crc = _read_with_crc(args.version)
 
     t0 = time.time()
     commands = algo(R, V, opts=opts)
@@ -1586,7 +1604,7 @@ def cmd_encode(args):
     elapsed = time.time() - t0
 
     delta = encode_delta(placed, inplace=args.inplace, version_size=len(V),
-                         src_hash=src_hash, dst_hash=dst_hash)
+                         src_crc=src_crc, dst_crc=dst_crc)
     with open(args.delta, 'wb') as f:
         f.write(delta)
 
@@ -1606,50 +1624,50 @@ def cmd_encode(args):
     print(f"Copy bytes:   {stats['copy_bytes']:,}")
     print(f"Add bytes:    {stats['add_bytes']:,}")
     if args.verbose:
-        print(f"Src hash:     {src_hash.hex()}")
-        print(f"Dst hash:     {dst_hash.hex()}")
+        print(f"Src CRC:      {src_crc.hex()}")
+        print(f"Dst CRC:      {dst_crc.hex()}")
     print(f"Time:         {elapsed:.3f}s")
 
 
 def cmd_decode(args):
-    # Read reference and compute its hash in one sequential pass.
-    R, r_hash_actual = _read_with_hash(args.reference)
+    # Read reference and compute its CRC in one sequential pass.
+    R, r_crc_actual = _read_with_crc(args.reference)
 
     with open(args.delta, 'rb') as f:
         delta_bytes = f.read()
 
     t0 = time.time()
-    placed, is_ip, version_size, src_hash, dst_hash = decode_delta(delta_bytes)
+    placed, is_ip, version_size, src_crc, dst_crc = decode_delta(delta_bytes)
 
     # Pre-check: verify reference matches what was recorded at encode time.
-    if r_hash_actual != src_hash:
+    if r_crc_actual != src_crc:
         if not args.ignore_hash:
             raise SystemExit(
                 f"error: source file does not match delta: "
-                f"expected {src_hash.hex()}, got {r_hash_actual.hex()}"
+                f"expected {src_crc.hex()}, got {r_crc_actual.hex()}"
             )
-        print("warning: skipping source hash check (--ignore-hash)", file=sys.stderr)
+        print("warning: skipping source CRC check (--ignore-hash)", file=sys.stderr)
 
-    output_hash = None
+    output_crc = None
     if is_ip:
         buf_size = max(len(R), version_size)
         with mmap_create(args.output, buf_size) as buf:
             buf[:len(R)] = R[:len(R)]
             apply_placed_inplace_to(placed, buf)
-            output_hash = _shake128(bytes(buf[:version_size]))
+            output_crc = _crc64_xz(bytes(buf[:version_size]))
         if version_size < buf_size:
             os.truncate(args.output, version_size)
     else:
         with mmap_create(args.output, version_size) as buf:
             apply_placed_to(R, placed, buf)
-            output_hash = _shake128(bytes(buf[:version_size]))
+            output_crc = _crc64_xz(bytes(buf[:version_size]))
     elapsed = time.time() - t0
 
-    # Post-check: verify reconstructed output matches recorded dest hash.
-    if output_hash != dst_hash:
+    # Post-check: verify reconstructed output matches recorded dest CRC.
+    if output_crc != dst_crc:
         if not args.ignore_hash:
             raise SystemExit("error: output integrity check failed")
-        print("warning: skipping output integrity check (--ignore-hash)", file=sys.stderr)
+        print("warning: skipping output CRC check (--ignore-hash)", file=sys.stderr)
 
     fmt = "in-place" if is_ip else "standard"
     print(f"Format:       {fmt}")
@@ -1663,15 +1681,15 @@ def cmd_info(args):
     with open(args.delta, 'rb') as f:
         delta_bytes = f.read()
 
-    placed, is_ip, version_size, src_hash, dst_hash = decode_delta(delta_bytes)
+    placed, is_ip, version_size, src_crc, dst_crc = decode_delta(delta_bytes)
     stats = placed_summary(placed)
     fmt = "in-place" if is_ip else "standard"
 
     print(f"Delta file:   {args.delta} ({len(delta_bytes):,} bytes)")
     print(f"Format:       {fmt}")
     print(f"Version size: {version_size:,} bytes")
-    print(f"Src hash:     {src_hash.hex()}")
-    print(f"Dst hash:     {dst_hash.hex()}")
+    print(f"Src CRC:      {src_crc.hex()}")
+    print(f"Dst CRC:      {dst_crc.hex()}")
     print(f"Commands:     {stats['num_commands']}")
     print(f"  Copies:     {stats['num_copies']} ({stats['copy_bytes']:,} bytes)")
     print(f"  Adds:       {stats['num_adds']} ({stats['add_bytes']:,} bytes)")
@@ -1679,13 +1697,13 @@ def cmd_info(args):
 
 
 def cmd_inplace(args):
-    # Read reference and compute hash in one sequential pass.
-    R, _r_hash = _read_with_hash(args.reference)
+    # Read reference and compute CRC in one sequential pass.
+    R, _r_crc = _read_with_crc(args.reference)
 
     with open(args.delta_in, 'rb') as f:
         delta_bytes = f.read()
 
-    placed, is_ip, version_size, src_hash, dst_hash = decode_delta(delta_bytes)
+    placed, is_ip, version_size, src_crc, dst_crc = decode_delta(delta_bytes)
 
     if is_ip:
         # Already in-place — just copy
@@ -1699,9 +1717,9 @@ def cmd_inplace(args):
     ip_placed = make_inplace(R, commands, policy=args.policy)
     elapsed = time.time() - t0
 
-    # Preserve the original src_hash and dst_hash from the input delta.
+    # Preserve the original src_crc and dst_crc from the input delta.
     ip_delta = encode_delta(ip_placed, inplace=True, version_size=version_size,
-                            src_hash=src_hash, dst_hash=dst_hash)
+                            src_crc=src_crc, dst_crc=dst_crc)
     with open(args.delta_out, 'wb') as f:
         f.write(ip_delta)
 
