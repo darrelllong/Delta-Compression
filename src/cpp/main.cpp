@@ -163,6 +163,9 @@ int main(int argc, char** argv) {
     dec->add_option("reference", dec_ref, "Reference file")->required();
     dec->add_option("delta_file", dec_delta, "Delta file")->required();
     dec->add_option("output", dec_output, "Output file")->required();
+    bool dec_ignore_hash = false;
+    dec->add_flag("--ignore-hash", dec_ignore_hash,
+                  "Skip hash verification (for partial recovery)");
 
     // ── info subcommand ──────────────────────────────────────────────
     auto* inf = app.add_subcommand("info", "Show delta file statistics");
@@ -263,10 +266,13 @@ int main(int argc, char** argv) {
         // Pre-check: verify reference file matches the embedded source hash.
         auto r_hash = shake128_16(r.data(), r.size());
         if (r_hash != src_hash) {
-            std::fprintf(stderr,
-                "source file does not match delta: expected %s, got %s\n",
-                hex_str(src_hash).c_str(), hex_str(r_hash).c_str());
-            return 1;
+            if (!dec_ignore_hash) {
+                std::fprintf(stderr,
+                    "source file does not match delta: expected %s, got %s\n",
+                    hex_str(src_hash).c_str(), hex_str(r_hash).c_str());
+                return 1;
+            }
+            std::fprintf(stderr, "warning: skipping source hash check (--ignore-hash)\n");
         }
 
         auto t0 = std::chrono::steady_clock::now();
@@ -283,8 +289,11 @@ int main(int argc, char** argv) {
         // Post-check: verify reconstructed output matches the embedded dest hash.
         auto out_hash = shake128_16(out_bytes.data(), out_bytes.size());
         if (out_hash != dst_hash) {
-            std::fprintf(stderr, "output integrity check failed\n");
-            return 1;
+            if (!dec_ignore_hash) {
+                std::fprintf(stderr, "output integrity check failed\n");
+                return 1;
+            }
+            std::fprintf(stderr, "warning: skipping output integrity check (--ignore-hash)\n");
         }
 
         write_file(dec_output, out_bytes);
@@ -294,8 +303,10 @@ int main(int argc, char** argv) {
         std::printf("Reference:    %s (%zu bytes)\n", dec_ref.c_str(), r.size());
         std::printf("Delta:        %s (%zu bytes)\n", dec_delta.c_str(), delta_bytes.size());
         std::printf("Output:       %s (%zu bytes)\n", dec_output.c_str(), version_size);
-        std::printf("Src hash:     %s  OK\n", hex_str(src_hash).c_str());
-        std::printf("Dst hash:     %s  OK\n", hex_str(dst_hash).c_str());
+        if (!dec_ignore_hash) {
+            std::printf("Src hash:     %s  OK\n", hex_str(src_hash).c_str());
+            std::printf("Dst hash:     %s  OK\n", hex_str(dst_hash).c_str());
+        }
         std::printf("Time:         %.3fs\n", elapsed);
 
     } else if (inf->parsed()) {

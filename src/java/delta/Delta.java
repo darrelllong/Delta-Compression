@@ -68,7 +68,7 @@ public final class Delta {
         throw new IllegalArgumentException(
             "Usage:\n" +
             "  java delta.Delta encode <algorithm> <ref> <ver> <delta> [options]\n" +
-            "  java delta.Delta decode <ref> <delta> <output>\n" +
+            "  java delta.Delta decode <ref> <delta> <output> [--ignore-hash]\n" +
             "  java delta.Delta info <delta>\n" +
             "  java delta.Delta inplace <ref> <delta_in> <delta_out> [--policy P]\n\n" +
             "Algorithms: greedy, onepass, correcting\n" +
@@ -158,6 +158,11 @@ public final class Delta {
         String deltaPath = args[2];
         String outPath = args[3];
 
+        boolean ignoreHash = false;
+        for (int i = 4; i < args.length; i++) {
+            if ("--ignore-hash".equals(args[i])) ignoreHash = true;
+        }
+
         byte[] r = readFile(refPath);
         byte[] deltaBytes = readFile(deltaPath);
 
@@ -166,9 +171,12 @@ public final class Delta {
         /* Pre-check: verify reference matches embedded src_hash. */
         byte[] rHash = Hash.Shake128.hash16(r);
         if (!Arrays.equals(rHash, result.srcHash)) {
-            System.err.printf("source file does not match delta: expected %s, got %s%n",
-                toHex(result.srcHash), toHex(rHash));
-            System.exit(1);
+            if (!ignoreHash) {
+                System.err.printf("source file does not match delta: expected %s, got %s%n",
+                    toHex(result.srcHash), toHex(rHash));
+                System.exit(1);
+            }
+            System.err.println("warning: skipping source hash check (--ignore-hash)");
         }
 
         long t0 = System.nanoTime();
@@ -186,8 +194,11 @@ public final class Delta {
 
         /* Post-check: verify output matches embedded dst_hash. */
         if (!Arrays.equals(outHash, result.dstHash)) {
-            System.err.println("output integrity check failed");
-            System.exit(1);
+            if (!ignoreHash) {
+                System.err.println("output integrity check failed");
+                System.exit(1);
+            }
+            System.err.println("warning: skipping output integrity check (--ignore-hash)");
         }
 
         String fmt = result.inplace ? "in-place" : "standard";
@@ -195,8 +206,10 @@ public final class Delta {
         System.out.printf("Reference:    %s (%d bytes)%n", refPath, r.length);
         System.out.printf("Delta:        %s (%d bytes)%n", deltaPath, deltaBytes.length);
         System.out.printf("Output:       %s (%d bytes)%n", outPath, out.length);
-        System.out.printf("Src hash:     %s  OK%n", toHex(result.srcHash));
-        System.out.printf("Dst hash:     %s  OK%n", toHex(result.dstHash));
+        if (!ignoreHash) {
+            System.out.printf("Src hash:     %s  OK%n", toHex(result.srcHash));
+            System.out.printf("Dst hash:     %s  OK%n", toHex(result.dstHash));
+        }
         System.out.printf("Time:         %.3fs%n", elapsed / 1e9);
     }
 
