@@ -126,10 +126,12 @@ Cycle-breaking policies:
 Unified format used by all five implementations:
 
 ```
-Header (9 bytes):
-  DLT\x01        4-byte magic
+Header (41 bytes):
+  DLT\x02        4-byte magic
   flags           1 byte (bit 0 = in-place)
   version_size    uint32 big-endian
+  src_hash        16 bytes (SHAKE128 of reference file)
+  dst_hash        16 bytes (SHAKE128 of version file)
 
 Commands (repeated):
   type 0          END (1 byte)
@@ -141,15 +143,21 @@ All multi-byte integers are big-endian.  Commands carry explicit
 source and destination offsets.  The `flags` byte distinguishes
 standard deltas (flag 0x00) from in-place deltas (flag 0x01).
 
+The two 16-byte SHAKE128 hashes are verified on decode: `src_hash`
+is checked against the supplied reference file before reconstruction
+begins; `dst_hash` is checked against the reconstructed output
+afterwards.  Pass `--ignore-hash` to decode to skip both checks and
+attempt recovery from a corrupted or mismatched delta.
+
 ## Testing
 
 | Language | Tests | Command |
 |----------|------:|---------|
-| Python | 168 | `cd src/python && python3 -m unittest test_delta -v` |
-| Rust | 52 | `cd src/rust/delta && cargo test` |
-| C++ | 46 | `cd src/cpp && cmake -B build && cmake --build build && ctest --test-dir build` |
-| C | 32 | `cd src/c && make test` |
-| Java | — | `cd src/java && javac -d out delta/*.java` |
+| Python | 179 | `cd src/python && python3 -m unittest test_delta -v` |
+| Rust | 63 | `cd src/rust/delta && cargo test` |
+| C++ | 54 | `cd src/cpp && cmake -B build && cmake --build build && ctest --test-dir build` |
+| C | 45 | `cd src/c && make && bash test_delta.sh` |
+| Java | 39 | `cd src/java && make test` |
 
 Tests cover all three algorithms, binary round-trips, paper examples,
 edge cases (empty/identical/completely different files), in-place
@@ -166,11 +174,11 @@ for the full table.
 
 ```
 src/
-  python/         Single-file library + CLI + 168-test suite
-  rust/delta/     Cargo crate — library + clap CLI + 52 tests
-  cpp/            CMake project — static library + CLI11 CLI + Catch2 tests
-  c/              Makefile project — single-header API + CLI + 32 tests
-  java/delta/     Java 11+ sources — library + CLI
+  python/         Single-file library + CLI + 179-test suite
+  rust/delta/     Cargo crate — library + clap CLI + 63 tests
+  cpp/            CMake project — static library + CLI11 CLI + Catch2 tests (54)
+  c/              Makefile project — single-header API + CLI + 45 tests
+  java/delta/     Java 11+ sources — library + CLI + 39 tests
 tests/
   kernel-delta-test.sh    Kernel tarball benchmark
 pubs/                     Ajtai et al. 2002, Burns et al. 2003 (PDFs)
