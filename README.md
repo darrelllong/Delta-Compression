@@ -153,11 +153,11 @@ attempt recovery from a corrupted or mismatched delta.
 
 | Language | Tests | Command |
 |----------|------:|---------|
-| Python | 179 | `cd src/python && python3 -m unittest test_delta -v` |
-| Rust | 63 | `cd src/rust/delta && cargo test` |
-| C++ | 54 | `cd src/cpp && cmake -B build && cmake --build build && ctest --test-dir build` |
+| Python | 180 | `cd src/python && python3 -m unittest test_delta -v` |
+| Rust | 67 | `cd src/rust/delta && cargo test` |
+| C++ | 55 | `cd src/cpp && cmake -B build && cmake --build build && ctest --test-dir build` |
 | C | 45 | `cd src/c && make && bash test_delta.sh` |
-| Java | 39 | `cd src/java && make test` |
+| Java | 43 | `cd src/java && make test` |
 
 Tests cover all three algorithms, binary round-trips, paper examples,
 edge cases (empty/identical/completely different files), in-place
@@ -174,11 +174,11 @@ for the full table.
 
 ```
 src/
-  python/         Single-file library + CLI + 179-test suite
-  rust/delta/     Cargo crate — library + clap CLI + 63 tests
-  cpp/            CMake project — static library + CLI11 CLI + Catch2 tests (54)
+  python/         Single-file library + CLI + 180-test suite
+  rust/delta/     Cargo crate — library + clap CLI + 67 tests
+  cpp/            CMake project — static library + CLI11 CLI + Catch2 tests (55)
   c/              Makefile project — single-header API + CLI + 45 tests
-  java/delta/     Java 11+ sources — library + CLI + 39 tests
+  java/delta/     Java 11+ sources — library + CLI + 43 tests
 tests/
   kernel-delta-test.sh    Kernel tarball benchmark
 pubs/                     Ajtai et al. 2002, Burns et al. 2003 (PDFs)
