@@ -156,6 +156,10 @@ enum Commands {
 
         /// Output (reconstructed version) file
         output: String,
+
+        /// Skip hash verification (for partial recovery)
+        #[arg(long)]
+        ignore_hash: bool,
     },
 
     /// Show delta file statistics
@@ -287,6 +291,7 @@ fn main() {
             reference,
             delta_file,
             output,
+            ignore_hash,
         } => {
             // Read reference and compute its hash in one sequential pass.
             let r_bytes = fs::read(&reference).unwrap_or_else(|e| {
@@ -310,12 +315,15 @@ fn main() {
 
             // Pre-check: verify reference matches what was recorded at encode time.
             if r_hash_actual != src_hash {
-                eprintln!(
-                    "error: source file does not match delta: expected {}, got {}",
-                    hex_str(&src_hash),
-                    hex_str(&r_hash_actual)
-                );
-                process::exit(1);
+                if !ignore_hash {
+                    eprintln!(
+                        "error: source file does not match delta: expected {}, got {}",
+                        hex_str(&src_hash),
+                        hex_str(&r_hash_actual)
+                    );
+                    process::exit(1);
+                }
+                eprintln!("warning: skipping source hash check (--ignore-hash)");
             }
 
             let out_bytes: Vec<u8> = if is_ip {
@@ -365,8 +373,11 @@ fn main() {
             // Post-check: verify reconstructed output matches recorded dest hash.
             let out_hash_actual = shake128_16(&out_bytes);
             if out_hash_actual != dst_hash {
-                eprintln!("error: output integrity check failed");
-                process::exit(1);
+                if !ignore_hash {
+                    eprintln!("error: output integrity check failed");
+                    process::exit(1);
+                }
+                eprintln!("warning: skipping output integrity check (--ignore-hash)");
             }
 
             let fmt = if is_ip { "in-place" } else { "standard" };

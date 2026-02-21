@@ -1619,10 +1619,12 @@ def cmd_decode(args):
 
     # Pre-check: verify reference matches what was recorded at encode time.
     if r_hash_actual != src_hash:
-        raise SystemExit(
-            f"error: source file does not match delta: "
-            f"expected {src_hash.hex()}, got {r_hash_actual.hex()}"
-        )
+        if not args.ignore_hash:
+            raise SystemExit(
+                f"error: source file does not match delta: "
+                f"expected {src_hash.hex()}, got {r_hash_actual.hex()}"
+            )
+        print("warning: skipping source hash check (--ignore-hash)", file=sys.stderr)
 
     output_hash = None
     if is_ip:
@@ -1641,7 +1643,9 @@ def cmd_decode(args):
 
     # Post-check: verify reconstructed output matches recorded dest hash.
     if output_hash != dst_hash:
-        raise SystemExit("error: output integrity check failed")
+        if not args.ignore_hash:
+            raise SystemExit("error: output integrity check failed")
+        print("warning: skipping output integrity check (--ignore-hash)", file=sys.stderr)
 
     fmt = "in-place" if is_ip else "standard"
     print(f"Format:       {fmt}")
@@ -1737,6 +1741,8 @@ def main():
     dec.add_argument('reference', help='Reference file')
     dec.add_argument('delta', help='Delta file')
     dec.add_argument('output', help='Output (reconstructed version) file')
+    dec.add_argument('--ignore-hash', action='store_true',
+                     help='Skip hash verification (for partial recovery)')
     dec.set_defaults(func=cmd_decode)
 
     # info

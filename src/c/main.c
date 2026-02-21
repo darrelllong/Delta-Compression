@@ -182,7 +182,7 @@ usage(void)
 	fprintf(stderr,
 	    "Usage:\n"
 	    "  delta encode <algorithm> <ref> <ver> <delta> [options]\n"
-	    "  delta decode <ref> <delta> <output>\n"
+	    "  delta decode <ref> <delta> <output> [--ignore-hash]\n"
 	    "  delta info <delta>\n"
 	    "  delta inplace <ref> <delta_in> <delta_out> [--policy P]\n"
 	    "\n"
@@ -348,6 +348,11 @@ main(int argc, char **argv)
 		const char *delta_path = argv[3];
 		const char *out_path = argv[4];
 
+		int ignore_hash = 0;
+		for (int a = 5; a < argc; a++) {
+			if (strcmp(argv[a], "--ignore-hash") == 0) ignore_hash = 1;
+		}
+
 		mapped_file_t r_file = map_file(ref_path);
 		size_t delta_len;
 		uint8_t *delta_data = read_file(delta_path, &delta_len);
@@ -359,12 +364,15 @@ main(int argc, char **argv)
 			uint8_t r_hash[DELTA_HASH_SIZE];
 			delta_shake128_16(r_file.data, r_file.size, r_hash);
 			if (memcmp(r_hash, dr.src_hash, DELTA_HASH_SIZE) != 0) {
-				fprintf(stderr,
-				    "source file does not match delta: "
-				    "expected "); fprint_hex(stderr, dr.src_hash, DELTA_HASH_SIZE);
-				fprintf(stderr, ", got "); fprint_hex(stderr, r_hash, DELTA_HASH_SIZE);
-				fprintf(stderr, "\n");
-				exit(1);
+				if (!ignore_hash) {
+					fprintf(stderr,
+					    "source file does not match delta: "
+					    "expected "); fprint_hex(stderr, dr.src_hash, DELTA_HASH_SIZE);
+					fprintf(stderr, ", got "); fprint_hex(stderr, r_hash, DELTA_HASH_SIZE);
+					fprintf(stderr, "\n");
+					exit(1);
+				}
+				fprintf(stderr, "warning: skipping source hash check (--ignore-hash)\n");
 			}
 		}
 
@@ -390,16 +398,21 @@ main(int argc, char **argv)
 
 		/* Post-check: verify output matches embedded dst_hash. */
 		if (memcmp(out_hash, dr.dst_hash, DELTA_HASH_SIZE) != 0) {
-			fprintf(stderr, "output integrity check failed\n");
-			exit(1);
+			if (!ignore_hash) {
+				fprintf(stderr, "output integrity check failed\n");
+				exit(1);
+			}
+			fprintf(stderr, "warning: skipping output integrity check (--ignore-hash)\n");
 		}
 
 		printf("Format:       %s\n", dr.inplace ? "in-place" : "standard");
 		printf("Reference:    %s (%zu bytes)\n", ref_path, r_file.size);
 		printf("Delta:        %s (%zu bytes)\n", delta_path, delta_len);
 		printf("Output:       %s (%zu bytes)\n", out_path, dr.version_size);
-		printf("Src hash:     "); fprint_hex(stdout, dr.src_hash, DELTA_HASH_SIZE); printf("  OK\n");
-		printf("Dst hash:     "); fprint_hex(stdout, dr.dst_hash, DELTA_HASH_SIZE); printf("  OK\n");
+		if (!ignore_hash) {
+			printf("Src hash:     "); fprint_hex(stdout, dr.src_hash, DELTA_HASH_SIZE); printf("  OK\n");
+			printf("Dst hash:     "); fprint_hex(stdout, dr.dst_hash, DELTA_HASH_SIZE); printf("  OK\n");
+		}
 		printf("Time:         %.3fs\n", elapsed);
 
 		delta_buffer_free(&out_buf);
