@@ -120,7 +120,10 @@ std::array<uint8_t, DELTA_HASH_SIZE> shake128_16(const uint8_t* data, size_t len
     xor_into_state(state, last, SHAKE128_RATE);
     keccak_f1600(state);
 
-    // Squeeze 16 bytes.
+    // Squeeze exactly DELTA_HASH_SIZE (16) bytes from the first rate block.
+    // 16 < SHAKE128_RATE (168), so one permutation is always sufficient here.
+    // To support d > SHAKE128_RATE output bytes, loop: extract up to
+    // SHAKE128_RATE bytes, call keccak_f1600 again, repeat.
     std::array<uint8_t, DELTA_HASH_SIZE> out;
     extract_from_state(state, out.data(), DELTA_HASH_SIZE);
     return out;
