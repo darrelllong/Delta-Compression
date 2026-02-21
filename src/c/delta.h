@@ -27,13 +27,14 @@
 #define DELTA_CMD_END      0
 #define DELTA_CMD_COPY     1
 #define DELTA_CMD_ADD      2
-#define DELTA_HEADER_SIZE  9    /* magic(4) + flags(1) + version_size(4) */
+#define DELTA_HASH_SIZE    16   /* SHAKE128(16) digest bytes */
+#define DELTA_HEADER_SIZE  41   /* magic(4) + flags(1) + version_size(4) + src_hash(16) + dst_hash(16) */
 #define DELTA_U32_SIZE     4
 #define DELTA_COPY_PAYLOAD 12   /* src(4) + dst(4) + len(4) */
 #define DELTA_ADD_HEADER   8    /* dst(4) + len(4) */
 #define DELTA_BUF_CAP      256
 
-static const uint8_t DELTA_MAGIC[4] = {'D', 'L', 'T', 0x01};
+static const uint8_t DELTA_MAGIC[4] = {'D', 'L', 'T', 0x02};
 
 /* ── Checked allocation helpers ───────────────────────────────────── */
 
@@ -283,9 +284,33 @@ delta_commands_t delta_diff(
 	const delta_diff_options_t *opts);
 
 /* ====================================================================
+ * SHAKE128 hash (FIPS 202 XOF, 16-byte output)
+ * ==================================================================== */
+
+/* Streaming context: absorb data in chunks, then finalize. */
+#define DELTA_SHAKE128_RATE 168
+
+typedef struct {
+	uint64_t state[25];
+	uint8_t  buf[DELTA_SHAKE128_RATE];
+	size_t   buflen;
+} delta_shake128_ctx_t;
+
+void delta_shake128_init(delta_shake128_ctx_t *ctx);
+void delta_shake128_update(delta_shake128_ctx_t *ctx,
+                           const uint8_t *data, size_t len);
+void delta_shake128_final(delta_shake128_ctx_t *ctx,
+                          uint8_t out[DELTA_HASH_SIZE]);
+
+/* Convenience: hash entire buffer in one call. */
+void delta_shake128_16(const uint8_t *data, size_t len,
+                       uint8_t out[DELTA_HASH_SIZE]);
+
+/* ====================================================================
  * Binary delta format encode/decode
  *
- * Format: DLT\x01 + flags:u8 + version_size:u32be + commands + END(0)
+ * Format: DLT\x02 + flags:u8 + version_size:u32be
+ *         + src_hash(16) + dst_hash(16) + commands + END(0)
  * ==================================================================== */
 
 typedef struct {
@@ -294,14 +319,18 @@ typedef struct {
 } delta_buffer_t;
 
 delta_buffer_t delta_encode(const delta_placed_commands_t *cmds,
-                            bool inplace, size_t version_size);
+                            bool inplace, size_t version_size,
+                            const uint8_t src_hash[DELTA_HASH_SIZE],
+                            const uint8_t dst_hash[DELTA_HASH_SIZE]);
 void           delta_buffer_init(delta_buffer_t *buf);
 void           delta_buffer_free(delta_buffer_t *buf);
 
 typedef struct {
 	delta_placed_commands_t commands;
-	bool   inplace;
-	size_t version_size;
+	bool    inplace;
+	size_t  version_size;
+	uint8_t src_hash[DELTA_HASH_SIZE];
+	uint8_t dst_hash[DELTA_HASH_SIZE];
 } delta_decode_result_t;
 
 delta_decode_result_t delta_decode(const uint8_t *data, size_t len);

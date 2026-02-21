@@ -8,7 +8,7 @@ import random
 import unittest
 
 from delta import (
-    TABLE_SIZE,
+    DELTA_HASH_SIZE, DELTA_MAGIC, TABLE_SIZE,
     CopyCmd, AddCmd,
     PlacedCopy, PlacedAdd,
     diff_greedy, diff_onepass, diff_correcting,
@@ -16,6 +16,7 @@ from delta import (
     apply_delta, apply_placed, apply_placed_inplace,
     is_inplace_delta,
     make_inplace,
+    _shake128,
     _is_prime, _next_prime, _witness, _get_d_r,
 )
 
@@ -26,10 +27,13 @@ def roundtrip(algo_fn, R, V, p=2, q=TABLE_SIZE):
     """Standard encode → binary → decode → apply, return recovered bytes."""
     cmds = algo_fn(R, V, p=p, q=q)
     placed = place_commands(cmds)
-    delta = encode_delta(placed, inplace=False, version_size=len(V))
-    placed2, is_ip, vs = decode_delta(delta)
+    delta = encode_delta(placed, inplace=False, version_size=len(V),
+                         src_hash=_shake128(R), dst_hash=_shake128(V))
+    placed2, is_ip, vs, src_h, dst_h = decode_delta(delta)
     assert not is_ip
     assert vs == len(V)
+    assert src_h == _shake128(R)
+    assert dst_h == _shake128(V)
     return apply_placed(R, placed2)
 
 
@@ -44,10 +48,13 @@ def inplace_binary_roundtrip(algo_fn, R, V, policy='localmin', p=4):
     """Encode → make_inplace → binary → decode → apply, return recovered."""
     cmds = algo_fn(R, V, p=p)
     ip = make_inplace(R, cmds, policy=policy)
-    delta = encode_delta(ip, inplace=True, version_size=len(V))
-    ip2, is_ip, vs = decode_delta(delta)
+    delta = encode_delta(ip, inplace=True, version_size=len(V),
+                         src_hash=_shake128(R), dst_hash=_shake128(V))
+    ip2, is_ip, vs, src_h, dst_h = decode_delta(delta)
     assert is_ip
     assert vs == len(V)
+    assert src_h == _shake128(R)
+    assert dst_h == _shake128(V)
     return apply_placed_inplace(R, ip2, vs)
 
 
@@ -137,16 +144,22 @@ class TestBinaryRoundTrip(unittest.TestCase):
 class TestBinaryEncoding(unittest.TestCase):
     """Unified binary format encode/decode roundtrip."""
 
+    _src = b'\x00' * 16
+    _dst = b'\xff' * 16
+
     def test_placed_roundtrip(self):
         placed = [
             PlacedCopy(src=100, dst=0, length=50),
             PlacedAdd(dst=50, data=b"hello"),
             PlacedCopy(src=200, dst=55, length=30),
         ]
-        delta = encode_delta(placed, inplace=False, version_size=85)
-        placed2, is_ip, vs = decode_delta(delta)
+        delta = encode_delta(placed, inplace=False, version_size=85,
+                             src_hash=self._src, dst_hash=self._dst)
+        placed2, is_ip, vs, sh, dh = decode_delta(delta)
         self.assertFalse(is_ip)
         self.assertEqual(vs, 85)
+        self.assertEqual(sh, self._src)
+        self.assertEqual(dh, self._dst)
         self.assertEqual(len(placed2), 3)
         self.assertIsInstance(placed2[0], PlacedCopy)
         self.assertEqual(placed2[0].src, 100)
@@ -159,17 +172,35 @@ class TestBinaryEncoding(unittest.TestCase):
 
     def test_inplace_flag(self):
         placed = [PlacedCopy(src=0, dst=10, length=5)]
-        delta = encode_delta(placed, inplace=True, version_size=15)
-        _, is_ip, _ = decode_delta(delta)
+        delta = encode_delta(placed, inplace=True, version_size=15,
+                             src_hash=self._src, dst_hash=self._dst)
+        _, is_ip, _, _, _ = decode_delta(delta)
         self.assertTrue(is_ip)
+
+    def test_magic_v2(self):
+        placed = []
+        delta = encode_delta(placed, inplace=False, version_size=0,
+                             src_hash=self._src, dst_hash=self._dst)
+        self.assertEqual(delta[:4], DELTA_MAGIC)
+
+    def test_header_size(self):
+        placed = []
+        delta = encode_delta(placed, inplace=False, version_size=0,
+                             src_hash=self._src, dst_hash=self._dst)
+        # header (41) + END byte (1)
+        self.assertEqual(len(delta), 42)
 
 
 class TestLargeCopy(unittest.TestCase):
 
+    _sh = b'\x01' * 16
+    _dh = b'\x02' * 16
+
     def test_roundtrip(self):
         placed = [PlacedCopy(src=100000, dst=0, length=50000)]
-        delta = encode_delta(placed, inplace=False, version_size=50000)
-        placed2, _, _ = decode_delta(delta)
+        delta = encode_delta(placed, inplace=False, version_size=50000,
+                             src_hash=self._sh, dst_hash=self._dh)
+        placed2, _, _, _, _ = decode_delta(delta)
         self.assertEqual(len(placed2), 1)
         self.assertEqual(placed2[0].src, 100000)
         self.assertEqual(placed2[0].dst, 0)
@@ -178,11 +209,15 @@ class TestLargeCopy(unittest.TestCase):
 
 class TestLargeAdd(unittest.TestCase):
 
+    _sh = b'\x03' * 16
+    _dh = b'\x04' * 16
+
     def test_roundtrip(self):
         big_data = bytes(range(256)) * 4
         placed = [PlacedAdd(dst=0, data=big_data)]
-        delta = encode_delta(placed, inplace=False, version_size=len(big_data))
-        placed2, _, _ = decode_delta(delta)
+        delta = encode_delta(placed, inplace=False, version_size=len(big_data),
+                             src_hash=self._sh, dst_hash=self._dh)
+        placed2, _, _, _, _ = decode_delta(delta)
         total = b''.join(c.data for c in placed2 if isinstance(c, PlacedAdd))
         self.assertEqual(total, big_data)
 
@@ -374,7 +409,8 @@ class TestInPlaceFormatDetection(unittest.TestCase):
         R = b"ABCDEFGH" * 10
         V = b"EFGHABCD" * 10
         placed = place_commands(diff_greedy(R, V, p=2))
-        delta = encode_delta(placed, inplace=False, version_size=len(V))
+        delta = encode_delta(placed, inplace=False, version_size=len(V),
+                             src_hash=_shake128(R), dst_hash=_shake128(V))
         self.assertFalse(is_inplace_delta(delta))
 
     def test_inplace_detected(self):
@@ -382,7 +418,8 @@ class TestInPlaceFormatDetection(unittest.TestCase):
         V = b"EFGHABCD" * 10
         cmds = diff_greedy(R, V, p=2)
         ip = make_inplace(R, cmds, policy='localmin')
-        delta = encode_delta(ip, inplace=True, version_size=len(V))
+        delta = encode_delta(ip, inplace=True, version_size=len(V),
+                             src_hash=_shake128(R), dst_hash=_shake128(V))
         self.assertTrue(is_inplace_delta(delta))
 
 
@@ -913,6 +950,69 @@ class TestCheckpointing(unittest.TestCase):
         cmds = diff_correcting(R, V, p=16, q=31)
         recovered = apply_delta(R, cmds)
         self.assertEqual(recovered, V)
+
+
+# ── SHAKE128 hash tests ───────────────────────────────────────────────────
+
+class TestShake128(unittest.TestCase):
+    """SHAKE128-16 helper correctness and NIST FIPS 202 vectors."""
+
+    def test_output_length(self):
+        self.assertEqual(len(_shake128(b'')), DELTA_HASH_SIZE)
+        self.assertEqual(len(_shake128(b'hello')), DELTA_HASH_SIZE)
+
+    def test_deterministic(self):
+        self.assertEqual(_shake128(b'test'), _shake128(b'test'))
+
+    def test_differs_from_different_input(self):
+        self.assertNotEqual(_shake128(b'hello'), _shake128(b'world'))
+
+    def test_nist_empty_input(self):
+        # NIST FIPS 202 SHAKE128 test vector: empty message, first 16 bytes
+        expected = bytes.fromhex('7f9c2ba4e88f827d616045507605853e')
+        self.assertEqual(_shake128(b''), expected)
+
+    def test_nist_one_byte_bd(self):
+        # NIST FIPS 202 SHAKE128 test vector: msg = 0xbd, first 16 bytes
+        expected = bytes.fromhex('83388286b2c0065ed237fbe714fc3163')
+        self.assertEqual(_shake128(b'\xbd'), expected)
+
+    def test_nist_200_byte_a3(self):
+        # NIST FIPS 202 SHAKE128 test vector: msg = 0xa3 * 200, first 16 bytes
+        expected = bytes.fromhex('131ab8d2b594946b9c81333f9bb6e0ce')
+        self.assertEqual(_shake128(b'\xa3' * 200), expected)
+
+
+class TestHashEmbeddedInDelta(unittest.TestCase):
+    """Hash values round-trip correctly through the binary format."""
+
+    def test_real_hash_roundtrip(self):
+        R = b"reference data for testing " * 5
+        V = b"version data for testing " * 5
+        sh = _shake128(R)
+        dh = _shake128(V)
+        placed = place_commands(diff_greedy(R, V, p=4))
+        delta = encode_delta(placed, inplace=False, version_size=len(V),
+                             src_hash=sh, dst_hash=dh)
+        _, _, _, sh2, dh2 = decode_delta(delta)
+        self.assertEqual(sh2, sh)
+        self.assertEqual(dh2, dh)
+
+    def test_hash_mismatch_detection(self):
+        """Caller can detect wrong source file by comparing hashes."""
+        R = b"correct reference data " * 5
+        V = b"version data " * 5
+        wrong_R = b"wrong reference data " * 5
+        sh = _shake128(R)
+        dh = _shake128(V)
+        placed = place_commands(diff_greedy(R, V, p=4))
+        delta = encode_delta(placed, inplace=False, version_size=len(V),
+                             src_hash=sh, dst_hash=dh)
+        _, _, _, sh2, _ = decode_delta(delta)
+        self.assertNotEqual(_shake128(wrong_R), sh2)
+
+    def test_hash_size_constant(self):
+        self.assertEqual(DELTA_HASH_SIZE, 16)
 
 
 if __name__ == '__main__':

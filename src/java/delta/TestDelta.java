@@ -105,10 +105,12 @@ public class TestDelta {
      * Standard encode path: diff → place → encode → decode → applyPlacedTo.
      * Exercises the binary format roundtrip.
      */
+    static final byte[] ZERO_HASH = new byte[DELTA_HASH_SIZE];
+
     static byte[] roundtrip(Algorithm algo, byte[] r, byte[] v, int p) {
         List<Command> cmds = Diff.diff(algo, r, v, opts(p));
         List<PlacedCommand> placed = Apply.placeCommands(cmds);
-        byte[] delta = Encoding.encodeDelta(placed, false, Apply.outputSize(cmds));
+        byte[] delta = Encoding.encodeDelta(placed, false, Apply.outputSize(cmds), ZERO_HASH, ZERO_HASH);
         Encoding.DecodeResult res = Encoding.decodeDelta(delta);
         byte[] out = new byte[res.versionSize];
         Apply.applyPlacedTo(r, res.commands, out);
@@ -128,7 +130,7 @@ public class TestDelta {
                                           CyclePolicy pol, int p) {
         List<Command> cmds = Diff.diff(algo, r, v, opts(p));
         List<PlacedCommand> ip = Apply.makeInplace(r, cmds, pol);
-        byte[] delta = Encoding.encodeDelta(ip, true, v.length);
+        byte[] delta = Encoding.encodeDelta(ip, true, v.length, ZERO_HASH, ZERO_HASH);
         Encoding.DecodeResult res = Encoding.decodeDelta(delta);
         return Apply.applyDeltaInplace(r, res.commands, res.versionSize);
     }
@@ -141,12 +143,12 @@ public class TestDelta {
                                         CyclePolicy pol, int p) {
         List<Command> cmds = Diff.diff(algo, r, v, opts(p));
         List<PlacedCommand> placed = Apply.placeCommands(cmds);
-        byte[] standard = Encoding.encodeDelta(placed, false, v.length);
+        byte[] standard = Encoding.encodeDelta(placed, false, v.length, ZERO_HASH, ZERO_HASH);
         Encoding.DecodeResult res = Encoding.decodeDelta(standard);
         assertFalse(res.inplace, "standard delta should not be flagged as inplace");
         List<Command> cmds2 = Apply.unplaceCommands(res.commands);
         List<PlacedCommand> ip = Apply.makeInplace(r, cmds2, pol);
-        return Encoding.encodeDelta(ip, true, res.versionSize);
+        return Encoding.encodeDelta(ip, true, res.versionSize, ZERO_HASH, ZERO_HASH);
     }
 
     /**
@@ -241,7 +243,7 @@ public class TestDelta {
         List<PlacedCommand> placed = new ArrayList<>();
         placed.add(new PlacedAdd(0, new byte[]{100, 101, 102}));
         placed.add(new PlacedCopy(888, 3, 488));
-        byte[] encoded = Encoding.encodeDelta(placed, false, 491);
+        byte[] encoded = Encoding.encodeDelta(placed, false, 491, ZERO_HASH, ZERO_HASH);
         Encoding.DecodeResult res = Encoding.decodeDelta(encoded);
         assertFalse(res.inplace, "should not be inplace");
         assertEquals(491, res.versionSize, "version size");
@@ -259,8 +261,8 @@ public class TestDelta {
     static void testBinaryEncodingInplaceFlag() {
         List<PlacedCommand> placed = new ArrayList<>();
         placed.add(new PlacedCopy(0, 10, 5));
-        byte[] standard = Encoding.encodeDelta(placed, false, 15);
-        byte[] inplace  = Encoding.encodeDelta(placed, true,  15);
+        byte[] standard = Encoding.encodeDelta(placed, false, 15, ZERO_HASH, ZERO_HASH);
+        byte[] inplace  = Encoding.encodeDelta(placed, true,  15, ZERO_HASH, ZERO_HASH);
         assertFalse(Encoding.isInplaceDelta(standard), "standard should not be inplace");
         assertTrue( Encoding.isInplaceDelta(inplace),  "inplace should be inplace");
         Encoding.DecodeResult r1 = Encoding.decodeDelta(standard);
@@ -273,7 +275,7 @@ public class TestDelta {
     static void testLargeCopyRoundtrip() {
         List<PlacedCommand> placed = new ArrayList<>();
         placed.add(new PlacedCopy(100_000, 0, 50_000));
-        byte[] encoded = Encoding.encodeDelta(placed, false, 50_000);
+        byte[] encoded = Encoding.encodeDelta(placed, false, 50_000, ZERO_HASH, ZERO_HASH);
         Encoding.DecodeResult res = Encoding.decodeDelta(encoded);
         assertEquals(1, res.commands.size(), "command count");
         PlacedCopy c = (PlacedCopy) res.commands.get(0);
@@ -287,7 +289,7 @@ public class TestDelta {
         for (int i = 0; i < bigData.length; i++) bigData[i] = (byte) (i & 0xFF);
         List<PlacedCommand> placed = new ArrayList<>();
         placed.add(new PlacedAdd(0, bigData));
-        byte[] encoded = Encoding.encodeDelta(placed, false, bigData.length);
+        byte[] encoded = Encoding.encodeDelta(placed, false, bigData.length, ZERO_HASH, ZERO_HASH);
         Encoding.DecodeResult res = Encoding.decodeDelta(encoded);
         assertEquals(1, res.commands.size(), "command count");
         PlacedAdd a = (PlacedAdd) res.commands.get(0);
@@ -414,7 +416,7 @@ public class TestDelta {
         byte[] v = repeat(b("EFGHABCD"), 10);
         List<Command> cmds = Diff.diff(Algorithm.GREEDY, r, v, opts(2));
         List<PlacedCommand> placed = Apply.placeCommands(cmds);
-        byte[] delta = Encoding.encodeDelta(placed, false, v.length);
+        byte[] delta = Encoding.encodeDelta(placed, false, v.length, ZERO_HASH, ZERO_HASH);
         assertFalse(Encoding.isInplaceDelta(delta), "standard should not be detected as inplace");
     }
 
@@ -423,7 +425,7 @@ public class TestDelta {
         byte[] v = repeat(b("EFGHABCD"), 10);
         List<Command> cmds = Diff.diff(Algorithm.GREEDY, r, v, opts(2));
         List<PlacedCommand> ip = Apply.makeInplace(r, cmds, CyclePolicy.LOCALMIN);
-        byte[] delta = Encoding.encodeDelta(ip, true, v.length);
+        byte[] delta = Encoding.encodeDelta(ip, true, v.length, ZERO_HASH, ZERO_HASH);
         assertTrue(Encoding.isInplaceDelta(delta), "inplace delta should be detected");
     }
 
@@ -677,7 +679,7 @@ public class TestDelta {
             for (CyclePolicy pol : ALL_POLICIES) {
                 List<Command> cmds = Diff.diff(algo, r, v, opts(2));
                 List<PlacedCommand> ip = Apply.makeInplace(r, cmds, pol);
-                byte[] ipDelta = Encoding.encodeDelta(ip, true, v.length);
+                byte[] ipDelta = Encoding.encodeDelta(ip, true, v.length, ZERO_HASH, ZERO_HASH);
                 Encoding.DecodeResult res = Encoding.decodeDelta(ipDelta);
                 assertTrue(res.inplace,
                     algo + "/" + pol + ": inplace delta should be detected as inplace");
@@ -700,7 +702,7 @@ public class TestDelta {
                     // Direct path: diff → makeInplace → encode(inplace=true)
                     List<Command> cmds = Diff.diff(algo, r, v, opts(2));
                     List<PlacedCommand> ipDirect = Apply.makeInplace(r, cmds, pol);
-                    byte[] directBytes = Encoding.encodeDelta(ipDirect, true, v.length);
+                    byte[] directBytes = Encoding.encodeDelta(ipDirect, true, v.length, ZERO_HASH, ZERO_HASH);
                     // Subcommand path: diff → place → encode → decode → unplace → makeInplace → encode
                     byte[] subBytes = viaInplaceSubcommand(algo, r, v, pol, 2);
                     assertArrayEquals(directBytes, subBytes,

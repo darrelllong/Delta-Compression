@@ -1,5 +1,6 @@
 #include "delta/encoding.h"
 
+#include <array>
 #include <bit>
 #include <cstring>
 
@@ -26,12 +27,16 @@ static inline uint32_t read_u32_be(const uint8_t* p) {
 std::vector<uint8_t> encode_delta(
     const std::vector<PlacedCommand>& commands,
     bool inplace,
-    size_t version_size) {
+    size_t version_size,
+    const std::array<uint8_t, DELTA_HASH_SIZE>& src_hash,
+    const std::array<uint8_t, DELTA_HASH_SIZE>& dst_hash) {
 
     std::vector<uint8_t> out;
     out.insert(out.end(), DELTA_MAGIC, DELTA_MAGIC + DELTA_MAGIC_SIZE);
     out.push_back(inplace ? DELTA_FLAG_INPLACE : 0);
     write_u32_be(out, static_cast<uint32_t>(version_size));
+    out.insert(out.end(), src_hash.begin(), src_hash.end());
+    out.insert(out.end(), dst_hash.begin(), dst_hash.end());
 
     for (const auto& cmd : commands) {
         if (auto* c = std::get_if<PlacedCopy>(&cmd)) {
@@ -51,7 +56,9 @@ std::vector<uint8_t> encode_delta(
     return out;
 }
 
-std::tuple<std::vector<PlacedCommand>, bool, size_t> decode_delta(
+std::tuple<std::vector<PlacedCommand>, bool, size_t,
+           std::array<uint8_t, DELTA_HASH_SIZE>,
+           std::array<uint8_t, DELTA_HASH_SIZE>> decode_delta(
     std::span<const uint8_t> data) {
 
     if (data.size() < DELTA_HEADER_SIZE
@@ -61,6 +68,12 @@ std::tuple<std::vector<PlacedCommand>, bool, size_t> decode_delta(
 
     bool inplace = (data[DELTA_MAGIC_SIZE] & DELTA_FLAG_INPLACE) != 0;
     size_t version_size = read_u32_be(&data[DELTA_MAGIC_SIZE + 1]);
+
+    const size_t hash_offset = DELTA_MAGIC_SIZE + 1 + DELTA_U32_SIZE;
+    std::array<uint8_t, DELTA_HASH_SIZE> src_hash{}, dst_hash{};
+    std::memcpy(src_hash.data(), &data[hash_offset], DELTA_HASH_SIZE);
+    std::memcpy(dst_hash.data(), &data[hash_offset + DELTA_HASH_SIZE], DELTA_HASH_SIZE);
+
     size_t pos = DELTA_HEADER_SIZE;
     std::vector<PlacedCommand> commands;
 
@@ -70,7 +83,7 @@ std::tuple<std::vector<PlacedCommand>, bool, size_t> decode_delta(
 
         switch (t) {
         case DELTA_CMD_END:
-            return {std::move(commands), inplace, version_size};
+            return {std::move(commands), inplace, version_size, src_hash, dst_hash};
 
         case DELTA_CMD_COPY: {
             if (pos + DELTA_COPY_PAYLOAD > data.size()) {
@@ -104,7 +117,7 @@ std::tuple<std::vector<PlacedCommand>, bool, size_t> decode_delta(
         }
     }
 
-    return {std::move(commands), inplace, version_size};
+    return {std::move(commands), inplace, version_size, src_hash, dst_hash};
 }
 
 bool is_inplace_delta(std::span<const uint8_t> data) {

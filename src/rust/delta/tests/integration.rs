@@ -1,7 +1,8 @@
 use delta::{
     apply_delta, apply_delta_inplace, decode_delta, diff_correcting, diff_greedy, diff_onepass,
     encode_delta, is_inplace_delta, is_prime, make_inplace, next_prime, output_size,
-    place_commands, unplace_commands, Command, CyclePolicy, DiffOptions, PlacedCommand, TABLE_SIZE,
+    place_commands, shake128_16, unplace_commands, Command, CyclePolicy, DeltaError, DiffOptions,
+    PlacedCommand, TABLE_SIZE,
 };
 
 // ── helpers ──────────────────────────────────────────────────────────────
@@ -15,8 +16,10 @@ fn opts(p: usize) -> DiffOptions {
 fn roundtrip(algo_fn: DiffFn, r: &[u8], v: &[u8], p: usize) -> Vec<u8> {
     let cmds = algo_fn(r, v, &opts(p));
     let placed = place_commands(&cmds);
-    let delta = encode_delta(&placed, false, output_size(&cmds));
-    let (placed2, _, _) = decode_delta(&delta).unwrap();
+    let delta = encode_delta(&placed, false, output_size(&cmds), &shake128_16(r), &shake128_16(v));
+    let (placed2, _, _, sh, dh) = decode_delta(&delta).unwrap();
+    assert_eq!(sh, shake128_16(r));
+    assert_eq!(dh, shake128_16(v));
     // Apply standard: read from r, write sequentially
     let mut out = vec![0u8; v.len()];
     delta::apply_placed_to(r, &placed2, &mut out);
@@ -44,8 +47,10 @@ fn inplace_binary_roundtrip(
 ) -> Vec<u8> {
     let cmds = algo_fn(r, v, &opts(p));
     let (ip, _) = make_inplace(r, &cmds, policy);
-    let delta = encode_delta(&ip, true, v.len());
-    let (ip2, _, vs) = decode_delta(&delta).unwrap();
+    let delta = encode_delta(&ip, true, v.len(), &shake128_16(r), &shake128_16(v));
+    let (ip2, _, vs, sh, dh) = decode_delta(&delta).unwrap();
+    assert_eq!(sh, shake128_16(r));
+    assert_eq!(dh, shake128_16(v));
     apply_delta_inplace(r, &ip2, vs)
 }
 
@@ -160,10 +165,14 @@ fn test_binary_encoding_roundtrip() {
             length: 488,
         },
     ];
-    let encoded = encode_delta(&placed, false, 491);
-    let (decoded, is_ip, vs) = decode_delta(&encoded).unwrap();
+    let sh = [0u8; 16];
+    let dh = [0xffu8; 16];
+    let encoded = encode_delta(&placed, false, 491, &sh, &dh);
+    let (decoded, is_ip, vs, sh2, dh2) = decode_delta(&encoded).unwrap();
     assert!(!is_ip);
     assert_eq!(vs, 491);
+    assert_eq!(sh2, sh);
+    assert_eq!(dh2, dh);
     assert_eq!(decoded, placed);
 }
 
@@ -174,19 +183,34 @@ fn test_binary_encoding_inplace_flag() {
         dst: 10,
         length: 5,
     }];
-    let standard = encode_delta(&placed, false, 15);
-    let inplace = encode_delta(&placed, true, 15);
+    let sh = [1u8; 16];
+    let dh = [2u8; 16];
+    let standard = encode_delta(&placed, false, 15, &sh, &dh);
+    let inplace_enc = encode_delta(&placed, true, 15, &sh, &dh);
 
     assert!(!is_inplace_delta(&standard));
-    assert!(is_inplace_delta(&inplace));
+    assert!(is_inplace_delta(&inplace_enc));
 
     // Both decode to the same commands
-    let (d1, ip1, vs1) = decode_delta(&standard).unwrap();
-    let (d2, ip2, vs2) = decode_delta(&inplace).unwrap();
+    let (d1, ip1, vs1, _, _) = decode_delta(&standard).unwrap();
+    let (d2, ip2, vs2, _, _) = decode_delta(&inplace_enc).unwrap();
     assert!(!ip1);
     assert!(ip2);
     assert_eq!(vs1, vs2);
     assert_eq!(d1, d2);
+}
+
+#[test]
+fn test_binary_encoding_magic_v2() {
+    let encoded = encode_delta(&[], false, 0, &[0u8; 16], &[0u8; 16]);
+    assert_eq!(&encoded[..4], b"DLT\x02");
+}
+
+#[test]
+fn test_binary_encoding_wrong_magic_rejected() {
+    let mut bad = encode_delta(&[], false, 0, &[0u8; 16], &[0u8; 16]);
+    bad[3] = 0x01; // downgrade to v1
+    assert!(matches!(decode_delta(&bad), Err(DeltaError::InvalidFormat(_))));
 }
 
 // TestLargeCopy
@@ -197,8 +221,10 @@ fn test_large_copy_roundtrip() {
         dst: 0,
         length: 50000,
     }];
-    let encoded = encode_delta(&placed, false, 50000);
-    let (decoded, _, _) = decode_delta(&encoded).unwrap();
+    let sh = [3u8; 16];
+    let dh = [4u8; 16];
+    let encoded = encode_delta(&placed, false, 50000, &sh, &dh);
+    let (decoded, _, _, _, _) = decode_delta(&encoded).unwrap();
     assert_eq!(decoded.len(), 1);
     match &decoded[0] {
         PlacedCommand::Copy { src, dst, length } => {
@@ -218,8 +244,10 @@ fn test_large_add_roundtrip() {
         dst: 0,
         data: big_data.clone(),
     }];
-    let encoded = encode_delta(&placed, false, big_data.len());
-    let (decoded, _, _) = decode_delta(&encoded).unwrap();
+    let sh = [5u8; 16];
+    let dh = [6u8; 16];
+    let encoded = encode_delta(&placed, false, big_data.len(), &sh, &dh);
+    let (decoded, _, _, _, _) = decode_delta(&encoded).unwrap();
     assert_eq!(decoded.len(), 1);
     match &decoded[0] {
         PlacedCommand::Add { dst, data } => {
@@ -469,7 +497,7 @@ fn test_standard_not_detected_as_inplace() {
         .collect();
     let cmds = diff_greedy(&r, &v, &opts(2));
     let placed = place_commands(&cmds);
-    let delta = encode_delta(&placed, false, v.len());
+    let delta = encode_delta(&placed, false, v.len(), &shake128_16(&r), &shake128_16(&v));
     assert!(!is_inplace_delta(&delta));
 }
 
@@ -489,7 +517,7 @@ fn test_inplace_detected() {
         .collect();
     let cmds = diff_greedy(&r, &v, &opts(2));
     let (ip, _) = make_inplace(&r, &cmds, CyclePolicy::Localmin);
-    let delta = encode_delta(&ip, true, v.len());
+    let delta = encode_delta(&ip, true, v.len(), &shake128_16(&r), &shake128_16(&v));
     assert!(is_inplace_delta(&delta));
 }
 
@@ -807,16 +835,18 @@ fn via_inplace_subcommand(
     policy: CyclePolicy,
     p: usize,
 ) -> Vec<u8> {
-    // Step 1: encode a standard delta
+    // Step 1: encode a standard delta (compute hashes in same pass as data)
     let cmds = algo_fn(r, v, &opts(p));
     let placed = place_commands(&cmds);
-    let standard = encode_delta(&placed, false, v.len());
-    // Step 2: decode it back, unplace, convert to inplace
-    let (placed2, is_ip, version_size) = decode_delta(&standard).unwrap();
+    let sh = shake128_16(r);
+    let dh = shake128_16(v);
+    let standard = encode_delta(&placed, false, v.len(), &sh, &dh);
+    // Step 2: decode it back, unplace, convert to inplace; preserve hashes
+    let (placed2, is_ip, version_size, src_hash, dst_hash) = decode_delta(&standard).unwrap();
     assert!(!is_ip, "standard delta should not be flagged as inplace");
     let cmds2 = unplace_commands(&placed2);
     let (ip, _) = make_inplace(r, &cmds2, policy);
-    encode_delta(&ip, true, version_size)
+    encode_delta(&ip, true, version_size, &src_hash, &dst_hash)
 }
 
 #[test]
@@ -834,7 +864,10 @@ fn test_inplace_subcommand_roundtrip() {
         for (_, algo_fn) in all_algos() {
             for (_, pol) in all_policies() {
                 let ip_delta = via_inplace_subcommand(algo_fn, r, v, pol, 2);
-                let recovered = apply_delta_inplace(r, &decode_delta(&ip_delta).unwrap().0, v.len());
+                let (cmds, _, _, sh, dh) = decode_delta(&ip_delta).unwrap();
+                assert_eq!(sh, shake128_16(r));
+                assert_eq!(dh, shake128_16(v));
+                let recovered = apply_delta_inplace(r, &cmds, v.len());
                 assert_eq!(recovered, *v,
                     "subcommand roundtrip failed for r={:?} v={:?}", r, v);
             }
@@ -852,14 +885,16 @@ fn test_inplace_subcommand_idempotent() {
         for (_, pol) in all_policies() {
             let cmds = algo_fn(r, v, &opts(2));
             let (ip, _) = make_inplace(r, &cmds, pol);
-            let ip_delta = encode_delta(&ip, true, v.len());
+            let sh = shake128_16(r);
+            let dh = shake128_16(v);
+            let ip_delta = encode_delta(&ip, true, v.len(), &sh, &dh);
 
             // Feeding the inplace delta to the subcommand logic should detect
             // is_ip=true and return the bytes unchanged.
-            let (_, is_ip, _) = decode_delta(&ip_delta).unwrap();
+            let (_, is_ip, _, sh2, dh2) = decode_delta(&ip_delta).unwrap();
             assert!(is_ip, "inplace delta should be detected as inplace");
-            // The subcommand copies it unchanged — output == input bytes.
-            // (No re-conversion; just pass-through.)
+            assert_eq!(sh2, sh);
+            assert_eq!(dh2, dh);
         }
     }
 }
@@ -878,10 +913,12 @@ fn test_inplace_subcommand_equiv_direct() {
     for (r, v) in cases {
         for (_, algo_fn) in all_algos() {
             for (_, pol) in all_policies() {
+                let sh = shake128_16(r);
+                let dh = shake128_16(v);
                 // Direct path
                 let cmds = algo_fn(r, v, &opts(2));
                 let (ip_direct, _) = make_inplace(r, &cmds, pol);
-                let direct_bytes = encode_delta(&ip_direct, true, v.len());
+                let direct_bytes = encode_delta(&ip_direct, true, v.len(), &sh, &dh);
 
                 // Subcommand path
                 let subcommand_bytes = via_inplace_subcommand(algo_fn, r, v, pol, 2);
@@ -891,4 +928,52 @@ fn test_inplace_subcommand_equiv_direct() {
             }
         }
     }
+}
+
+// ── shake128_16 tests ─────────────────────────────────────────────────────
+
+#[test]
+fn test_shake128_16_output_length() {
+    assert_eq!(shake128_16(b"").len(), 16);
+    assert_eq!(shake128_16(b"hello").len(), 16);
+}
+
+#[test]
+fn test_shake128_16_deterministic() {
+    assert_eq!(shake128_16(b"test"), shake128_16(b"test"));
+}
+
+#[test]
+fn test_shake128_16_differs_on_different_input() {
+    assert_ne!(shake128_16(b"hello"), shake128_16(b"world"));
+}
+
+#[test]
+fn test_shake128_16_nist_empty() {
+    // NIST FIPS 202 SHAKE128 test vector: empty message, first 16 bytes
+    let expected = [
+        0x7f, 0x9c, 0x2b, 0xa4, 0xe8, 0x8f, 0x82, 0x7d,
+        0x61, 0x60, 0x45, 0x50, 0x76, 0x05, 0x85, 0x3e,
+    ];
+    assert_eq!(shake128_16(b""), expected);
+}
+
+#[test]
+fn test_shake128_16_nist_one_byte_bd() {
+    // NIST FIPS 202 SHAKE128 test vector: msg = 0xbd, first 16 bytes
+    let expected = [
+        0x83, 0x38, 0x82, 0x86, 0xb2, 0xc0, 0x06, 0x5e,
+        0xd2, 0x37, 0xfb, 0xe7, 0x14, 0xfc, 0x31, 0x63,
+    ];
+    assert_eq!(shake128_16(b"\xbd"), expected);
+}
+
+#[test]
+fn test_shake128_16_nist_200_byte_a3() {
+    // NIST FIPS 202 SHAKE128 test vector: msg = 0xa3 * 200, first 16 bytes
+    let expected = [
+        0x13, 0x1a, 0xb8, 0xd2, 0xb5, 0x94, 0x94, 0x6b,
+        0x9c, 0x81, 0x33, 0x3f, 0x9b, 0xb6, 0xe0, 0xce,
+    ];
+    assert_eq!(shake128_16(&[0xa3u8; 200]), expected);
 }

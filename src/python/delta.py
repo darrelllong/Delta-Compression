@@ -24,6 +24,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import heapq
 import mmap
 import os
@@ -884,10 +885,12 @@ def unplace_commands(placed: List[PlacedCommand]) -> List[Command]:
 # ============================================================================
 # Unified Binary Delta Format
 #
-# Header:
-#   Magic:        4 bytes  b'DLT\x01'
+# Header (v2):
+#   Magic:        4 bytes  b'DLT\x02'
 #   Flags:        1 byte   (0x00 = standard, 0x01 = in-place)
 #   Version size: 4 bytes  uint32 BE
+#   Src hash:    16 bytes  SHAKE128(16) of reference file
+#   Dst hash:    16 bytes  SHAKE128(16) of version/output file
 #
 # Commands (in execution order):
 #   END:  type=0                                     (1 byte)
@@ -895,24 +898,37 @@ def unplace_commands(placed: List[PlacedCommand]) -> List[Command]:
 #   ADD:  type=2, dst:u32, len:u32, data             (9 + len bytes)
 # ============================================================================
 
-DELTA_MAGIC = b'DLT\x01'
+DELTA_MAGIC = b'DLT\x02'
 DELTA_FLAG_INPLACE = 0x01
 DELTA_CMD_END = 0
 DELTA_CMD_COPY = 1
 DELTA_CMD_ADD = 2
-DELTA_HEADER_SIZE = 9   # magic(4) + flags(1) + version_size(4)
+DELTA_HASH_SIZE = 16
+DELTA_HEADER_SIZE = 41  # magic(4) + flags(1) + version_size(4) + src_hash(16) + dst_hash(16)
 DELTA_U32_SIZE = 4
 DELTA_COPY_PAYLOAD = 12 # src(4) + dst(4) + len(4)
 DELTA_ADD_HEADER = 8    # dst(4) + len(4)
 
 
+def _shake128(data: bytes) -> bytes:
+    """Compute SHAKE128 hash with 16 bytes of output (FIPS 202 XOF)."""
+    return hashlib.shake_128(data).digest(DELTA_HASH_SIZE)
+
+
 def encode_delta(commands: List[PlacedCommand], *,
-                 inplace: bool = False, version_size: int) -> bytes:
-    """Encode placed commands to the unified binary delta format."""
+                 inplace: bool = False, version_size: int,
+                 src_hash: bytes, dst_hash: bytes) -> bytes:
+    """Encode placed commands to the unified binary delta format.
+
+    src_hash and dst_hash must each be exactly DELTA_HASH_SIZE (16) bytes,
+    produced by _shake128() over the reference and version data respectively.
+    """
     out = bytearray()
     out.extend(DELTA_MAGIC)
     out.append(DELTA_FLAG_INPLACE if inplace else 0)
     out.extend(struct.pack('>I', version_size))
+    out.extend(src_hash)
+    out.extend(dst_hash)
 
     for cmd in commands:
         if isinstance(cmd, PlacedCopy):
@@ -930,13 +946,17 @@ def encode_delta(commands: List[PlacedCommand], *,
 def decode_delta(data: bytes):
     """Decode the unified binary delta format.
 
-    Returns (commands, inplace, version_size).
+    Returns (commands, inplace, version_size, src_hash, dst_hash).
+    Hash validation is the caller's responsibility.
     """
     if len(data) < DELTA_HEADER_SIZE or data[:len(DELTA_MAGIC)] != DELTA_MAGIC:
         raise ValueError("Not a delta file")
 
     inplace = bool(data[len(DELTA_MAGIC)] & DELTA_FLAG_INPLACE)
     version_size = struct.unpack_from('>I', data, len(DELTA_MAGIC) + 1)[0]
+    hash_offset = len(DELTA_MAGIC) + 1 + DELTA_U32_SIZE
+    src_hash = bytes(data[hash_offset:hash_offset + DELTA_HASH_SIZE])
+    dst_hash = bytes(data[hash_offset + DELTA_HASH_SIZE:hash_offset + 2 * DELTA_HASH_SIZE])
     pos = DELTA_HEADER_SIZE
     commands: List[PlacedCommand] = []
 
@@ -955,7 +975,7 @@ def decode_delta(data: bytes):
             commands.append(PlacedAdd(dst=dst, data=data[pos:pos + length]))
             pos += length
 
-    return commands, inplace, version_size
+    return commands, inplace, version_size, src_hash, dst_hash
 
 
 def is_inplace_delta(data: bytes) -> bool:
@@ -1045,7 +1065,7 @@ def apply_delta(R, commands: List[Command]) -> bytes:
 
 def apply_binary(R: bytes, delta: bytes) -> bytes:
     """Reconstruct version from reference + binary delta (auto-detects format)."""
-    commands, inplace, version_size = decode_delta(delta)
+    commands, inplace, version_size, _src_hash, _dst_hash = decode_delta(delta)
     if inplace:
         return apply_placed_inplace(R, commands, version_size)
     else:
@@ -1449,6 +1469,31 @@ def placed_summary(commands: List[PlacedCommand]) -> dict:
 
 
 # ============================================================================
+# File I/O helpers
+# ============================================================================
+
+def _read_with_hash(path: str):
+    """Read a file in one sequential pass, returning (data, shake128_16_hash).
+
+    Hash is computed incrementally while reading so no second pass is needed.
+    Data is returned as bytes (may be large for big files).
+    """
+    h = hashlib.shake_128()
+    size = os.path.getsize(path)
+    if size == 0:
+        return b'', h.digest(DELTA_HASH_SIZE)
+    parts = []
+    with open(path, 'rb') as f:
+        while True:
+            chunk = f.read(1 << 20)  # 1 MB chunks
+            if not chunk:
+                break
+            h.update(chunk)
+            parts.append(chunk)
+    return b''.join(parts), h.digest(DELTA_HASH_SIZE)
+
+
+# ============================================================================
 # Memory-mapped file I/O for large files
 # ============================================================================
 
@@ -1519,81 +1564,106 @@ def cmd_encode(args):
         verbose=args.verbose,
         max_table=args.max_table,
     )
-    with mmap_open(args.reference) as R, mmap_open(args.version) as V:
-        t0 = time.time()
-        commands = algo(R, V, opts=opts)
 
-        cycles_broken = 0
-        if args.inplace:
-            placed, ip_stats = make_inplace(R, commands, policy=args.policy,
-                                            return_stats=True)
-            cycles_broken = ip_stats.get('cycles_broken', 0)
-        else:
-            placed = place_commands(commands)
-        elapsed = time.time() - t0
+    # Read files and compute SHAKE128 hashes in a single sequential pass each.
+    R, src_hash = _read_with_hash(args.reference)
+    V, dst_hash = _read_with_hash(args.version)
 
-        delta = encode_delta(placed, inplace=args.inplace,
-                             version_size=len(V))
-        with open(args.delta, 'wb') as f:
-            f.write(delta)
+    t0 = time.time()
+    commands = algo(R, V, opts=opts)
 
-        stats = placed_summary(placed)
-        ratio = len(delta) / len(V) if V else 0
-        if args.inplace:
-            print(f"Algorithm:    {args.algorithm} + in-place ({args.policy})")
-        else:
-            print(f"Algorithm:    {args.algorithm}")
-        print(f"Reference:    {args.reference} ({len(R):,} bytes)")
-        print(f"Version:      {args.version} ({len(V):,} bytes)")
-        print(f"Delta:        {args.delta} ({len(delta):,} bytes)")
-        print(f"Compression:  {ratio:.4f} (delta/version)")
-        print(f"Commands:     {stats['num_copies']} copies, {stats['num_adds']} adds")
-        if args.inplace:
-            print(f"Cycles broken: {cycles_broken}")
-        print(f"Copy bytes:   {stats['copy_bytes']:,}")
-        print(f"Add bytes:    {stats['add_bytes']:,}")
-        print(f"Time:         {elapsed:.3f}s")
+    cycles_broken = 0
+    if args.inplace:
+        placed, ip_stats = make_inplace(R, commands, policy=args.policy,
+                                        return_stats=True)
+        cycles_broken = ip_stats.get('cycles_broken', 0)
+    else:
+        placed = place_commands(commands)
+    elapsed = time.time() - t0
+
+    delta = encode_delta(placed, inplace=args.inplace, version_size=len(V),
+                         src_hash=src_hash, dst_hash=dst_hash)
+    with open(args.delta, 'wb') as f:
+        f.write(delta)
+
+    stats = placed_summary(placed)
+    ratio = len(delta) / len(V) if V else 0
+    if args.inplace:
+        print(f"Algorithm:    {args.algorithm} + in-place ({args.policy})")
+    else:
+        print(f"Algorithm:    {args.algorithm}")
+    print(f"Reference:    {args.reference} ({len(R):,} bytes)")
+    print(f"Version:      {args.version} ({len(V):,} bytes)")
+    print(f"Delta:        {args.delta} ({len(delta):,} bytes)")
+    print(f"Compression:  {ratio:.4f} (delta/version)")
+    print(f"Commands:     {stats['num_copies']} copies, {stats['num_adds']} adds")
+    if args.inplace:
+        print(f"Cycles broken: {cycles_broken}")
+    print(f"Copy bytes:   {stats['copy_bytes']:,}")
+    print(f"Add bytes:    {stats['add_bytes']:,}")
+    if args.verbose:
+        print(f"Src hash:     {src_hash.hex()}")
+        print(f"Dst hash:     {dst_hash.hex()}")
+    print(f"Time:         {elapsed:.3f}s")
 
 
 def cmd_decode(args):
-    with mmap_open(args.reference) as R:
-        with open(args.delta, 'rb') as f:
-            delta_bytes = f.read()
+    # Read reference and compute its hash in one sequential pass.
+    R, r_hash_actual = _read_with_hash(args.reference)
 
-        t0 = time.time()
-        placed, is_ip, version_size = decode_delta(delta_bytes)
+    with open(args.delta, 'rb') as f:
+        delta_bytes = f.read()
 
-        if is_ip:
-            buf_size = max(len(R), version_size)
-            with mmap_create(args.output, buf_size) as buf:
-                buf[:len(R)] = R[:len(R)]
-                apply_placed_inplace_to(placed, buf)
-            if version_size < buf_size:
-                os.truncate(args.output, version_size)
-        else:
-            with mmap_create(args.output, version_size) as buf:
-                apply_placed_to(R, placed, buf)
-        elapsed = time.time() - t0
+    t0 = time.time()
+    placed, is_ip, version_size, src_hash, dst_hash = decode_delta(delta_bytes)
 
-        fmt = "in-place" if is_ip else "standard"
-        print(f"Format:       {fmt}")
-        print(f"Reference:    {args.reference} ({len(R):,} bytes)")
-        print(f"Delta:        {args.delta} ({len(delta_bytes):,} bytes)")
-        print(f"Output:       {args.output} ({version_size:,} bytes)")
-        print(f"Time:         {elapsed:.3f}s")
+    # Pre-check: verify reference matches what was recorded at encode time.
+    if r_hash_actual != src_hash:
+        raise SystemExit(
+            f"error: source file does not match delta: "
+            f"expected {src_hash.hex()}, got {r_hash_actual.hex()}"
+        )
+
+    output_hash = None
+    if is_ip:
+        buf_size = max(len(R), version_size)
+        with mmap_create(args.output, buf_size) as buf:
+            buf[:len(R)] = R[:len(R)]
+            apply_placed_inplace_to(placed, buf)
+            output_hash = _shake128(bytes(buf[:version_size]))
+        if version_size < buf_size:
+            os.truncate(args.output, version_size)
+    else:
+        with mmap_create(args.output, version_size) as buf:
+            apply_placed_to(R, placed, buf)
+            output_hash = _shake128(bytes(buf[:version_size]))
+    elapsed = time.time() - t0
+
+    # Post-check: verify reconstructed output matches recorded dest hash.
+    if output_hash != dst_hash:
+        raise SystemExit("error: output integrity check failed")
+
+    fmt = "in-place" if is_ip else "standard"
+    print(f"Format:       {fmt}")
+    print(f"Reference:    {args.reference} ({len(R):,} bytes)")
+    print(f"Delta:        {args.delta} ({len(delta_bytes):,} bytes)")
+    print(f"Output:       {args.output} ({version_size:,} bytes)")
+    print(f"Time:         {elapsed:.3f}s")
 
 
 def cmd_info(args):
     with open(args.delta, 'rb') as f:
         delta_bytes = f.read()
 
-    placed, is_ip, version_size = decode_delta(delta_bytes)
+    placed, is_ip, version_size, src_hash, dst_hash = decode_delta(delta_bytes)
     stats = placed_summary(placed)
     fmt = "in-place" if is_ip else "standard"
 
     print(f"Delta file:   {args.delta} ({len(delta_bytes):,} bytes)")
     print(f"Format:       {fmt}")
     print(f"Version size: {version_size:,} bytes")
+    print(f"Src hash:     {src_hash.hex()}")
+    print(f"Dst hash:     {dst_hash.hex()}")
     print(f"Commands:     {stats['num_commands']}")
     print(f"  Copies:     {stats['num_copies']} ({stats['copy_bytes']:,} bytes)")
     print(f"  Adds:       {stats['num_adds']} ({stats['add_bytes']:,} bytes)")
@@ -1601,38 +1671,41 @@ def cmd_info(args):
 
 
 def cmd_inplace(args):
-    with mmap_open(args.reference) as R:
-        with open(args.delta_in, 'rb') as f:
-            delta_bytes = f.read()
+    # Read reference and compute hash in one sequential pass.
+    R, _r_hash = _read_with_hash(args.reference)
 
-        placed, is_ip, version_size = decode_delta(delta_bytes)
+    with open(args.delta_in, 'rb') as f:
+        delta_bytes = f.read()
 
-        if is_ip:
-            # Already in-place — just copy
-            with open(args.delta_out, 'wb') as f:
-                f.write(delta_bytes)
-            print("Delta is already in-place format; copied unchanged.")
-            return
+    placed, is_ip, version_size, src_hash, dst_hash = decode_delta(delta_bytes)
 
-        t0 = time.time()
-        commands = unplace_commands(placed)
-        ip_placed = make_inplace(R, commands, policy=args.policy)
-        elapsed = time.time() - t0
-
-        ip_delta = encode_delta(ip_placed, inplace=True,
-                                version_size=version_size)
+    if is_ip:
+        # Already in-place — just copy
         with open(args.delta_out, 'wb') as f:
-            f.write(ip_delta)
+            f.write(delta_bytes)
+        print("Delta is already in-place format; copied unchanged.")
+        return
 
-        stats = placed_summary(ip_placed)
-        print(f"Reference:    {args.reference} ({len(R):,} bytes)")
-        print(f"Input delta:  {args.delta_in} ({len(delta_bytes):,} bytes)")
-        print(f"Output delta: {args.delta_out} ({len(ip_delta):,} bytes)")
-        print(f"Format:       in-place ({args.policy})")
-        print(f"Commands:     {stats['num_copies']} copies, {stats['num_adds']} adds")
-        print(f"Copy bytes:   {stats['copy_bytes']:,}")
-        print(f"Add bytes:    {stats['add_bytes']:,}")
-        print(f"Time:         {elapsed:.3f}s")
+    t0 = time.time()
+    commands = unplace_commands(placed)
+    ip_placed = make_inplace(R, commands, policy=args.policy)
+    elapsed = time.time() - t0
+
+    # Preserve the original src_hash and dst_hash from the input delta.
+    ip_delta = encode_delta(ip_placed, inplace=True, version_size=version_size,
+                            src_hash=src_hash, dst_hash=dst_hash)
+    with open(args.delta_out, 'wb') as f:
+        f.write(ip_delta)
+
+    stats = placed_summary(ip_placed)
+    print(f"Reference:    {args.reference} ({len(R):,} bytes)")
+    print(f"Input delta:  {args.delta_in} ({len(delta_bytes):,} bytes)")
+    print(f"Output delta: {args.delta_out} ({len(ip_delta):,} bytes)")
+    print(f"Format:       in-place ({args.policy})")
+    print(f"Commands:     {stats['num_copies']} copies, {stats['num_adds']} adds")
+    print(f"Copy bytes:   {stats['copy_bytes']:,}")
+    print(f"Add bytes:    {stats['add_bytes']:,}")
+    print(f"Time:         {elapsed:.3f}s")
 
 
 def main():

@@ -1,7 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
 #include <delta/hash.h>
+#include <delta/sha3.h>
 #include <delta/types.h>
 
+#include <array>
+#include <cstdint>
+#include <string>
 #include <vector>
 
 using namespace delta;
@@ -102,4 +106,57 @@ TEST_CASE("next_prime consecutive range produces valid primes", "[hash]") {
 
 TEST_CASE("TABLE_SIZE is prime", "[hash]") {
     CHECK(is_prime(TABLE_SIZE));
+}
+
+// ── SHAKE128 NIST FIPS 202 test vectors ──────────────────────────────────
+
+static std::string to_hex(const std::array<uint8_t, DELTA_HASH_SIZE>& h) {
+    std::string s;
+    s.reserve(DELTA_HASH_SIZE * 2);
+    for (auto b : h) {
+        char buf[3];
+        std::snprintf(buf, sizeof(buf), "%02x", b);
+        s += buf;
+    }
+    return s;
+}
+
+TEST_CASE("shake128_16 NIST vector: empty input", "[hash]") {
+    // NIST FIPS 202 / SHA-3 test vectors: SHAKE128("", 16 bytes)
+    static const uint8_t kEmpty[1] = {};
+    auto h = shake128_16(kEmpty, 0);
+    CHECK(to_hex(h) == "7f9c2ba4e88f827d616045507605853e");
+}
+
+TEST_CASE("shake128_16 NIST vector: one byte 0xbd", "[hash]") {
+    // SHAKE128(b'\xbd', 16 bytes)
+    uint8_t data[] = {0xbd};
+    auto h = shake128_16(data, 1);
+    CHECK(to_hex(h) == "83388286b2c0065ed237fbe714fc3163");
+}
+
+TEST_CASE("shake128_16 NIST vector: 200 bytes of 0xa3", "[hash]") {
+    // SHAKE128(b'\xa3' * 200, 16 bytes)
+    std::vector<uint8_t> data(200, 0xa3);
+    auto h = shake128_16(data.data(), data.size());
+    CHECK(to_hex(h) == "131ab8d2b594946b9c81333f9bb6e0ce");
+}
+
+TEST_CASE("shake128_16 output length is DELTA_HASH_SIZE", "[hash]") {
+    uint8_t data[] = {0x01, 0x02, 0x03};
+    auto h = shake128_16(data, 3);
+    CHECK(h.size() == DELTA_HASH_SIZE);
+}
+
+TEST_CASE("shake128_16 is deterministic", "[hash]") {
+    uint8_t data[] = {'h', 'e', 'l', 'l', 'o'};
+    auto h1 = shake128_16(data, 5);
+    auto h2 = shake128_16(data, 5);
+    CHECK(h1 == h2);
+}
+
+TEST_CASE("shake128_16 differs on different input", "[hash]") {
+    uint8_t a[] = {'a', 'b', 'c'};
+    uint8_t b[] = {'a', 'b', 'd'};
+    CHECK(shake128_16(a, 3) != shake128_16(b, 3));
 }
