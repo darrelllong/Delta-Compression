@@ -90,7 +90,7 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
                   const delta_diff_options_t *opts)
 {
 	delta_commands_t commands;
-	greedy_htable_t ht;
+	greedy_htable_t ht = {NULL, 0};
 	delta_splay_t splay;
 	delta_rolling_hash_t rh_r, rh_v;
 	int rh_v_valid = 0;
