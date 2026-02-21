@@ -138,7 +138,7 @@ public final class Hash {
     /**
      * Streaming SHAKE128 context.  Call update() any number of times, then finish().
      *
-     * <p>LIMITATION: the squeeze step ({@link #finish()}) always emits exactly 16 bytes.
+     * LIMITATION: the squeeze step (finish()) always emits exactly 16 bytes.
      * The absorb path (update) handles arbitrary-length input correctly.  To support
      * longer output, finish() would need to loop — extracting up to RATE (168) bytes
      * per keccakF1600 call — until the requested number of bytes have been produced.
@@ -193,8 +193,8 @@ public final class Hash {
         /**
          * Finalize and return exactly 16 bytes of output.
          *
-         * <p>Squeezes one rate block (168 bytes) and returns the first 16.
-         * 16 &lt; RATE, so one permutation call is always sufficient here.
+         * Squeezes one rate block (168 bytes) and returns the first 16.
+         * 16 < RATE, so one permutation call is always sufficient here.
          * To support longer output, loop: extract up to RATE bytes per
          * keccakF1600 call, repeat until the desired length is reached.
          */
