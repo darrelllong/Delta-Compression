@@ -4,6 +4,12 @@ project(delta_cpp LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# GCC 12 emits a false-positive -Wstringop-overflow on vector::insert with
+# uint8_t data when it can't prove the buffer is non-empty after reallocation.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    add_compile_options(-Wno-stringop-overflow)
+endif()
+
 # Default to Release build if not specified.
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
