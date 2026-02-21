@@ -507,15 +507,15 @@ then runs cross-language compatibility tests):
 Individual suites:
 
 ```bash
-# Python — 180 tests
+# Python — 178 tests
 cd src/python
 python3 -m unittest test_delta -v
 
-# Rust — 67 tests
+# Rust — 64 tests
 cd src/rust/delta
 cargo test
 
-# C++ — 55 test cases
+# C++ — 53 test cases
 cd src/cpp
 cmake -B build && cmake --build build
 ctest --test-dir build
@@ -524,7 +524,7 @@ ctest --test-dir build
 cd src/c
 make && bash test_delta.sh
 
-# Java — 43 unit tests
+# Java — 41 unit tests
 cd src/java
 make test
 ```
