@@ -284,7 +284,16 @@ delta_commands_t delta_diff(
 	const delta_diff_options_t *opts);
 
 /* ====================================================================
- * SHAKE128 hash (FIPS 202 XOF, 16-byte output)
+ * SHAKE128 hash (FIPS 202 XOF) — restricted to 16-byte output
+ *
+ * LIMITATION: the squeeze step always emits exactly DELTA_HASH_SIZE
+ * (16) bytes.  The absorb path (init/update) is fully general and
+ * handles arbitrary-length input correctly.  The final/squeeze path
+ * applies one Keccak-p[1600,24] permutation and reads 16 bytes from
+ * the first lane.  To support longer output, replace the fixed-length
+ * squeeze in delta_shake128_final with a loop that extracts up to
+ * DELTA_SHAKE128_RATE bytes per permutation call until the requested
+ * number of bytes have been produced.
  * ==================================================================== */
 
 /* Streaming context: absorb data in chunks, then finalize. */
@@ -299,10 +308,12 @@ typedef struct {
 void delta_shake128_init(delta_shake128_ctx_t *ctx);
 void delta_shake128_update(delta_shake128_ctx_t *ctx,
                            const uint8_t *data, size_t len);
+
+/* Squeeze exactly DELTA_HASH_SIZE (16) bytes.  See limitation above. */
 void delta_shake128_final(delta_shake128_ctx_t *ctx,
                           uint8_t out[DELTA_HASH_SIZE]);
 
-/* Convenience: hash entire buffer in one call. */
+/* Convenience: absorb + squeeze in one call.  Output is 16 bytes. */
 void delta_shake128_16(const uint8_t *data, size_t len,
                        uint8_t out[DELTA_HASH_SIZE]);
 

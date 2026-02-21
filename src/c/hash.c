@@ -329,7 +329,10 @@ delta_shake128_final(delta_shake128_ctx_t *ctx, uint8_t out[DELTA_HASH_SIZE])
 	ctx->buf[SHAKE128_RATE - 1] ^= 0x80;
 	xor_into_state(ctx->state, ctx->buf, SHAKE128_RATE);
 	keccak_f1600(ctx->state);
-	/* Squeeze 16 bytes (little-endian lanes). */
+	/* Squeeze exactly DELTA_HASH_SIZE (16) bytes from the first rate block.
+	 * 16 < SHAKE128_RATE (168), so one permutation is always sufficient.
+	 * To support d > SHAKE128_RATE output bytes, loop: extract up to
+	 * SHAKE128_RATE bytes, call keccak_f1600 again, repeat. */
 	for (i = 0; i < DELTA_HASH_SIZE; i++)
 		out[i] = (uint8_t)(ctx->state[i / 8] >> (8 * (i % 8)));
 }
