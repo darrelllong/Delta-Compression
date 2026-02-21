@@ -8,7 +8,7 @@ import static delta.Types.*;
 /**
  * Unified binary delta format (Section 2.1.1).
  *
- * Header: magic (4 bytes) + flags (1 byte) + version_size (u32 BE)
+ * Header: magic(4) + flags(1) + version_size(u32 BE) + src_hash(16) + dst_hash(16)
  * Commands:
  *   END:  type=0
  *   COPY: type=1, src:u32, dst:u32, len:u32
@@ -19,7 +19,8 @@ public final class Encoding {
 
     /** Encode placed commands to the unified binary delta format. */
     public static byte[] encodeDelta(List<PlacedCommand> commands,
-                                     boolean inplace, int versionSize) {
+                                     boolean inplace, int versionSize,
+                                     byte[] srcHash, byte[] dstHash) {
         // Estimate size: header + commands + END(1)
         int est = DELTA_HEADER_SIZE + 1;
         for (PlacedCommand cmd : commands) {
@@ -37,6 +38,8 @@ public final class Encoding {
         pos = DELTA_MAGIC.length;
         out[pos++] = inplace ? DELTA_FLAG_INPLACE : 0;
         putU32BE(out, pos, versionSize); pos += DELTA_U32_SIZE;
+        System.arraycopy(srcHash, 0, out, pos, DELTA_HASH_SIZE); pos += DELTA_HASH_SIZE;
+        System.arraycopy(dstHash, 0, out, pos, DELTA_HASH_SIZE); pos += DELTA_HASH_SIZE;
 
         for (PlacedCommand cmd : commands) {
             if (cmd instanceof PlacedCopy) {
@@ -78,6 +81,11 @@ public final class Encoding {
 
         boolean inplace = (data[DELTA_MAGIC.length] & DELTA_FLAG_INPLACE) != 0;
         int versionSize = getU32BE(data, DELTA_MAGIC.length + 1);
+        int hashOff = DELTA_MAGIC.length + 1 + DELTA_U32_SIZE;
+        byte[] srcHash = new byte[DELTA_HASH_SIZE];
+        byte[] dstHash = new byte[DELTA_HASH_SIZE];
+        System.arraycopy(data, hashOff, srcHash, 0, DELTA_HASH_SIZE);
+        System.arraycopy(data, hashOff + DELTA_HASH_SIZE, dstHash, 0, DELTA_HASH_SIZE);
         int pos = DELTA_HEADER_SIZE;
         List<PlacedCommand> commands = new ArrayList<>();
 
@@ -111,7 +119,7 @@ public final class Encoding {
             }
         }
 
-        return new DecodeResult(commands, inplace, versionSize);
+        return new DecodeResult(commands, inplace, versionSize, srcHash, dstHash);
     }
 
     /** Check if binary data is an in-place delta. */
@@ -127,10 +135,15 @@ public final class Encoding {
         public final List<PlacedCommand> commands;
         public final boolean inplace;
         public final int versionSize;
-        DecodeResult(List<PlacedCommand> commands, boolean inplace, int versionSize) {
+        public final byte[] srcHash;
+        public final byte[] dstHash;
+        DecodeResult(List<PlacedCommand> commands, boolean inplace, int versionSize,
+                     byte[] srcHash, byte[] dstHash) {
             this.commands = commands;
             this.inplace = inplace;
             this.versionSize = versionSize;
+            this.srcHash = srcHash;
+            this.dstHash = dstHash;
         }
     }
 

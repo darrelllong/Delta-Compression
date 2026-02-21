@@ -12,6 +12,7 @@ endif()
 # ── Library ───────────────────────────────────────────────────────────────
 
 add_library(delta_lib STATIC
+    src/sha3.cpp
     src/hash.cpp
     src/encoding.cpp
     src/apply.cpp

@@ -1,8 +1,10 @@
 package delta;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
 
 import static delta.Types.*;
@@ -113,6 +115,9 @@ public final class Delta {
         byte[] r = readFile(refPath);
         byte[] v = readFile(verPath);
 
+        byte[] srcHash = Hash.Shake128.hash16(r);
+        byte[] dstHash = Hash.Shake128.hash16(v);
+
         long t0 = System.nanoTime();
         List<Command> commands = Diff.diff(algo, r, v, opts);
 
@@ -121,7 +126,7 @@ public final class Delta {
             : Apply.placeCommands(commands);
         long elapsed = System.nanoTime() - t0;
 
-        byte[] deltaBytes = Encoding.encodeDelta(placed, inplace, v.length);
+        byte[] deltaBytes = Encoding.encodeDelta(placed, inplace, v.length, srcHash, dstHash);
         writeFile(deltaPath, deltaBytes);
 
         PlacedSummary stats = Apply.placedSummary(placed);
@@ -141,6 +146,8 @@ public final class Delta {
         System.out.printf("Commands:     %d copies, %d adds%n", stats.numCopies, stats.numAdds);
         System.out.printf("Copy bytes:   %d%n", stats.copyBytes);
         System.out.printf("Add bytes:    %d%n", stats.addBytes);
+        System.out.printf("Src hash:     %s%n", toHex(srcHash));
+        System.out.printf("Dst hash:     %s%n", toHex(dstHash));
         System.out.printf("Time:         %.3fs%n", elapsed / 1e9);
     }
 
@@ -154,9 +161,17 @@ public final class Delta {
         byte[] r = readFile(refPath);
         byte[] deltaBytes = readFile(deltaPath);
 
-        long t0 = System.nanoTime();
         Encoding.DecodeResult result = Encoding.decodeDelta(deltaBytes);
 
+        /* Pre-check: verify reference matches embedded src_hash. */
+        byte[] rHash = Hash.Shake128.hash16(r);
+        if (!Arrays.equals(rHash, result.srcHash)) {
+            System.err.printf("source file does not match delta: expected %s, got %s%n",
+                toHex(result.srcHash), toHex(rHash));
+            System.exit(1);
+        }
+
+        long t0 = System.nanoTime();
         byte[] out;
         if (result.inplace) {
             out = Apply.applyDeltaInplace(r, result.commands, result.versionSize);
@@ -166,13 +181,22 @@ public final class Delta {
         }
         long elapsed = System.nanoTime() - t0;
 
-        writeFile(outPath, out);
+        /* Write output and compute hash in a single pass. */
+        byte[] outHash = writeFileHashed(outPath, out);
+
+        /* Post-check: verify output matches embedded dst_hash. */
+        if (!Arrays.equals(outHash, result.dstHash)) {
+            System.err.println("output integrity check failed");
+            System.exit(1);
+        }
 
         String fmt = result.inplace ? "in-place" : "standard";
         System.out.printf("Format:       %s%n", fmt);
         System.out.printf("Reference:    %s (%d bytes)%n", refPath, r.length);
         System.out.printf("Delta:        %s (%d bytes)%n", deltaPath, deltaBytes.length);
         System.out.printf("Output:       %s (%d bytes)%n", outPath, out.length);
+        System.out.printf("Src hash:     %s  OK%n", toHex(result.srcHash));
+        System.out.printf("Dst hash:     %s  OK%n", toHex(result.dstHash));
         System.out.printf("Time:         %.3fs%n", elapsed / 1e9);
     }
 
@@ -189,6 +213,8 @@ public final class Delta {
         System.out.printf("Delta file:   %s (%d bytes)%n", deltaPath, deltaBytes.length);
         System.out.printf("Format:       %s%n", fmt);
         System.out.printf("Version size: %d bytes%n", result.versionSize);
+        System.out.printf("Src hash:     %s%n", toHex(result.srcHash));
+        System.out.printf("Dst hash:     %s%n", toHex(result.dstHash));
         System.out.printf("Commands:     %d%n", stats.numCommands);
         System.out.printf("  Copies:     %d (%d bytes)%n", stats.numCopies, stats.copyBytes);
         System.out.printf("  Adds:       %d (%d bytes)%n", stats.numAdds, stats.addBytes);
@@ -228,7 +254,8 @@ public final class Delta {
         List<PlacedCommand> ipPlaced = Apply.makeInplace(r, commands, policy);
         long elapsed = System.nanoTime() - t0;
 
-        byte[] ipDelta = Encoding.encodeDelta(ipPlaced, true, result.versionSize);
+        byte[] ipDelta = Encoding.encodeDelta(ipPlaced, true, result.versionSize,
+                                               result.srcHash, result.dstHash);
         writeFile(deltaOutPath, ipDelta);
 
         PlacedSummary stats = Apply.placedSummary(ipPlaced);
@@ -261,5 +288,28 @@ public final class Delta {
 
     private static void writeFile(String path, byte[] data) throws IOException {
         Files.write(Path.of(path), data);
+    }
+
+    /** Write data to a file, returning its SHAKE128-16 hash computed during the write. */
+    private static byte[] writeFileHashed(String path, byte[] data) throws IOException {
+        Hash.Shake128 ctx = new Hash.Shake128();
+        int chunk = 65536;
+        int pos = 0;
+        try (OutputStream out = Files.newOutputStream(Path.of(path))) {
+            while (pos < data.length) {
+                int n = Math.min(chunk, data.length - pos);
+                out.write(data, pos, n);
+                ctx.update(data, pos, n);
+                pos += n;
+            }
+        }
+        return ctx.finish();
+    }
+
+    private static String toHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes)
+            sb.append(String.format("%02x", b & 0xFF));
+        return sb.toString();
     }
 }

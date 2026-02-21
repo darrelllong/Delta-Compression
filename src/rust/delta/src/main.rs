@@ -3,15 +3,20 @@ use std::process;
 use std::time::Instant;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use memmap2::{Mmap, MmapMut};
+use memmap2::MmapMut;
 
 use delta::{
     Algorithm, CyclePolicy, DiffOptions,
     apply_placed_inplace_to, apply_placed_to,
     decode_delta, encode_delta,
     make_inplace, place_commands, unplace_commands,
-    placed_summary,
+    placed_summary, shake128_16,
 };
+
+/// Format a byte slice as a lowercase hex string.
+fn hex_str(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
 
 /// Parse a size with optional k/M/B suffix (decimal: k=1000, M=1_000_000, B=1_000_000_000).
 fn parse_size_suffix(s: &str) -> Result<usize, String> {
@@ -30,18 +35,6 @@ fn parse_size_suffix(s: &str) -> Result<usize, String> {
 }
 
 // ── mmap helpers ─────────────────────────────────────────────────────────
-
-/// Memory-map a file for reading.  Returns `None` for empty files.
-fn mmap_open(path: &str) -> std::io::Result<(File, Option<Mmap>)> {
-    let file = File::open(path)?;
-    let mmap = if file.metadata()?.len() > 0 {
-        // SAFETY: We do not modify the file while the mapping is active.
-        Some(unsafe { Mmap::map(&file)? })
-    } else {
-        None
-    };
-    Ok((file, mmap))
-}
 
 /// Create a file of `size` bytes and memory-map it for read-write.
 /// Returns `None` for size 0 (creates an empty file).
@@ -211,17 +204,21 @@ fn main() {
             verbose,
             splay,
         } => {
-            let (_rf, r_mmap) = mmap_open(&reference).unwrap_or_else(|e| {
+            // Read files and compute SHAKE128 hashes in a single sequential
+            // pass each, then use the loaded bytes for the diff algorithm.
+            let r_bytes = fs::read(&reference).unwrap_or_else(|e| {
                 eprintln!("Error reading {}: {}", reference, e);
                 process::exit(1);
             });
-            let r: &[u8] = r_mmap.as_deref().unwrap_or(&[]);
+            let src_hash = shake128_16(&r_bytes);
+            let r: &[u8] = &r_bytes;
 
-            let (_vf, v_mmap) = mmap_open(&version).unwrap_or_else(|e| {
+            let v_bytes = fs::read(&version).unwrap_or_else(|e| {
                 eprintln!("Error reading {}: {}", version, e);
                 process::exit(1);
             });
-            let v: &[u8] = v_mmap.as_deref().unwrap_or(&[]);
+            let dst_hash = shake128_16(&v_bytes);
+            let v: &[u8] = &v_bytes;
 
             let algo: Algorithm = algorithm.into();
             let t0 = Instant::now();
@@ -246,7 +243,7 @@ fn main() {
             };
             let elapsed = t0.elapsed();
 
-            let delta_bytes = encode_delta(&placed, inplace, v.len());
+            let delta_bytes = encode_delta(&placed, inplace, v.len(), &src_hash, &dst_hash);
             fs::write(&delta_file, &delta_bytes).unwrap_or_else(|e| {
                 eprintln!("Error writing {}: {}", delta_file, e);
                 process::exit(1);
@@ -279,6 +276,10 @@ fn main() {
             }
             println!("Copy bytes:   {}", stats.copy_bytes);
             println!("Add bytes:    {}", stats.add_bytes);
+            if verbose {
+                println!("Src hash:     {}", hex_str(&src_hash));
+                println!("Dst hash:     {}", hex_str(&dst_hash));
+            }
             println!("Time:         {:.3}s", elapsed.as_secs_f64());
         }
 
@@ -287,11 +288,13 @@ fn main() {
             delta_file,
             output,
         } => {
-            let (_rf, r_mmap) = mmap_open(&reference).unwrap_or_else(|e| {
+            // Read reference and compute its hash in one sequential pass.
+            let r_bytes = fs::read(&reference).unwrap_or_else(|e| {
                 eprintln!("Error reading {}: {}", reference, e);
                 process::exit(1);
             });
-            let r: &[u8] = r_mmap.as_deref().unwrap_or(&[]);
+            let r_hash_actual = shake128_16(&r_bytes);
+            let r: &[u8] = &r_bytes;
 
             let delta_bytes = fs::read(&delta_file).unwrap_or_else(|e| {
                 eprintln!("Error reading {}: {}", delta_file, e);
@@ -299,12 +302,23 @@ fn main() {
             });
 
             let t0 = Instant::now();
-            let (placed, is_ip, version_size) = decode_delta(&delta_bytes).unwrap_or_else(|e| {
-                eprintln!("Error decoding delta: {}", e);
-                process::exit(1);
-            });
+            let (placed, is_ip, version_size, src_hash, dst_hash) =
+                decode_delta(&delta_bytes).unwrap_or_else(|e| {
+                    eprintln!("Error decoding delta: {}", e);
+                    process::exit(1);
+                });
 
-            if is_ip {
+            // Pre-check: verify reference matches what was recorded at encode time.
+            if r_hash_actual != src_hash {
+                eprintln!(
+                    "error: source file does not match delta: expected {}, got {}",
+                    hex_str(&src_hash),
+                    hex_str(&r_hash_actual)
+                );
+                process::exit(1);
+            }
+
+            let out_bytes: Vec<u8> = if is_ip {
                 let buf_size = r.len().max(version_size);
                 let (out_file, out_mmap) =
                     mmap_create(&output, buf_size).unwrap_or_else(|e| {
@@ -314,18 +328,20 @@ fn main() {
                 if let Some(mut mm) = out_mmap {
                     mm[..r.len()].copy_from_slice(r);
                     apply_placed_inplace_to(&placed, &mut mm);
+                    let result = mm[..version_size].to_vec();
                     mm.flush().unwrap_or_else(|e| {
                         eprintln!("Error flushing {}: {}", output, e);
                         process::exit(1);
                     });
                     drop(mm);
-                }
-                out_file
-                    .set_len(version_size as u64)
-                    .unwrap_or_else(|e| {
+                    out_file.set_len(version_size as u64).unwrap_or_else(|e| {
                         eprintln!("Error truncating {}: {}", output, e);
                         process::exit(1);
                     });
+                    result
+                } else {
+                    Vec::new()
+                }
             } else {
                 let (_out_file, out_mmap) =
                     mmap_create(&output, version_size).unwrap_or_else(|e| {
@@ -334,13 +350,24 @@ fn main() {
                     });
                 if let Some(mut mm) = out_mmap {
                     apply_placed_to(r, &placed, &mut mm);
+                    let result = mm.to_vec();
                     mm.flush().unwrap_or_else(|e| {
                         eprintln!("Error flushing {}: {}", output, e);
                         process::exit(1);
                     });
+                    result
+                } else {
+                    Vec::new()
                 }
-            }
+            };
             let elapsed = t0.elapsed();
+
+            // Post-check: verify reconstructed output matches recorded dest hash.
+            let out_hash_actual = shake128_16(&out_bytes);
+            if out_hash_actual != dst_hash {
+                eprintln!("error: output integrity check failed");
+                process::exit(1);
+            }
 
             let fmt = if is_ip { "in-place" } else { "standard" };
             println!("Format:       {}", fmt);
@@ -356,7 +383,7 @@ fn main() {
                 process::exit(1);
             });
 
-            let (placed, is_ip, version_size) =
+            let (placed, is_ip, version_size, src_hash, dst_hash) =
                 decode_delta(&delta_bytes).unwrap_or_else(|e| {
                     eprintln!("Error decoding delta: {}", e);
                     process::exit(1);
@@ -367,6 +394,8 @@ fn main() {
             println!("Delta file:   {} ({} bytes)", delta_file, delta_bytes.len());
             println!("Format:       {}", fmt);
             println!("Version size: {} bytes", version_size);
+            println!("Src hash:     {}", hex_str(&src_hash));
+            println!("Dst hash:     {}", hex_str(&dst_hash));
             println!("Commands:     {}", stats.num_commands);
             println!(
                 "  Copies:     {} ({} bytes)",
@@ -386,18 +415,19 @@ fn main() {
             policy,
             verbose,
         } => {
-            let (_rf, r_mmap) = mmap_open(&reference).unwrap_or_else(|e| {
+            // Read reference and compute hash in one sequential pass.
+            let r_bytes = fs::read(&reference).unwrap_or_else(|e| {
                 eprintln!("Error reading {}: {}", reference, e);
                 process::exit(1);
             });
-            let r: &[u8] = r_mmap.as_deref().unwrap_or(&[]);
+            let r: &[u8] = &r_bytes;
 
             let delta_bytes = fs::read(&delta_in).unwrap_or_else(|e| {
                 eprintln!("Error reading {}: {}", delta_in, e);
                 process::exit(1);
             });
 
-            let (placed, is_ip, version_size) =
+            let (placed, is_ip, version_size, src_hash, dst_hash) =
                 decode_delta(&delta_bytes).unwrap_or_else(|e| {
                     eprintln!("Error decoding delta: {}", e);
                     process::exit(1);
@@ -418,7 +448,8 @@ fn main() {
             let (ip_placed, ip_stats) = make_inplace(r, &commands, pol);
             let elapsed = t0.elapsed();
 
-            let ip_delta = encode_delta(&ip_placed, true, version_size);
+            // Preserve the original src_hash and dst_hash from the input delta.
+            let ip_delta = encode_delta(&ip_placed, true, version_size, &src_hash, &dst_hash);
             fs::write(&delta_out, &ip_delta).unwrap_or_else(|e| {
                 eprintln!("Error writing {}: {}", delta_out, e);
                 process::exit(1);

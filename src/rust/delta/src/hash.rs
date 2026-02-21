@@ -101,6 +101,21 @@ impl RollingHash {
 
 }
 
+// ── SHAKE128 hash helper (FIPS 202 XOF) ─────────────────────────────────
+
+use sha3::{Shake128, digest::{Update, ExtendableOutput, XofReader}};
+use crate::types::DELTA_HASH_SIZE;
+
+/// Compute SHAKE128 with 16 bytes of output over `data` (FIPS 202 XOF).
+pub fn shake128_16(data: &[u8]) -> [u8; DELTA_HASH_SIZE] {
+    let mut hasher = Shake128::default();
+    hasher.update(data);
+    let mut reader = hasher.finalize_xof();
+    let mut out = [0u8; DELTA_HASH_SIZE];
+    reader.read(&mut out);
+    out
+}
+
 // ── Primality testing (for hash table auto-sizing) ───────────────────────
 
 use rand::Rng;

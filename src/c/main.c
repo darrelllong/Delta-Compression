@@ -111,6 +111,36 @@ write_file(const char *path, const uint8_t *data, size_t len)
 	fclose(f);
 }
 
+/* Write a file while computing its SHAKE128-16 hash in the same pass. */
+static void
+write_file_hashed(const char *path, const uint8_t *data, size_t len,
+                  uint8_t out_hash[DELTA_HASH_SIZE])
+{
+	FILE *f;
+	delta_shake128_ctx_t ctx;
+	const uint8_t *p = data;
+	size_t rem = len;
+
+	f = fopen(path, "wb");
+	if (!f) {
+		fprintf(stderr, "Error writing %s: %s\n", path, strerror(errno));
+		exit(1);
+	}
+	delta_shake128_init(&ctx);
+	while (rem > 0) {
+		size_t n = rem < 65536 ? rem : 65536;
+		if (fwrite(p, 1, n, f) != n) {
+			fprintf(stderr, "Error writing %s\n", path);
+			exit(1);
+		}
+		delta_shake128_update(&ctx, p, n);
+		p += n;
+		rem -= n;
+	}
+	fclose(f);
+	delta_shake128_final(&ctx, out_hash);
+}
+
 /* ── Elapsed time helper ───────────────────────────────────────────── */
 
 static double
@@ -118,6 +148,17 @@ elapsed_sec(struct timespec *t0, struct timespec *t1)
 {
 	return (double)(t1->tv_sec - t0->tv_sec)
 	     + (double)(t1->tv_nsec - t0->tv_nsec) / 1e9;
+}
+
+/* ── Hex formatting ────────────────────────────────────────────────── */
+
+static void
+fprint_hex(FILE *f, const uint8_t *bytes, size_t len)
+{
+	size_t i;
+	for (i = 0; i < len; i++) {
+		fprintf(f, "%02x", bytes[i]);
+	}
 }
 
 /* ── Parse a size string with optional k/M/B suffix ────────────────── */
@@ -229,13 +270,19 @@ main(int argc, char **argv)
 		mapped_file_t r_file = map_file(ref_path);
 		mapped_file_t v_file = map_file(ver_path);
 
-		struct timespec t0, t1;
-		clock_gettime(CLOCK_MONOTONIC, &t0);
-
 		if (seed_len == 0) {
 			fprintf(stderr, "error: --seed-len must be >= 1\n");
 			exit(1);
 		}
+
+		uint8_t src_hash[DELTA_HASH_SIZE];
+		uint8_t dst_hash[DELTA_HASH_SIZE];
+		delta_shake128_16(r_file.data, r_file.size, src_hash);
+		delta_shake128_16(v_file.data, v_file.size, dst_hash);
+
+		struct timespec t0, t1;
+		clock_gettime(CLOCK_MONOTONIC, &t0);
+
 		delta_diff_options_t diff_opts = DELTA_DIFF_OPTIONS_DEFAULT;
 		diff_opts.p = seed_len;
 		diff_opts.q = table_size;
@@ -261,7 +308,8 @@ main(int argc, char **argv)
 		double elapsed = elapsed_sec(&t0, &t1);
 
 		delta_buffer_t delta_buf = delta_encode(&placed, inplace,
-		                                        v_file.size);
+		                                        v_file.size,
+		                                        src_hash, dst_hash);
 		write_file(delta_path, delta_buf.data, delta_buf.len);
 
 		delta_summary_t stats = delta_placed_summary(&placed);
@@ -283,6 +331,8 @@ main(int argc, char **argv)
 		       stats.num_copies, stats.num_adds);
 		printf("Copy bytes:   %zu\n", stats.copy_bytes);
 		printf("Add bytes:    %zu\n", stats.add_bytes);
+		printf("Src hash:     "); fprint_hex(stdout, src_hash, DELTA_HASH_SIZE); printf("\n");
+		printf("Dst hash:     "); fprint_hex(stdout, dst_hash, DELTA_HASH_SIZE); printf("\n");
 		printf("Time:         %.3fs\n", elapsed);
 
 		delta_buffer_free(&delta_buf);
@@ -302,33 +352,57 @@ main(int argc, char **argv)
 		size_t delta_len;
 		uint8_t *delta_data = read_file(delta_path, &delta_len);
 
+		delta_decode_result_t dr = delta_decode(delta_data, delta_len);
+
+		/* Pre-check: verify reference matches embedded src_hash. */
+		{
+			uint8_t r_hash[DELTA_HASH_SIZE];
+			delta_shake128_16(r_file.data, r_file.size, r_hash);
+			if (memcmp(r_hash, dr.src_hash, DELTA_HASH_SIZE) != 0) {
+				fprintf(stderr,
+				    "source file does not match delta: "
+				    "expected "); fprint_hex(stderr, dr.src_hash, DELTA_HASH_SIZE);
+				fprintf(stderr, ", got "); fprint_hex(stderr, r_hash, DELTA_HASH_SIZE);
+				fprintf(stderr, "\n");
+				exit(1);
+			}
+		}
+
 		struct timespec t0, t1;
 		clock_gettime(CLOCK_MONOTONIC, &t0);
 
-		delta_decode_result_t dr = delta_decode(delta_data, delta_len);
-
+		delta_buffer_t out_buf;
 		if (dr.inplace) {
-			delta_buffer_t result = delta_apply_delta_inplace(
+			out_buf = delta_apply_delta_inplace(
 				r_file.data, r_file.size,
 				&dr.commands, dr.version_size);
-			write_file(out_path, result.data, result.len);
-			delta_buffer_free(&result);
 		} else {
-			delta_buffer_t out = delta_apply_placed(
+			out_buf = delta_apply_placed(
 				r_file.data, &dr.commands, dr.version_size);
-			write_file(out_path, out.data, out.len);
-			delta_buffer_free(&out);
 		}
 
 		clock_gettime(CLOCK_MONOTONIC, &t1);
 		double elapsed = elapsed_sec(&t0, &t1);
 
+		/* Write output and compute hash in a single pass. */
+		uint8_t out_hash[DELTA_HASH_SIZE];
+		write_file_hashed(out_path, out_buf.data, out_buf.len, out_hash);
+
+		/* Post-check: verify output matches embedded dst_hash. */
+		if (memcmp(out_hash, dr.dst_hash, DELTA_HASH_SIZE) != 0) {
+			fprintf(stderr, "output integrity check failed\n");
+			exit(1);
+		}
+
 		printf("Format:       %s\n", dr.inplace ? "in-place" : "standard");
 		printf("Reference:    %s (%zu bytes)\n", ref_path, r_file.size);
 		printf("Delta:        %s (%zu bytes)\n", delta_path, delta_len);
 		printf("Output:       %s (%zu bytes)\n", out_path, dr.version_size);
+		printf("Src hash:     "); fprint_hex(stdout, dr.src_hash, DELTA_HASH_SIZE); printf("  OK\n");
+		printf("Dst hash:     "); fprint_hex(stdout, dr.dst_hash, DELTA_HASH_SIZE); printf("  OK\n");
 		printf("Time:         %.3fs\n", elapsed);
 
+		delta_buffer_free(&out_buf);
 		delta_decode_result_free(&dr);
 		free(delta_data);
 		unmap_file(&r_file);
@@ -346,6 +420,8 @@ main(int argc, char **argv)
 		printf("Delta file:   %s (%zu bytes)\n", delta_path, delta_len);
 		printf("Format:       %s\n", dr.inplace ? "in-place" : "standard");
 		printf("Version size: %zu bytes\n", dr.version_size);
+		printf("Src hash:     "); fprint_hex(stdout, dr.src_hash, DELTA_HASH_SIZE); printf("\n");
+		printf("Dst hash:     "); fprint_hex(stdout, dr.dst_hash, DELTA_HASH_SIZE); printf("\n");
 		printf("Commands:     %zu\n", stats.num_commands);
 		printf("  Copies:     %zu (%zu bytes)\n",
 		       stats.num_copies, stats.copy_bytes);
@@ -407,7 +483,8 @@ main(int argc, char **argv)
 		double elapsed = elapsed_sec(&t0, &t1);
 
 		delta_buffer_t ip_buf = delta_encode(&ip_placed, true,
-		                                     dr.version_size);
+		                                     dr.version_size,
+		                                     dr.src_hash, dr.dst_hash);
 		write_file(delta_out_path, ip_buf.data, ip_buf.len);
 
 		delta_summary_t stats = delta_placed_summary(&ip_placed);

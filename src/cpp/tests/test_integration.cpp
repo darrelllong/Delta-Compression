@@ -24,8 +24,12 @@ static std::vector<uint8_t> roundtrip(DiffFn algo_fn,
     std::span<const uint8_t> r, std::span<const uint8_t> v, size_t p) {
     auto cmds = algo_fn(r, v, opts(p));
     auto placed = place_commands(cmds);
-    auto delta_bytes = encode_delta(placed, false, output_size(cmds));
-    auto [placed2, ip, vs] = decode_delta(delta_bytes);
+    auto src_h = shake128_16(r.data(), r.size());
+    auto dst_h = shake128_16(v.data(), v.size());
+    auto delta_bytes = encode_delta(placed, false, output_size(cmds), src_h, dst_h);
+    auto [placed2, ip, vs, sh, dh] = decode_delta(delta_bytes);
+    REQUIRE(sh == src_h);
+    REQUIRE(dh == dst_h);
     std::vector<uint8_t> out(v.size(), 0);
     apply_placed_to(r, placed2, out);
     return out;
@@ -44,8 +48,12 @@ static std::vector<uint8_t> inplace_binary_roundtrip(DiffFn algo_fn,
     CyclePolicy policy, size_t p) {
     auto cmds = algo_fn(r, v, opts(p));
     auto ip = make_inplace(r, cmds, policy);
-    auto delta_bytes = encode_delta(ip, true, v.size());
-    auto [ip2, is_ip, vs] = decode_delta(delta_bytes);
+    auto src_h = shake128_16(r.data(), r.size());
+    auto dst_h = shake128_16(v.data(), v.size());
+    auto delta_bytes = encode_delta(ip, true, v.size(), src_h, dst_h);
+    auto [ip2, is_ip, vs, sh, dh] = decode_delta(delta_bytes);
+    REQUIRE(sh == src_h);
+    REQUIRE(dh == dst_h);
     return apply_delta_inplace(r, ip2, vs);
 }
 
@@ -152,23 +160,49 @@ TEST_CASE("binary encoding roundtrip", "[integration]") {
         PlacedAdd{0, {100, 101, 102}},
         PlacedCopy{888, 3, 488},
     };
-    auto encoded = encode_delta(placed, false, 491);
-    auto [decoded, is_ip, vs] = decode_delta(encoded);
+    std::array<uint8_t, DELTA_HASH_SIZE> src_h{}, dst_h{};
+    src_h.fill(0xAB);
+    dst_h.fill(0xCD);
+    auto encoded = encode_delta(placed, false, 491, src_h, dst_h);
+    auto [decoded, is_ip, vs, sh, dh] = decode_delta(encoded);
     CHECK_FALSE(is_ip);
     CHECK(vs == 491);
+    CHECK(sh == src_h);
+    CHECK(dh == dst_h);
     REQUIRE(decoded == placed);
+}
+
+TEST_CASE("binary encoding magic v2", "[integration]") {
+    std::vector<PlacedCommand> placed = {PlacedCopy{0, 0, 1}};
+    std::array<uint8_t, DELTA_HASH_SIZE> zh{};
+    auto encoded = encode_delta(placed, false, 1, zh, zh);
+    // First 4 bytes must be DLT\x02
+    REQUIRE(encoded.size() >= 4);
+    CHECK(encoded[0] == 'D');
+    CHECK(encoded[1] == 'L');
+    CHECK(encoded[2] == 'T');
+    CHECK(encoded[3] == 0x02);
+}
+
+TEST_CASE("binary encoding wrong magic rejected", "[integration]") {
+    std::vector<PlacedCommand> placed = {PlacedCopy{0, 0, 1}};
+    std::array<uint8_t, DELTA_HASH_SIZE> zh{};
+    auto encoded = encode_delta(placed, false, 1, zh, zh);
+    encoded[3] = 0x01; // corrupt magic to v1
+    CHECK_THROWS_AS(decode_delta(encoded), DeltaError);
 }
 
 TEST_CASE("binary encoding inplace flag", "[integration]") {
     std::vector<PlacedCommand> placed = {PlacedCopy{0, 10, 5}};
-    auto standard = encode_delta(placed, false, 15);
-    auto inplace = encode_delta(placed, true, 15);
+    std::array<uint8_t, DELTA_HASH_SIZE> zh{};
+    auto standard = encode_delta(placed, false, 15, zh, zh);
+    auto inplace  = encode_delta(placed, true,  15, zh, zh);
 
     CHECK_FALSE(is_inplace_delta(standard));
     CHECK(is_inplace_delta(inplace));
 
-    auto [d1, ip1, vs1] = decode_delta(standard);
-    auto [d2, ip2, vs2] = decode_delta(inplace);
+    auto [d1, ip1, vs1, sh1, dh1] = decode_delta(standard);
+    auto [d2, ip2, vs2, sh2, dh2] = decode_delta(inplace);
     CHECK_FALSE(ip1);
     CHECK(ip2);
     CHECK(vs1 == vs2);
@@ -177,8 +211,9 @@ TEST_CASE("binary encoding inplace flag", "[integration]") {
 
 TEST_CASE("large copy roundtrip", "[integration]") {
     std::vector<PlacedCommand> placed = {PlacedCopy{100000, 0, 50000}};
-    auto encoded = encode_delta(placed, false, 50000);
-    auto [decoded, ip, vs] = decode_delta(encoded);
+    std::array<uint8_t, DELTA_HASH_SIZE> zh{};
+    auto encoded = encode_delta(placed, false, 50000, zh, zh);
+    auto [decoded, ip, vs, sh, dh] = decode_delta(encoded);
     REQUIRE(decoded.size() == 1);
     auto* c = std::get_if<PlacedCopy>(&decoded[0]);
     REQUIRE(c != nullptr);
@@ -191,8 +226,9 @@ TEST_CASE("large add roundtrip", "[integration]") {
     std::vector<uint8_t> big_data(1024);
     std::iota(big_data.begin(), big_data.end(), 0);
     std::vector<PlacedCommand> placed = {PlacedAdd{0, big_data}};
-    auto encoded = encode_delta(placed, false, big_data.size());
-    auto [decoded, ip, vs] = decode_delta(encoded);
+    std::array<uint8_t, DELTA_HASH_SIZE> zh{};
+    auto encoded = encode_delta(placed, false, big_data.size(), zh, zh);
+    auto [decoded, ip, vs, sh, dh] = decode_delta(encoded);
     REQUIRE(decoded.size() == 1);
     auto* a = std::get_if<PlacedAdd>(&decoded[0]);
     REQUIRE(a != nullptr);
@@ -372,7 +408,9 @@ TEST_CASE("standard not detected as inplace", "[inplace]") {
     auto v = repeat(v_base, 10);
     auto cmds = diff_greedy(r, v, opts(2));
     auto placed = place_commands(cmds);
-    auto delta_bytes = encode_delta(placed, false, v.size());
+    auto src_h = shake128_16(r.data(), r.size());
+    auto dst_h = shake128_16(v.data(), v.size());
+    auto delta_bytes = encode_delta(placed, false, v.size(), src_h, dst_h);
     CHECK_FALSE(is_inplace_delta(delta_bytes));
 }
 
@@ -383,7 +421,9 @@ TEST_CASE("inplace detected", "[inplace]") {
     auto v = repeat(v_base, 10);
     auto cmds = diff_greedy(r, v, opts(2));
     auto ip = make_inplace(r, cmds, CyclePolicy::Localmin);
-    auto delta_bytes = encode_delta(ip, true, v.size());
+    auto src_h = shake128_16(r.data(), r.size());
+    auto dst_h = shake128_16(v.data(), v.size());
+    auto delta_bytes = encode_delta(ip, true, v.size(), src_h, dst_h);
     CHECK(is_inplace_delta(delta_bytes));
 }
 
