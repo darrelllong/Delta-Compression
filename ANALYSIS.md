@@ -118,6 +118,38 @@ the effect is visible: common boilerplate dominates the fingerprint
 distribution, limiting the practical slowdown to 3.5× rather than what
 the asymptotic ratio would suggest.
 
+## Delta integrity verification
+
+Every delta file embeds two 16-byte SHAKE128 hashes in its header:
+`src_hash` (hash of the reference file) and `dst_hash` (hash of the
+reconstructed version).  Decode performs two checks:
+
+- **Pre-check** (before reconstruction): `shake128_16(ref) == src_hash`.
+  Catches wrong-reference errors immediately, before any computation.
+- **Post-check** (after reconstruction): `shake128_16(output) == dst_hash`.
+  Catches corruption in the delta file itself or any bug in the apply
+  phase.
+
+SHAKE128 (NIST FIPS 202) was chosen over a conventional hash for three
+reasons.  First, it is an extendable-output function (XOF): the output
+length is a parameter, and 16 bytes (128 bits) gives a 2^{-64}
+collision probability — low enough for integrity but cheap to compute.
+Second, it has no length-extension vulnerability (unlike MD5/SHA-1/SHA-2
+in Merkle-Damgård constructions), so the 16-byte truncation is
+cryptographically clean.  Third, the sponge construction runs in a
+single pass over the input with O(1) working memory beyond the 200-byte
+Keccak state, which fits the streaming write path: the hash is computed
+incrementally as bytes are written, with no second pass needed.
+
+Each implementation carries its own hand-written Keccak-p[1600,24]
+sponge so there are no external dependencies.  All five produce
+identical hashes for identical inputs (cross-language verified).
+
+The `--ignore-hash` decode flag replaces both error exits with stderr
+warnings and continues, providing an escape hatch for partial recovery
+from a corrupted or mismatched delta.  The library itself does not
+enforce the checks; hash validation is the caller's responsibility.
+
 ## In-place conversion: CRWI graph and cycle breaking
 
 In-place reconstruction writes the version V directly into the buffer
