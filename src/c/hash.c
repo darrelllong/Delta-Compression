@@ -240,7 +240,9 @@ keccak_f1600(uint64_t A[25])
 			D[x] = C[(x+4)%5] ^ rotl64(C[(x+1)%5], 1);
 		for (x = 0; x < 25; x++)
 			A[x] ^= D[x % 5];
-		/* rho + pi */
+		/* rho + pi (combined; FIPS 202 Appendix B optimisation)
+		 * Destination B[x+5*y] receives A[src] rotated by rho[src],
+		 * where src = (x+3y)%5 + 5x is the inverse-pi source lane. */
 		for (y = 0; y < 5; y++)
 			for (x = 0; x < 5; x++) {
 				int src = (x + 3*y) % 5 + 5*x;

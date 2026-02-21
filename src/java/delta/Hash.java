@@ -224,7 +224,8 @@ public final class Hash {
                     D[x] = C[(x+4)%5] ^ rotl64(C[(x+1)%5], 1);
                 for (int x = 0; x < 25; x++)
                     A[x] ^= D[x % 5];
-                // rho + pi
+                // rho + pi (combined; FIPS 202 Appendix B optimisation)
+                // B[x+5y] = rotl64(A[src], RHO[src]), src = (x+3y)%5 + 5x
                 for (int y = 0; y < 5; y++)
                     for (int x = 0; x < 5; x++) {
                         int src = (x + 3*y) % 5 + 5*x;
