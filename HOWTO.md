@@ -236,6 +236,19 @@ delta encode onepass old.bin new.bin patch.delta --inplace
 delta decode old.bin patch.delta recovered.bin
 ```
 
+### Hash verification
+
+Decode verifies two SHAKE128 hashes embedded in every delta file: the
+reference file hash (pre-check, before reconstruction) and the output
+hash (post-check, after reconstruction).  A mismatch aborts with an
+error.  To attempt recovery from a corrupted or mismatched delta, pass
+`--ignore-hash`; both checks are replaced with warnings and decoding
+proceeds:
+
+```bash
+delta decode --ignore-hash wrong-ref.bin delta.bin recovered.bin
+```
+
 ### Cycle-breaking policies
 
 When the in-place converter finds circular dependencies between copy
@@ -317,7 +330,7 @@ from delta import (
     diff_onepass, diff_greedy, diff_correcting, DiffOptions,
     place_commands, encode_delta, decode_delta,
     apply_delta, apply_placed, apply_placed_inplace,
-    make_inplace,
+    make_inplace, _shake128,
 )
 
 with open('old.bin', 'rb') as f:
@@ -328,17 +341,21 @@ with open('new.bin', 'rb') as f:
 # Diff (verbose=True prints hash table stats to stderr)
 commands = diff_onepass(R, V, verbose=True)
 
-# Standard binary delta
+# Standard binary delta (src_hash/dst_hash required)
 placed = place_commands(commands)
-delta_bytes = encode_delta(placed, inplace=False, version_size=len(V))
+src_hash = _shake128(R)
+dst_hash = _shake128(V)
+delta_bytes = encode_delta(placed, inplace=False, version_size=len(V),
+                           src_hash=src_hash, dst_hash=dst_hash)
 
 # Decode and reconstruct
-placed2, is_inplace, version_size = decode_delta(delta_bytes)
+placed2, is_inplace, version_size, src_hash2, dst_hash2 = decode_delta(delta_bytes)
 recovered = apply_placed(R, placed2)
 
 # In-place delta
 ip_commands = make_inplace(R, commands, policy='localmin')
-ip_delta = encode_delta(ip_commands, inplace=True, version_size=len(V))
+ip_delta = encode_delta(ip_commands, inplace=True, version_size=len(V),
+                        src_hash=src_hash, dst_hash=dst_hash)
 recovered = apply_placed_inplace(R, ip_commands, len(V))
 ```
 
@@ -349,7 +366,7 @@ use delta::{
     diff, Algorithm, CyclePolicy, DiffOptions,
     place_commands, encode_delta, decode_delta,
     apply_placed_to, apply_placed_inplace_to,
-    make_inplace,
+    make_inplace, shake128_16,
 };
 
 let r: &[u8] = &reference_data;
@@ -359,18 +376,20 @@ let v: &[u8] = &version_data;
 let opts = DiffOptions { verbose: true, ..DiffOptions::default() };
 let commands = diff(Algorithm::Onepass, r, v, &opts);
 
-// Standard binary delta
+// Standard binary delta (src_hash/dst_hash required)
 let placed = place_commands(&commands);
-let delta_bytes = encode_delta(&placed, false, v.len());
+let src_hash = shake128_16(r);
+let dst_hash = shake128_16(v);
+let delta_bytes = encode_delta(&placed, false, v.len(), &src_hash, &dst_hash);
 
 // Decode and reconstruct
-let (placed2, is_ip, version_size) = decode_delta(&delta_bytes)?;
+let (placed2, is_ip, version_size, src_hash2, dst_hash2) = decode_delta(&delta_bytes)?;
 let mut output = vec![0u8; version_size];
 apply_placed_to(r, &placed2, &mut output);
 
 // In-place delta
 let (ip, _stats) = make_inplace(r, &commands, CyclePolicy::Localmin);
-let ip_delta = encode_delta(&ip, true, v.len());
+let ip_delta = encode_delta(&ip, true, v.len(), &src_hash, &dst_hash);
 ```
 
 ### C++
@@ -388,18 +407,20 @@ DiffOptions opts;
 opts.verbose = true;
 auto commands = diff(Algorithm::Onepass, r, v, opts);
 
-// Standard binary delta
+// Standard binary delta (src_hash/dst_hash required)
 auto placed = place_commands(commands);
-auto delta_bytes = encode_delta(placed, false, v.size());
+auto src_hash = shake128_16(r.data(), r.size());
+auto dst_hash = shake128_16(v.data(), v.size());
+auto delta_bytes = encode_delta(placed, false, v.size(), src_hash, dst_hash);
 
 // Decode and reconstruct
-auto [placed2, is_ip, version_size] = decode_delta(delta_bytes);
+auto [placed2, is_ip, version_size, src_hash2, dst_hash2] = decode_delta(delta_bytes);
 std::vector<uint8_t> output(version_size, 0);
 apply_placed_to(r, placed2, output);
 
 // In-place delta
 auto ip = make_inplace(r, commands, CyclePolicy::Localmin);
-auto ip_delta = encode_delta(ip, true, v.size());
+auto ip_delta = encode_delta(ip, true, v.size(), src_hash, dst_hash);
 ```
 
 ### C
@@ -417,9 +438,12 @@ delta_diff_options_t opts = DELTA_DIFF_OPTIONS_DEFAULT;
 opts.flags = delta_flag_set(opts.flags, DELTA_OPT_VERBOSE);
 delta_commands_t cmds = delta_diff(ALGO_ONEPASS, r, r_len, v, v_len, &opts);
 
-/* Standard binary delta */
+/* Standard binary delta (src_hash/dst_hash required) */
 delta_placed_commands_t placed = delta_place_commands(&cmds);
-delta_buffer_t encoded = delta_encode(&placed, false, v_len);
+uint8_t src_hash[DELTA_HASH_SIZE], dst_hash[DELTA_HASH_SIZE];
+delta_shake128_16(r, r_len, src_hash);
+delta_shake128_16(v, v_len, dst_hash);
+delta_buffer_t encoded = delta_encode(&placed, false, v_len, src_hash, dst_hash);
 
 /* Decode and reconstruct */
 delta_decode_result_t res = delta_decode(encoded.data, encoded.len);
@@ -427,7 +451,7 @@ delta_buffer_t output = delta_apply_placed(r, &res.commands, res.version_size);
 
 /* In-place delta */
 delta_placed_commands_t ip = delta_make_inplace(r, r_len, &cmds, POLICY_LOCALMIN);
-delta_buffer_t ip_encoded = delta_encode(&ip, true, v_len);
+delta_buffer_t ip_encoded = delta_encode(&ip, true, v_len, src_hash, dst_hash);
 
 /* Cleanup */
 delta_commands_free(&cmds);
@@ -454,9 +478,11 @@ DiffOptions opts = new DiffOptions();
 opts.verbose = true;
 List<Command> commands = Diff.diff(Algorithm.ONEPASS, r, v, opts);
 
-// Standard binary delta
+// Standard binary delta (src_hash/dst_hash required)
 List<PlacedCommand> placed = Apply.placeCommands(commands);
-byte[] deltaBytes = Encoding.encodeDelta(placed, false, v.length);
+byte[] srcHash = Hash.Shake128.hash16(r);
+byte[] dstHash = Hash.Shake128.hash16(v);
+byte[] deltaBytes = Encoding.encodeDelta(placed, false, v.length, srcHash, dstHash);
 
 // Decode and reconstruct
 Encoding.DecodeResult result = Encoding.decodeDelta(deltaBytes);
@@ -465,31 +491,31 @@ Apply.applyPlacedTo(r, result.commands, output);
 
 // In-place delta
 List<PlacedCommand> ip = Apply.makeInplace(r, commands, CyclePolicy.LOCALMIN);
-byte[] ipDelta = Encoding.encodeDelta(ip, true, v.length);
+byte[] ipDelta = Encoding.encodeDelta(ip, true, v.length, srcHash, dstHash);
 byte[] recovered = Apply.applyDeltaInplace(r, ip, v.length);
 ```
 
 ## Running the tests
 
 ```bash
-# Python — 168 tests
+# Python — 179 tests
 cd src/python
-python3 test_delta.py
+python3 -m unittest test_delta -v
 
-# Rust — 38 integration tests
+# Rust — 63 tests
 cd src/rust/delta
 cargo test
 
-# C++ — 46 test cases
+# C++ — 54 test cases
 cd src/cpp
 cmake -B build && cmake --build build
 ctest --test-dir build
 
-# C — 39 integration tests
+# C — 45 integration tests
 cd src/c
-make test
+make && bash test_delta.sh
 
-# Java — 39 integration tests
+# Java — 39 unit tests
 cd src/java
 make test
 ```
