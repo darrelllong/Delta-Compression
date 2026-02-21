@@ -238,9 +238,9 @@ delta decode old.bin patch.delta recovered.bin
 
 ### Hash verification
 
-Decode verifies two SHAKE128 hashes embedded in every delta file: the
-reference file hash (pre-check, before reconstruction) and the output
-hash (post-check, after reconstruction).  A mismatch aborts with an
+Decode verifies two CRC-64/XZ checksums embedded in every delta file:
+the reference file CRC (pre-check, before reconstruction) and the output
+CRC (post-check, after reconstruction).  A mismatch aborts with an
 error.  To attempt recovery from a corrupted or mismatched delta, pass
 `--ignore-hash`; both checks are replaced with warnings and decoding
 proceeds:
@@ -330,7 +330,7 @@ from delta import (
     diff_onepass, diff_greedy, diff_correcting, DiffOptions,
     place_commands, encode_delta, decode_delta,
     apply_delta, apply_placed, apply_placed_inplace,
-    make_inplace, _shake128,
+    make_inplace, _crc64_xz,
 )
 
 with open('old.bin', 'rb') as f:
@@ -341,21 +341,21 @@ with open('new.bin', 'rb') as f:
 # Diff (verbose=True prints hash table stats to stderr)
 commands = diff_onepass(R, V, verbose=True)
 
-# Standard binary delta (src_hash/dst_hash required)
+# Standard binary delta (src_crc/dst_crc required)
 placed = place_commands(commands)
-src_hash = _shake128(R)
-dst_hash = _shake128(V)
+src_crc = _crc64_xz(R)
+dst_crc = _crc64_xz(V)
 delta_bytes = encode_delta(placed, inplace=False, version_size=len(V),
-                           src_hash=src_hash, dst_hash=dst_hash)
+                           src_crc=src_crc, dst_crc=dst_crc)
 
 # Decode and reconstruct
-placed2, is_inplace, version_size, src_hash2, dst_hash2 = decode_delta(delta_bytes)
+placed2, is_inplace, version_size, src_crc2, dst_crc2 = decode_delta(delta_bytes)
 recovered = apply_placed(R, placed2)
 
 # In-place delta
 ip_commands = make_inplace(R, commands, policy='localmin')
 ip_delta = encode_delta(ip_commands, inplace=True, version_size=len(V),
-                        src_hash=src_hash, dst_hash=dst_hash)
+                        src_crc=src_crc, dst_crc=dst_crc)
 recovered = apply_placed_inplace(R, ip_commands, len(V))
 ```
 
@@ -366,7 +366,7 @@ use delta::{
     diff, Algorithm, CyclePolicy, DiffOptions,
     place_commands, encode_delta, decode_delta,
     apply_placed_to, apply_placed_inplace_to,
-    make_inplace, shake128_16,
+    make_inplace, crc64_xz,
 };
 
 let r: &[u8] = &reference_data;
@@ -376,20 +376,20 @@ let v: &[u8] = &version_data;
 let opts = DiffOptions { verbose: true, ..DiffOptions::default() };
 let commands = diff(Algorithm::Onepass, r, v, &opts);
 
-// Standard binary delta (src_hash/dst_hash required)
+// Standard binary delta (src_crc/dst_crc required)
 let placed = place_commands(&commands);
-let src_hash = shake128_16(r);
-let dst_hash = shake128_16(v);
-let delta_bytes = encode_delta(&placed, false, v.len(), &src_hash, &dst_hash);
+let src_crc = crc64_xz(r);
+let dst_crc = crc64_xz(v);
+let delta_bytes = encode_delta(&placed, false, v.len(), &src_crc, &dst_crc);
 
 // Decode and reconstruct
-let (placed2, is_ip, version_size, src_hash2, dst_hash2) = decode_delta(&delta_bytes)?;
+let (placed2, is_ip, version_size, src_crc2, dst_crc2) = decode_delta(&delta_bytes)?;
 let mut output = vec![0u8; version_size];
 apply_placed_to(r, &placed2, &mut output);
 
 // In-place delta
 let (ip, _stats) = make_inplace(r, &commands, CyclePolicy::Localmin);
-let ip_delta = encode_delta(&ip, true, v.len(), &src_hash, &dst_hash);
+let ip_delta = encode_delta(&ip, true, v.len(), &src_crc, &dst_crc);
 ```
 
 ### C++
@@ -407,20 +407,20 @@ DiffOptions opts;
 opts.verbose = true;
 auto commands = diff(Algorithm::Onepass, r, v, opts);
 
-// Standard binary delta (src_hash/dst_hash required)
+// Standard binary delta (src_crc/dst_crc required)
 auto placed = place_commands(commands);
-auto src_hash = shake128_16(r.data(), r.size());
-auto dst_hash = shake128_16(v.data(), v.size());
-auto delta_bytes = encode_delta(placed, false, v.size(), src_hash, dst_hash);
+auto src_crc = crc64_xz(r.data(), r.size());
+auto dst_crc = crc64_xz(v.data(), v.size());
+auto delta_bytes = encode_delta(placed, false, v.size(), src_crc, dst_crc);
 
 // Decode and reconstruct
-auto [placed2, is_ip, version_size, src_hash2, dst_hash2] = decode_delta(delta_bytes);
+auto [placed2, is_ip, version_size, src_crc2, dst_crc2] = decode_delta(delta_bytes);
 std::vector<uint8_t> output(version_size, 0);
 apply_placed_to(r, placed2, output);
 
 // In-place delta
 auto ip = make_inplace(r, commands, CyclePolicy::Localmin);
-auto ip_delta = encode_delta(ip, true, v.size(), src_hash, dst_hash);
+auto ip_delta = encode_delta(ip, true, v.size(), src_crc, dst_crc);
 ```
 
 ### C

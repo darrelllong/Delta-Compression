@@ -101,24 +101,45 @@ impl RollingHash {
 
 }
 
-// ── SHAKE128 hash helper (FIPS 202 XOF) ─────────────────────────────────
+// ── CRC-64/XZ checksum (ECMA-182 reflected) ──────────────────────────────
 
-use sha3::{Shake128, digest::{Update, ExtendableOutput, XofReader}};
-use crate::types::DELTA_HASH_SIZE;
+use crate::types::DELTA_CRC_SIZE;
 
-/// Compute SHAKE128 with 16 bytes of output over `data` (FIPS 202 XOF).
+/// CRC-64/XZ lookup table.  Reflected poly: 0xC96C5795D7870F42.
+/// Generated at compile time via const fn.
+const fn make_crc64_table() -> [u64; 256] {
+    let poly: u64 = 0xC96C5795D7870F42;
+    let mut table = [0u64; 256];
+    let mut i = 0usize;
+    while i < 256 {
+        let mut crc = i as u64;
+        let mut j = 0;
+        while j < 8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ poly;
+            } else {
+                crc >>= 1;
+            }
+            j += 1;
+        }
+        table[i] = crc;
+        i += 1;
+    }
+    table
+}
+
+static CRC64_TABLE: [u64; 256] = make_crc64_table();
+
+/// Compute CRC-64/XZ of `data`; returns 8 bytes big-endian.
 ///
-/// Uses `sha3::Shake128` (domain separator `0x1F`), NOT `sha3::Sha3_128`
-/// (domain separator `0x06`).  Both produce 16 bytes but are incompatible:
-/// SHAKE128(b"") = 7f9c2ba4e88f827d616045507605853e
-/// SHA3-128(b"") = 47bce5c74f589f4867dbe57f31b68e5e
-pub fn shake128_16(data: &[u8]) -> [u8; DELTA_HASH_SIZE] {
-    let mut hasher = Shake128::default();
-    hasher.update(data);
-    let mut reader = hasher.finalize_xof();
-    let mut out = [0u8; DELTA_HASH_SIZE];
-    reader.read(&mut out);
-    out
+/// Standard check value: crc64_xz(b"123456789") = 0x995DC9BBDF1939FA.
+/// Empty input: crc64_xz(b"") = 0x0000000000000000.
+pub fn crc64_xz(data: &[u8]) -> [u8; DELTA_CRC_SIZE] {
+    let mut crc: u64 = 0xFFFFFFFFFFFFFFFF;
+    for &byte in data {
+        crc = CRC64_TABLE[((crc ^ byte as u64) & 0xFF) as usize] ^ (crc >> 8);
+    }
+    (crc ^ 0xFFFFFFFFFFFFFFFF).to_be_bytes()
 }
 
 // ── Primality testing (for hash table auto-sizing) ───────────────────────
@@ -344,44 +365,18 @@ mod tests {
         }
     }
 
-    // ── SHAKE128 NIST FIPS 202 test vectors ──────────────────────────────
+    // ── CRC-64/XZ check values ────────────────────────────────────────────
 
     #[test]
-    fn test_shake128_nist_empty() {
-        // NIST FIPS 202 SHAKE128 vector: empty input, first 16 bytes.
-        // SHA3-128(b"") = 47bce5c74f589f4867dbe57f31b68e5e — different
-        // domain separator (0x06 vs 0x1F); Sha3_128 would fail this test.
-        let expected = hex_to_bytes("7f9c2ba4e88f827d616045507605853e");
-        assert_eq!(shake128_16(b""), expected);
+    fn test_crc64_empty() {
+        // CRC-64/XZ of empty input is all-zeros.
+        assert_eq!(crc64_xz(b""), [0u8; 8]);
     }
 
     #[test]
-    fn test_shake128_nist_one_byte_bd() {
-        // NIST FIPS 202 SHAKE128 vector: msg = 0xbd, first 16 bytes
-        let expected = hex_to_bytes("83388286b2c0065ed237fbe714fc3163");
-        assert_eq!(shake128_16(&[0xbd]), expected);
-    }
-
-    #[test]
-    fn test_shake128_nist_200_byte_a3() {
-        // NIST FIPS 202 SHAKE128 vector: msg = 0xa3 * 200, first 16 bytes
-        let expected = hex_to_bytes("131ab8d2b594946b9c81333f9bb6e0ce");
-        assert_eq!(shake128_16(&[0xa3u8; 200]), expected);
-    }
-
-    #[test]
-    fn test_shake128_not_sha3_128() {
-        // SHAKE128 and SHA3-128 use different domain separators and produce
-        // different output.  This would fail if Sha3_128 were used instead.
-        let sha3_128_empty = hex_to_bytes("47bce5c74f589f4867dbe57f31b68e5e");
-        assert_ne!(shake128_16(b""), sha3_128_empty);
-    }
-
-    fn hex_to_bytes(s: &str) -> [u8; 16] {
-        let mut out = [0u8; 16];
-        for i in 0..16 {
-            out[i] = u8::from_str_radix(&s[i*2..i*2+2], 16).unwrap();
-        }
-        out
+    fn test_crc64_check_value() {
+        // Standard check value: CRC-64/XZ of b"123456789" = 0x995DC9BBDF1939FA.
+        let expected: [u8; 8] = [0x99, 0x5D, 0xC9, 0xBB, 0xDF, 0x19, 0x39, 0xFA];
+        assert_eq!(crc64_xz(b"123456789"), expected);
     }
 }

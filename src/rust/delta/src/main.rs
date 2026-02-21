@@ -8,9 +8,9 @@ use memmap2::MmapMut;
 use delta::{
     Algorithm, CyclePolicy, DiffOptions,
     apply_placed_inplace_to, apply_placed_to,
-    decode_delta, encode_delta,
+    crc64_xz, decode_delta, encode_delta,
     make_inplace, place_commands, unplace_commands,
-    placed_summary, shake128_16,
+    placed_summary,
 };
 
 /// Format a byte slice as a lowercase hex string.
@@ -208,20 +208,20 @@ fn main() {
             verbose,
             splay,
         } => {
-            // Read files and compute SHAKE128 hashes in a single sequential
-            // pass each, then use the loaded bytes for the diff algorithm.
+            // Read files and compute CRC-64/XZ checksums, then use the
+            // loaded bytes for the diff algorithm.
             let r_bytes = fs::read(&reference).unwrap_or_else(|e| {
                 eprintln!("Error reading {}: {}", reference, e);
                 process::exit(1);
             });
-            let src_hash = shake128_16(&r_bytes);
+            let src_crc = crc64_xz(&r_bytes);
             let r: &[u8] = &r_bytes;
 
             let v_bytes = fs::read(&version).unwrap_or_else(|e| {
                 eprintln!("Error reading {}: {}", version, e);
                 process::exit(1);
             });
-            let dst_hash = shake128_16(&v_bytes);
+            let dst_crc = crc64_xz(&v_bytes);
             let v: &[u8] = &v_bytes;
 
             let algo: Algorithm = algorithm.into();
@@ -247,7 +247,7 @@ fn main() {
             };
             let elapsed = t0.elapsed();
 
-            let delta_bytes = encode_delta(&placed, inplace, v.len(), &src_hash, &dst_hash);
+            let delta_bytes = encode_delta(&placed, inplace, v.len(), &src_crc, &dst_crc);
             fs::write(&delta_file, &delta_bytes).unwrap_or_else(|e| {
                 eprintln!("Error writing {}: {}", delta_file, e);
                 process::exit(1);
@@ -281,8 +281,8 @@ fn main() {
             println!("Copy bytes:   {}", stats.copy_bytes);
             println!("Add bytes:    {}", stats.add_bytes);
             if verbose {
-                println!("Src hash:     {}", hex_str(&src_hash));
-                println!("Dst hash:     {}", hex_str(&dst_hash));
+                println!("Src CRC:      {}", hex_str(&src_crc));
+                println!("Dst CRC:      {}", hex_str(&dst_crc));
             }
             println!("Time:         {:.3}s", elapsed.as_secs_f64());
         }
@@ -293,12 +293,12 @@ fn main() {
             output,
             ignore_hash,
         } => {
-            // Read reference and compute its hash in one sequential pass.
+            // Read reference and compute its CRC in one sequential pass.
             let r_bytes = fs::read(&reference).unwrap_or_else(|e| {
                 eprintln!("Error reading {}: {}", reference, e);
                 process::exit(1);
             });
-            let r_hash_actual = shake128_16(&r_bytes);
+            let r_crc_actual = crc64_xz(&r_bytes);
             let r: &[u8] = &r_bytes;
 
             let delta_bytes = fs::read(&delta_file).unwrap_or_else(|e| {
@@ -307,23 +307,23 @@ fn main() {
             });
 
             let t0 = Instant::now();
-            let (placed, is_ip, version_size, src_hash, dst_hash) =
+            let (placed, is_ip, version_size, src_crc, dst_crc) =
                 decode_delta(&delta_bytes).unwrap_or_else(|e| {
                     eprintln!("Error decoding delta: {}", e);
                     process::exit(1);
                 });
 
             // Pre-check: verify reference matches what was recorded at encode time.
-            if r_hash_actual != src_hash {
+            if r_crc_actual != src_crc {
                 if !ignore_hash {
                     eprintln!(
                         "error: source file does not match delta: expected {}, got {}",
-                        hex_str(&src_hash),
-                        hex_str(&r_hash_actual)
+                        hex_str(&src_crc),
+                        hex_str(&r_crc_actual)
                     );
                     process::exit(1);
                 }
-                eprintln!("warning: skipping source hash check (--ignore-hash)");
+                eprintln!("warning: skipping source CRC check (--ignore-hash)");
             }
 
             let out_bytes: Vec<u8> = if is_ip {
@@ -370,14 +370,14 @@ fn main() {
             };
             let elapsed = t0.elapsed();
 
-            // Post-check: verify reconstructed output matches recorded dest hash.
-            let out_hash_actual = shake128_16(&out_bytes);
-            if out_hash_actual != dst_hash {
+            // Post-check: verify reconstructed output matches recorded dest CRC.
+            let out_crc_actual = crc64_xz(&out_bytes);
+            if out_crc_actual != dst_crc {
                 if !ignore_hash {
                     eprintln!("error: output integrity check failed");
                     process::exit(1);
                 }
-                eprintln!("warning: skipping output integrity check (--ignore-hash)");
+                eprintln!("warning: skipping output CRC check (--ignore-hash)");
             }
 
             let fmt = if is_ip { "in-place" } else { "standard" };
@@ -394,7 +394,7 @@ fn main() {
                 process::exit(1);
             });
 
-            let (placed, is_ip, version_size, src_hash, dst_hash) =
+            let (placed, is_ip, version_size, src_crc, dst_crc) =
                 decode_delta(&delta_bytes).unwrap_or_else(|e| {
                     eprintln!("Error decoding delta: {}", e);
                     process::exit(1);
@@ -405,8 +405,8 @@ fn main() {
             println!("Delta file:   {} ({} bytes)", delta_file, delta_bytes.len());
             println!("Format:       {}", fmt);
             println!("Version size: {} bytes", version_size);
-            println!("Src hash:     {}", hex_str(&src_hash));
-            println!("Dst hash:     {}", hex_str(&dst_hash));
+            println!("Src CRC:      {}", hex_str(&src_crc));
+            println!("Dst CRC:      {}", hex_str(&dst_crc));
             println!("Commands:     {}", stats.num_commands);
             println!(
                 "  Copies:     {} ({} bytes)",
@@ -438,7 +438,7 @@ fn main() {
                 process::exit(1);
             });
 
-            let (placed, is_ip, version_size, src_hash, dst_hash) =
+            let (placed, is_ip, version_size, src_crc, dst_crc) =
                 decode_delta(&delta_bytes).unwrap_or_else(|e| {
                     eprintln!("Error decoding delta: {}", e);
                     process::exit(1);
@@ -459,8 +459,8 @@ fn main() {
             let (ip_placed, ip_stats) = make_inplace(r, &commands, pol);
             let elapsed = t0.elapsed();
 
-            // Preserve the original src_hash and dst_hash from the input delta.
-            let ip_delta = encode_delta(&ip_placed, true, version_size, &src_hash, &dst_hash);
+            // Preserve the original src_crc and dst_crc from the input delta.
+            let ip_delta = encode_delta(&ip_placed, true, version_size, &src_crc, &dst_crc);
             fs::write(&delta_out, &ip_delta).unwrap_or_else(|e| {
                 eprintln!("Error writing {}: {}", delta_out, e);
                 process::exit(1);

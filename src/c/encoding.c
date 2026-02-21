@@ -39,8 +39,8 @@ read_u32_be(const uint8_t *p)
 delta_buffer_t
 delta_encode(const delta_placed_commands_t *cmds, bool inplace,
              size_t version_size,
-             const uint8_t src_hash[DELTA_HASH_SIZE],
-             const uint8_t dst_hash[DELTA_HASH_SIZE])
+             const uint8_t src_crc[DELTA_CRC_SIZE],
+             const uint8_t dst_crc[DELTA_CRC_SIZE])
 {
 	/* Estimate size: header + per-cmd overhead */
 	size_t est = DELTA_HEADER_SIZE + cmds->len * 14 + 1;
@@ -61,8 +61,8 @@ delta_encode(const delta_placed_commands_t *cmds, bool inplace,
 	p += sizeof(DELTA_MAGIC);
 	*p++ = inplace ? DELTA_FLAG_INPLACE : 0;
 	write_u32_be(&p, (uint32_t)version_size);
-	memcpy(p, src_hash, DELTA_HASH_SIZE); p += DELTA_HASH_SIZE;
-	memcpy(p, dst_hash, DELTA_HASH_SIZE); p += DELTA_HASH_SIZE;
+	memcpy(p, src_crc, DELTA_CRC_SIZE); p += DELTA_CRC_SIZE;
+	memcpy(p, dst_crc, DELTA_CRC_SIZE); p += DELTA_CRC_SIZE;
 
 	/* Commands */
 	for (i = 0; i < cmds->len; i++) {
@@ -125,10 +125,10 @@ delta_decode(const uint8_t *data, size_t len)
 	result.inplace = (data[sizeof(DELTA_MAGIC)] & DELTA_FLAG_INPLACE) != 0;
 	result.version_size = read_u32_be(&data[sizeof(DELTA_MAGIC) + 1]);
 	{
-		size_t hash_off = sizeof(DELTA_MAGIC) + 1 + DELTA_U32_SIZE;
-		memcpy(result.src_hash, &data[hash_off], DELTA_HASH_SIZE);
-		memcpy(result.dst_hash, &data[hash_off + DELTA_HASH_SIZE],
-		       DELTA_HASH_SIZE);
+		size_t crc_off = sizeof(DELTA_MAGIC) + 1 + DELTA_U32_SIZE;
+		memcpy(result.src_crc, &data[crc_off], DELTA_CRC_SIZE);
+		memcpy(result.dst_crc, &data[crc_off + DELTA_CRC_SIZE],
+		       DELTA_CRC_SIZE);
 	}
 	pos = DELTA_HEADER_SIZE;
 
@@ -185,8 +185,8 @@ delta_decode_result_init(delta_decode_result_t *dr)
 	delta_placed_commands_init(&dr->commands);
 	dr->inplace = false;
 	dr->version_size = 0;
-	memset(dr->src_hash, 0, DELTA_HASH_SIZE);
-	memset(dr->dst_hash, 0, DELTA_HASH_SIZE);
+	memset(dr->src_crc, 0, DELTA_CRC_SIZE);
+	memset(dr->dst_crc, 0, DELTA_CRC_SIZE);
 }
 
 void

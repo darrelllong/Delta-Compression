@@ -111,34 +111,13 @@ write_file(const char *path, const uint8_t *data, size_t len)
 	fclose(f);
 }
 
-/* Write a file while computing its SHAKE128-16 hash in the same pass. */
+/* Write a file while computing its CRC-64/XZ in the same pass. */
 static void
 write_file_hashed(const char *path, const uint8_t *data, size_t len,
-                  uint8_t out_hash[DELTA_HASH_SIZE])
+                  uint8_t out_crc[DELTA_CRC_SIZE])
 {
-	FILE *f;
-	delta_shake128_ctx_t ctx;
-	const uint8_t *p = data;
-	size_t rem = len;
-
-	f = fopen(path, "wb");
-	if (!f) {
-		fprintf(stderr, "Error writing %s: %s\n", path, strerror(errno));
-		exit(1);
-	}
-	delta_shake128_init(&ctx);
-	while (rem > 0) {
-		size_t n = rem < 65536 ? rem : 65536;
-		if (fwrite(p, 1, n, f) != n) {
-			fprintf(stderr, "Error writing %s\n", path);
-			exit(1);
-		}
-		delta_shake128_update(&ctx, p, n);
-		p += n;
-		rem -= n;
-	}
-	fclose(f);
-	delta_shake128_final(&ctx, out_hash);
+	write_file(path, data, len);
+	delta_crc64_xz(data, len, out_crc);
 }
 
 /* ── Elapsed time helper ───────────────────────────────────────────── */
@@ -275,10 +254,10 @@ main(int argc, char **argv)
 			exit(1);
 		}
 
-		uint8_t src_hash[DELTA_HASH_SIZE];
-		uint8_t dst_hash[DELTA_HASH_SIZE];
-		delta_shake128_16(r_file.data, r_file.size, src_hash);
-		delta_shake128_16(v_file.data, v_file.size, dst_hash);
+		uint8_t src_crc[DELTA_CRC_SIZE];
+		uint8_t dst_crc[DELTA_CRC_SIZE];
+		delta_crc64_xz(r_file.data, r_file.size, src_crc);
+		delta_crc64_xz(v_file.data, v_file.size, dst_crc);
 
 		struct timespec t0, t1;
 		clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -309,7 +288,7 @@ main(int argc, char **argv)
 
 		delta_buffer_t delta_buf = delta_encode(&placed, inplace,
 		                                        v_file.size,
-		                                        src_hash, dst_hash);
+		                                        src_crc, dst_crc);
 		write_file(delta_path, delta_buf.data, delta_buf.len);
 
 		delta_summary_t stats = delta_placed_summary(&placed);
@@ -331,8 +310,8 @@ main(int argc, char **argv)
 		       stats.num_copies, stats.num_adds);
 		printf("Copy bytes:   %zu\n", stats.copy_bytes);
 		printf("Add bytes:    %zu\n", stats.add_bytes);
-		printf("Src hash:     "); fprint_hex(stdout, src_hash, DELTA_HASH_SIZE); printf("\n");
-		printf("Dst hash:     "); fprint_hex(stdout, dst_hash, DELTA_HASH_SIZE); printf("\n");
+		printf("Src CRC:      "); fprint_hex(stdout, src_crc, DELTA_CRC_SIZE); printf("\n");
+		printf("Dst CRC:      "); fprint_hex(stdout, dst_crc, DELTA_CRC_SIZE); printf("\n");
 		printf("Time:         %.3fs\n", elapsed);
 
 		delta_buffer_free(&delta_buf);
@@ -359,20 +338,20 @@ main(int argc, char **argv)
 
 		delta_decode_result_t dr = delta_decode(delta_data, delta_len);
 
-		/* Pre-check: verify reference matches embedded src_hash. */
+		/* Pre-check: verify reference matches embedded src_crc. */
 		{
-			uint8_t r_hash[DELTA_HASH_SIZE];
-			delta_shake128_16(r_file.data, r_file.size, r_hash);
-			if (memcmp(r_hash, dr.src_hash, DELTA_HASH_SIZE) != 0) {
+			uint8_t r_crc[DELTA_CRC_SIZE];
+			delta_crc64_xz(r_file.data, r_file.size, r_crc);
+			if (memcmp(r_crc, dr.src_crc, DELTA_CRC_SIZE) != 0) {
 				if (!ignore_hash) {
 					fprintf(stderr,
 					    "source file does not match delta: "
-					    "expected "); fprint_hex(stderr, dr.src_hash, DELTA_HASH_SIZE);
-					fprintf(stderr, ", got "); fprint_hex(stderr, r_hash, DELTA_HASH_SIZE);
+					    "expected "); fprint_hex(stderr, dr.src_crc, DELTA_CRC_SIZE);
+					fprintf(stderr, ", got "); fprint_hex(stderr, r_crc, DELTA_CRC_SIZE);
 					fprintf(stderr, "\n");
 					exit(1);
 				}
-				fprintf(stderr, "warning: skipping source hash check (--ignore-hash)\n");
+				fprintf(stderr, "warning: skipping source CRC check (--ignore-hash)\n");
 			}
 		}
 
@@ -392,17 +371,17 @@ main(int argc, char **argv)
 		clock_gettime(CLOCK_MONOTONIC, &t1);
 		double elapsed = elapsed_sec(&t0, &t1);
 
-		/* Write output and compute hash in a single pass. */
-		uint8_t out_hash[DELTA_HASH_SIZE];
-		write_file_hashed(out_path, out_buf.data, out_buf.len, out_hash);
+		/* Write output and compute CRC in a single pass. */
+		uint8_t out_crc[DELTA_CRC_SIZE];
+		write_file_hashed(out_path, out_buf.data, out_buf.len, out_crc);
 
-		/* Post-check: verify output matches embedded dst_hash. */
-		if (memcmp(out_hash, dr.dst_hash, DELTA_HASH_SIZE) != 0) {
+		/* Post-check: verify output matches embedded dst_crc. */
+		if (memcmp(out_crc, dr.dst_crc, DELTA_CRC_SIZE) != 0) {
 			if (!ignore_hash) {
 				fprintf(stderr, "output integrity check failed\n");
 				exit(1);
 			}
-			fprintf(stderr, "warning: skipping output integrity check (--ignore-hash)\n");
+			fprintf(stderr, "warning: skipping output CRC check (--ignore-hash)\n");
 		}
 
 		printf("Format:       %s\n", dr.inplace ? "in-place" : "standard");
@@ -410,8 +389,8 @@ main(int argc, char **argv)
 		printf("Delta:        %s (%zu bytes)\n", delta_path, delta_len);
 		printf("Output:       %s (%zu bytes)\n", out_path, dr.version_size);
 		if (!ignore_hash) {
-			printf("Src hash:     "); fprint_hex(stdout, dr.src_hash, DELTA_HASH_SIZE); printf("  OK\n");
-			printf("Dst hash:     "); fprint_hex(stdout, dr.dst_hash, DELTA_HASH_SIZE); printf("  OK\n");
+			printf("Src CRC:      "); fprint_hex(stdout, dr.src_crc, DELTA_CRC_SIZE); printf("  OK\n");
+			printf("Dst CRC:      "); fprint_hex(stdout, dr.dst_crc, DELTA_CRC_SIZE); printf("  OK\n");
 		}
 		printf("Time:         %.3fs\n", elapsed);
 
@@ -433,8 +412,8 @@ main(int argc, char **argv)
 		printf("Delta file:   %s (%zu bytes)\n", delta_path, delta_len);
 		printf("Format:       %s\n", dr.inplace ? "in-place" : "standard");
 		printf("Version size: %zu bytes\n", dr.version_size);
-		printf("Src hash:     "); fprint_hex(stdout, dr.src_hash, DELTA_HASH_SIZE); printf("\n");
-		printf("Dst hash:     "); fprint_hex(stdout, dr.dst_hash, DELTA_HASH_SIZE); printf("\n");
+		printf("Src CRC:      "); fprint_hex(stdout, dr.src_crc, DELTA_CRC_SIZE); printf("\n");
+		printf("Dst CRC:      "); fprint_hex(stdout, dr.dst_crc, DELTA_CRC_SIZE); printf("\n");
 		printf("Commands:     %zu\n", stats.num_commands);
 		printf("  Copies:     %zu (%zu bytes)\n",
 		       stats.num_copies, stats.copy_bytes);
@@ -497,7 +476,7 @@ main(int argc, char **argv)
 
 		delta_buffer_t ip_buf = delta_encode(&ip_placed, true,
 		                                     dr.version_size,
-		                                     dr.src_hash, dr.dst_hash);
+		                                     dr.src_crc, dr.dst_crc);
 		write_file(delta_out_path, ip_buf.data, ip_buf.len);
 
 		delta_summary_t stats = delta_placed_summary(&ip_placed);

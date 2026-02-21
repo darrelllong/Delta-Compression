@@ -26,15 +26,15 @@ std::vector<uint8_t> encode_delta(
     const std::vector<PlacedCommand>& commands,
     bool inplace,
     size_t version_size,
-    const std::array<uint8_t, DELTA_HASH_SIZE>& src_hash,
-    const std::array<uint8_t, DELTA_HASH_SIZE>& dst_hash);
+    const std::array<uint8_t, DELTA_CRC_SIZE>& src_crc,
+    const std::array<uint8_t, DELTA_CRC_SIZE>& dst_crc);
 
 /// Decode the unified binary delta format.
-/// Returns (commands, inplace, version_size, src_hash, dst_hash).
-/// Hash validation is the caller's responsibility.
+/// Returns (commands, inplace, version_size, src_crc, dst_crc).
+/// CRC validation is the caller's responsibility.
 std::tuple<std::vector<PlacedCommand>, bool, size_t,
-           std::array<uint8_t, DELTA_HASH_SIZE>,
-           std::array<uint8_t, DELTA_HASH_SIZE>> decode_delta(
+           std::array<uint8_t, DELTA_CRC_SIZE>,
+           std::array<uint8_t, DELTA_CRC_SIZE>> decode_delta(
     std::span<const uint8_t> data);
 
 /// Check if binary data is an in-place delta.

@@ -27,14 +27,14 @@
 #define DELTA_CMD_END      0
 #define DELTA_CMD_COPY     1
 #define DELTA_CMD_ADD      2
-#define DELTA_HASH_SIZE    16   /* SHAKE128(16) digest bytes */
-#define DELTA_HEADER_SIZE  41   /* magic(4) + flags(1) + version_size(4) + src_hash(16) + dst_hash(16) */
+#define DELTA_CRC_SIZE     8    /* CRC-64/XZ digest bytes */
+#define DELTA_HEADER_SIZE  25   /* magic(4) + flags(1) + version_size(4) + src_crc(8) + dst_crc(8) */
 #define DELTA_U32_SIZE     4
 #define DELTA_COPY_PAYLOAD 12   /* src(4) + dst(4) + len(4) */
 #define DELTA_ADD_HEADER   8    /* dst(4) + len(4) */
 #define DELTA_BUF_CAP      256
 
-static const uint8_t DELTA_MAGIC[4] = {'D', 'L', 'T', 0x02};
+static const uint8_t DELTA_MAGIC[4] = {'D', 'L', 'T', 0x03};
 
 /* ── Checked allocation helpers ───────────────────────────────────── */
 
@@ -284,44 +284,48 @@ delta_commands_t delta_diff(
 	const delta_diff_options_t *opts);
 
 /* ====================================================================
- * SHAKE128 hash (FIPS 202 XOF) — restricted to 16-byte output
+ * CRC-64/XZ (ECMA-182 reflected) — 8-byte output
  *
- * LIMITATION: the squeeze step always emits exactly DELTA_HASH_SIZE
- * (16) bytes.  The absorb path (init/update) is fully general and
- * handles arbitrary-length input correctly.  The final/squeeze path
- * applies one Keccak-p[1600,24] permutation and reads 16 bytes from
- * the first lane.  To support longer output, replace the fixed-length
- * squeeze in delta_shake128_final with a loop that extracts up to
- * DELTA_SHAKE128_RATE bytes per permutation call until the requested
- * number of bytes have been produced.
+ * Poly (reflected): 0xC96C5795D7870F42, Init = XorOut = 0xFFFFFFFFFFFFFFFF.
+ * Check value: delta_crc64_xz(b"123456789", 9, out) → 0x995DC9BBDF1939FA BE.
+ * Output stored big-endian (consistent with u32 fields in the format).
  * ==================================================================== */
 
-/* Streaming context: absorb data in chunks, then finalize. */
-#define DELTA_SHAKE128_RATE 168
+static inline void
+delta_crc64_xz(const uint8_t *data, size_t len, uint8_t out[DELTA_CRC_SIZE])
+{
+	static uint64_t table[256];
+	static int initialised = 0;
+	uint64_t crc;
+	size_t i;
 
-typedef struct {
-	uint64_t state[25];
-	uint8_t  buf[DELTA_SHAKE128_RATE];
-	size_t   buflen;
-} delta_shake128_ctx_t;
+	if (!initialised) {
+		const uint64_t poly = 0xC96C5795D7870F42ULL;
+		for (i = 0; i < 256; i++) {
+			uint64_t c = (uint64_t)i;
+			int j;
+			for (j = 0; j < 8; j++)
+				c = (c & 1) ? (c >> 1) ^ poly : (c >> 1);
+			table[i] = c;
+		}
+		initialised = 1;
+	}
 
-void delta_shake128_init(delta_shake128_ctx_t *ctx);
-void delta_shake128_update(delta_shake128_ctx_t *ctx,
-                           const uint8_t *data, size_t len);
+	crc = 0xFFFFFFFFFFFFFFFFULL;
+	for (i = 0; i < len; i++)
+		crc = table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
+	crc ^= 0xFFFFFFFFFFFFFFFFULL;
 
-/* Squeeze exactly DELTA_HASH_SIZE (16) bytes.  See limitation above. */
-void delta_shake128_final(delta_shake128_ctx_t *ctx,
-                          uint8_t out[DELTA_HASH_SIZE]);
-
-/* Convenience: absorb + squeeze in one call.  Output is 16 bytes. */
-void delta_shake128_16(const uint8_t *data, size_t len,
-                       uint8_t out[DELTA_HASH_SIZE]);
+	/* Store big-endian. */
+	for (i = 0; i < DELTA_CRC_SIZE; i++)
+		out[i] = (uint8_t)(crc >> (56 - 8 * i));
+}
 
 /* ====================================================================
  * Binary delta format encode/decode
  *
- * Format: DLT\x02 + flags:u8 + version_size:u32be
- *         + src_hash(16) + dst_hash(16) + commands + END(0)
+ * Format: DLT\x03 + flags:u8 + version_size:u32be
+ *         + src_crc(8) + dst_crc(8) + commands + END(0)
  * ==================================================================== */
 
 typedef struct {
@@ -331,8 +335,8 @@ typedef struct {
 
 delta_buffer_t delta_encode(const delta_placed_commands_t *cmds,
                             bool inplace, size_t version_size,
-                            const uint8_t src_hash[DELTA_HASH_SIZE],
-                            const uint8_t dst_hash[DELTA_HASH_SIZE]);
+                            const uint8_t src_crc[DELTA_CRC_SIZE],
+                            const uint8_t dst_crc[DELTA_CRC_SIZE]);
 void           delta_buffer_init(delta_buffer_t *buf);
 void           delta_buffer_free(delta_buffer_t *buf);
 
@@ -340,8 +344,8 @@ typedef struct {
 	delta_placed_commands_t commands;
 	bool    inplace;
 	size_t  version_size;
-	uint8_t src_hash[DELTA_HASH_SIZE];
-	uint8_t dst_hash[DELTA_HASH_SIZE];
+	uint8_t src_crc[DELTA_CRC_SIZE];
+	uint8_t dst_crc[DELTA_CRC_SIZE];
 } delta_decode_result_t;
 
 delta_decode_result_t delta_decode(const uint8_t *data, size_t len);
