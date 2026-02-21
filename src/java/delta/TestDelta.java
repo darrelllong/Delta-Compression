@@ -727,6 +727,47 @@ public class TestDelta {
 
     // ── main ──────────────────────────────────────────────────────────────────
 
+    // ── SHAKE128 NIST FIPS 202 test vectors ──────────────────────────────────
+
+    static void testShake128NistEmpty() {
+        // NIST FIPS 202 SHAKE128 vector: empty input, first 16 bytes.
+        // SHA3-128("") = 47bce5c74f589f4867dbe57f31b68e5e — different domain
+        // separator (0x06 vs 0x1F); MessageDigest("SHA3-128") would fail here.
+        byte[] expected = hexToBytes("7f9c2ba4e88f827d616045507605853e");
+        assertArrayEquals(expected, Hash.Shake128.hash16(new byte[0]), "NIST empty");
+    }
+
+    static void testShake128NistOneByteBd() {
+        // NIST FIPS 202 SHAKE128 vector: msg = 0xbd, first 16 bytes
+        byte[] expected = hexToBytes("83388286b2c0065ed237fbe714fc3163");
+        assertArrayEquals(expected, Hash.Shake128.hash16(new byte[]{(byte)0xbd}), "NIST 0xbd");
+    }
+
+    static void testShake128Nist200ByteA3() {
+        // NIST FIPS 202 SHAKE128 vector: msg = 0xa3 * 200, first 16 bytes
+        byte[] expected = hexToBytes("131ab8d2b594946b9c81333f9bb6e0ce");
+        byte[] input = new byte[200];
+        Arrays.fill(input, (byte)0xa3);
+        assertArrayEquals(expected, Hash.Shake128.hash16(input), "NIST 0xa3*200");
+    }
+
+    static void testShake128NotSha3_128() {
+        // SHAKE128 and SHA3-128 share the same permutation and rate but use
+        // different domain separators (0x1F vs 0x06) and produce different
+        // output.  This would fail if MessageDigest("SHA3-128") were used.
+        byte[] sha3_128_empty = hexToBytes("47bce5c74f589f4867dbe57f31b68e5e");
+        byte[] shake128_empty = Hash.Shake128.hash16(new byte[0]);
+        if (Arrays.equals(shake128_empty, sha3_128_empty))
+            throw new AssertionError("SHAKE128 must differ from SHA3-128");
+    }
+
+    static byte[] hexToBytes(String hex) {
+        byte[] out = new byte[hex.length() / 2];
+        for (int i = 0; i < out.length; i++)
+            out[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+        return out;
+    }
+
     public static void main(String[] args) {
 
         System.out.println("\n=== Standard differencing ===");
@@ -772,6 +813,12 @@ public class TestDelta {
         System.out.println("\n=== Checkpointing ===");
         check("correcting tiny table (q=7)",    TestDelta::testCorrectingCheckpointingTinyTable);
         check("correcting various table sizes", TestDelta::testCorrectingCheckpointingVariousSizes);
+
+        System.out.println("\n=== SHAKE128 ===");
+        check("NIST vector: empty input",       TestDelta::testShake128NistEmpty);
+        check("NIST vector: one byte 0xbd",     TestDelta::testShake128NistOneByteBd);
+        check("NIST vector: 200 bytes of 0xa3", TestDelta::testShake128Nist200ByteA3);
+        check("not SHA3-128",                   TestDelta::testShake128NotSha3_128);
 
         System.out.println("\n=== Primality ===");
         check("next prime is prime",            TestDelta::testNextPrimeIsPrime);
