@@ -498,15 +498,15 @@ byte[] recovered = Apply.applyDeltaInplace(r, ip, v.length);
 ## Running the tests
 
 ```bash
-# Python — 179 tests
+# Python — 180 tests
 cd src/python
 python3 -m unittest test_delta -v
 
-# Rust — 63 tests
+# Rust — 67 tests
 cd src/rust/delta
 cargo test
 
-# C++ — 54 test cases
+# C++ — 55 test cases
 cd src/cpp
 cmake -B build && cmake --build build
 ctest --test-dir build
@@ -515,7 +515,7 @@ ctest --test-dir build
 cd src/c
 make && bash test_delta.sh
 
-# Java — 39 unit tests
+# Java — 43 unit tests
 cd src/java
 make test
 ```
