@@ -150,6 +150,38 @@ warnings and continues, providing an escape hatch for partial recovery
 from a corrupted or mismatched delta.  The library itself does not
 enforce the checks; hash validation is the caller's responsibility.
 
+### The SHA3-128 naming trap
+
+SHAKE128 and SHA3-128 share the same Keccak-p[1600,24] permutation,
+the same rate (1344 bits), and the same capacity (256 bits) — but they
+use different domain-separation padding bytes:
+
+- **SHAKE128**: `0x1F` (XOF suffix)
+- **SHA3-128**: `0x06` (SHA-3 suffix)
+
+Both produce 16 bytes.  A porter who reaches for the convenient
+"16-byte SHA-3 hash" in their language's standard library — Python's
+`hashlib.sha3_128`, Rust's `sha3::Sha3_128`, Java's
+`MessageDigest.getInstance("SHA3-128")` — gets a silently wrong answer
+that is byte-for-byte incompatible with SHAKE128.  The pre-check will
+always fail at decode time with "source file does not match delta",
+with no obvious indication of why.
+
+For example, SHA3-128 and SHAKE128 diverge immediately on the empty
+input:
+
+```
+SHAKE128(b"", 16 bytes) = 7f9c2ba4e88f827d616045507605853e
+SHA3-128(b"")           = 47bce5c74f589f4867dbe57f31b68e5e
+```
+
+The correct library calls are: `hashlib.shake_128(data).digest(16)`
+(Python), `sha3::Shake128` (Rust `sha3` crate), or a hand-written
+Keccak sponge with the `0x1F` domain separator.  All five existing
+implementations are verified against NIST FIPS 202 test vectors in
+their test suites, which pins the correct algorithm and would
+immediately catch a SHA3-128 substitution.
+
 ## In-place conversion: CRWI graph and cycle breaking
 
 In-place reconstruction writes the version V directly into the buffer

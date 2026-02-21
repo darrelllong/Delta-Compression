@@ -107,6 +107,11 @@ use sha3::{Shake128, digest::{Update, ExtendableOutput, XofReader}};
 use crate::types::DELTA_HASH_SIZE;
 
 /// Compute SHAKE128 with 16 bytes of output over `data` (FIPS 202 XOF).
+///
+/// Uses `sha3::Shake128` (domain separator `0x1F`), NOT `sha3::Sha3_128`
+/// (domain separator `0x06`).  Both produce 16 bytes but are incompatible:
+/// SHAKE128(b"") = 7f9c2ba4e88f827d616045507605853e
+/// SHA3-128(b"") = 47bce5c74f589f4867dbe57f31b68e5e
 pub fn shake128_16(data: &[u8]) -> [u8; DELTA_HASH_SIZE] {
     let mut hasher = Shake128::default();
     hasher.update(data);
@@ -337,5 +342,46 @@ mod tests {
             assert!(np >= n);
             assert!(is_prime(np), "next_prime({}) = {} should be prime", n, np);
         }
+    }
+
+    // ── SHAKE128 NIST FIPS 202 test vectors ──────────────────────────────
+
+    #[test]
+    fn test_shake128_nist_empty() {
+        // NIST FIPS 202 SHAKE128 vector: empty input, first 16 bytes.
+        // SHA3-128(b"") = 47bce5c74f589f4867dbe57f31b68e5e — different
+        // domain separator (0x06 vs 0x1F); Sha3_128 would fail this test.
+        let expected = hex_to_bytes("7f9c2ba4e88f827d616045507605853e");
+        assert_eq!(shake128_16(b""), expected);
+    }
+
+    #[test]
+    fn test_shake128_nist_one_byte_bd() {
+        // NIST FIPS 202 SHAKE128 vector: msg = 0xbd, first 16 bytes
+        let expected = hex_to_bytes("83388286b2c0065ed237fbe714fc3163");
+        assert_eq!(shake128_16(&[0xbd]), expected);
+    }
+
+    #[test]
+    fn test_shake128_nist_200_byte_a3() {
+        // NIST FIPS 202 SHAKE128 vector: msg = 0xa3 * 200, first 16 bytes
+        let expected = hex_to_bytes("131ab8d2b594946b9c81333f9bb6e0ce");
+        assert_eq!(shake128_16(&[0xa3u8; 200]), expected);
+    }
+
+    #[test]
+    fn test_shake128_not_sha3_128() {
+        // SHAKE128 and SHA3-128 use different domain separators and produce
+        // different output.  This would fail if Sha3_128 were used instead.
+        let sha3_128_empty = hex_to_bytes("47bce5c74f589f4867dbe57f31b68e5e");
+        assert_ne!(shake128_16(b""), sha3_128_empty);
+    }
+
+    fn hex_to_bytes(s: &str) -> [u8; 16] {
+        let mut out = [0u8; 16];
+        for i in 0..16 {
+            out[i] = u8::from_str_radix(&s[i*2..i*2+2], 16).unwrap();
+        }
+        out
     }
 }

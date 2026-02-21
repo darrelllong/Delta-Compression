@@ -134,6 +134,13 @@ public final class Hash {
     }
 
     // ── SHAKE128 (FIPS 202 XOF) — restricted to 16-byte output ──────
+    //
+    // Domain separator: 0x1F (SHAKE/XOF suffix, FIPS 202 §6.2).
+    // NOT SHA3-128, which uses domain separator 0x06 and produces different
+    // output despite sharing the same permutation, rate, and capacity.
+    // Example: SHAKE128("") = 7f9c2ba4e88f827d616045507605853e
+    //          SHA3-128("")  = 47bce5c74f589f4867dbe57f31b68e5e
+    // MessageDigest.getInstance("SHA3-128") would silently produce the wrong hash.
 
     /**
      * Streaming SHAKE128 context.  Call update() any number of times, then finish().

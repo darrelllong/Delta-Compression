@@ -122,10 +122,20 @@ static std::string to_hex(const std::array<uint8_t, DELTA_HASH_SIZE>& h) {
 }
 
 TEST_CASE("shake128_16 NIST vector: empty input", "[hash]") {
-    // NIST FIPS 202 / SHA-3 test vectors: SHAKE128("", 16 bytes)
+    // NIST FIPS 202 SHAKE128 vector: empty input, first 16 bytes.
+    // SHA3-128("") = 47bce5c74f589f4867dbe57f31b68e5e — different domain
+    // separator (0x06 vs 0x1F); a sha3_128 substitution would fail here.
     static const uint8_t kEmpty[1] = {};
     auto h = shake128_16(kEmpty, 0);
     CHECK(to_hex(h) == "7f9c2ba4e88f827d616045507605853e");
+}
+
+TEST_CASE("shake128_16 is not SHA3-128", "[hash]") {
+    // SHAKE128 and SHA3-128 share the same permutation and rate but differ
+    // in domain separator (0x1F vs 0x06), producing different output.
+    static const uint8_t kEmpty[1] = {};
+    auto h = shake128_16(kEmpty, 0);
+    CHECK(to_hex(h) != "47bce5c74f589f4867dbe57f31b68e5e");
 }
 
 TEST_CASE("shake128_16 NIST vector: one byte 0xbd", "[hash]") {

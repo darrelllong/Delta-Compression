@@ -968,7 +968,10 @@ class TestShake128(unittest.TestCase):
         self.assertNotEqual(_shake128(b'hello'), _shake128(b'world'))
 
     def test_nist_empty_input(self):
-        # NIST FIPS 202 SHAKE128 test vector: empty message, first 16 bytes
+        # NIST FIPS 202 SHAKE128 test vector: empty message, first 16 bytes.
+        # SHA3-128 of empty input is 47bce5c74f589f4867dbe57f31b68e5e —
+        # different domain separator (0x06 vs 0x1F); substituting sha3_128
+        # here would fail this test.
         expected = bytes.fromhex('7f9c2ba4e88f827d616045507605853e')
         self.assertEqual(_shake128(b''), expected)
 
@@ -981,6 +984,14 @@ class TestShake128(unittest.TestCase):
         # NIST FIPS 202 SHAKE128 test vector: msg = 0xa3 * 200, first 16 bytes
         expected = bytes.fromhex('131ab8d2b594946b9c81333f9bb6e0ce')
         self.assertEqual(_shake128(b'\xa3' * 200), expected)
+
+    def test_not_sha3_128(self):
+        # SHAKE128 and SHA3-128 share the same permutation and rate but use
+        # different domain separators (0x1F vs 0x06) and produce different
+        # output.  This test would fail if _shake128() were implemented with
+        # hashlib.sha3_128 instead of hashlib.shake_128.
+        sha3_128_empty = bytes.fromhex('47bce5c74f589f4867dbe57f31b68e5e')
+        self.assertNotEqual(_shake128(b''), sha3_128_empty)
 
 
 class TestHashEmbeddedInDelta(unittest.TestCase):

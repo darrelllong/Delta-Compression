@@ -911,7 +911,11 @@ DELTA_ADD_HEADER = 8    # dst(4) + len(4)
 
 
 def _shake128(data: bytes) -> bytes:
-    """Compute SHAKE128 hash with 16 bytes of output (FIPS 202 XOF)."""
+    """Compute SHAKE128 hash with 16 bytes of output (FIPS 202 XOF).
+
+    Uses hashlib.shake_128 (domain separator 0x1F), NOT hashlib.sha3_128
+    (domain separator 0x06).  Both produce 16 bytes but are incompatible.
+    """
     return hashlib.shake_128(data).digest(DELTA_HASH_SIZE)
 
 
