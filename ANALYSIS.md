@@ -271,6 +271,20 @@ Total: O(n log n + E).
 
 ---
 
+## Test scripts
+
+| Script | Purpose |
+|--------|---------|
+| `tests/correctness.sh` | Builds all five implementations and runs unit tests + cross-language compatibility (180/67/55/45/43 tests) |
+| `tests/kernel-delta-test.sh` | Performance benchmark on Linux 5.1.0–5.1.7 kernel tarballs (~831 MB each) |
+| `tests/transposition-benchmark.sh` | Performance benchmark on synthetic block permutations (16 MB–1 GB) |
+
+`tests/correctness.sh` is the primary correctness gate: it verifies that
+all five implementations agree on every encode/decode round-trip and that
+any implementation can decode a delta produced by any other.  The benchmark
+scripts are separate so they can be run independently without the multi-GB
+data requirements of the kernel tests.
+
 ## Performance benchmarks
 
 ### Kernel tarball benchmark (linux-5.1 → linux-5.1.1, 871 MB)
