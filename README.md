@@ -161,11 +161,11 @@ Individual suites:
 
 | Language | Tests | Command |
 |----------|------:|---------|
-| Python | 180 | `cd src/python && python3 -m unittest test_delta -v` |
-| Rust | 67 | `cd src/rust/delta && cargo test` |
-| C++ | 55 | `cd src/cpp && cmake -B build && cmake --build build && ctest --test-dir build` |
+| Python | 178 | `cd src/python && python3 -m unittest test_delta -v` |
+| Rust | 64 | `cd src/rust/delta && cargo test` |
+| C++ | 53 | `cd src/cpp && cmake -B build && cmake --build build && ctest --test-dir build` |
 | C | 45 | `cd src/c && make && bash test_delta.sh` |
-| Java | 43 | `cd src/java && make test` |
+| Java | 41 | `cd src/java && make test` |
 
 Tests cover all three algorithms, binary round-trips, paper examples,
 edge cases (empty/identical/completely different files), in-place
@@ -182,11 +182,11 @@ for the full table.
 
 ```
 src/
-  python/         Single-file library + CLI + 180-test suite
-  rust/delta/     Cargo crate — library + clap CLI + 67 tests
-  cpp/            CMake project — static library + CLI11 CLI + Catch2 tests (55)
+  python/         Single-file library + CLI + 178-test suite
+  rust/delta/     Cargo crate — library + clap CLI + 64 tests
+  cpp/            CMake project — static library + CLI11 CLI + Catch2 tests (53)
   c/              Makefile project — single-header API + CLI + 45 tests
-  java/delta/     Java 11+ sources — library + CLI + 43 tests
+  java/delta/     Java 11+ sources — library + CLI + 41 tests
 tests/
   correctness.sh          Run all unit + cross-language tests (all 5 implementations)
   kernel-delta-test.sh    Kernel tarball benchmark

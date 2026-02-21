@@ -242,7 +242,7 @@ Total: O(n log n + E).
 
 | Script | Purpose |
 |--------|---------|
-| `tests/correctness.sh` | Builds all five implementations and runs unit tests + cross-language compatibility (180/67/55/45/43 tests) |
+| `tests/correctness.sh` | Builds all five implementations and runs unit tests + cross-language compatibility (178/64/53/45/41 tests) |
 | `tests/kernel-delta-test.sh` | Performance benchmark on Linux 5.1.0–5.1.7 kernel tarballs (~831 MB each) |
 | `tests/transposition-benchmark.sh` | Performance benchmark on synthetic block permutations (16 MB–1 GB) |
 
