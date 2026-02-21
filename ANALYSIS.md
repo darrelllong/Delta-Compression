@@ -394,11 +394,11 @@ flags).  All tarballs are ~831 MB post-gunzip.
 |---------|-------------:|------------:|-----------------:|----------------:|
 | 5.1.1 | 0.58% | 2s | 0.80% | 7s |
 | 5.1.2 | 0.65% | 2s | 1.00% | 7s |
-| 5.1.3 | 0.66% | 2s | 1.04% | 6s |
-| 5.1.4 | 0.69% | 2s | 1.06% | 6s |
+| 5.1.3 | 0.66% | 2s | 1.04% | 7s |
+| 5.1.4 | 0.69% | 2s | 1.06% | 7s |
 | 5.1.5 | 0.70% | 2s | 0.86% | 7s |
-| 5.1.6 | 0.73% | 2s | 1.00% | 6s |
-| 5.1.7 | 0.73% | 2s | 0.88% | 6s |
+| 5.1.6 | 0.73% | 2s | 1.00% | 8s |
+| 5.1.7 | 0.73% | 2s | 0.88% | 8s |
 
 Onepass ratios climb steadily as versions accumulate changes from the fixed
 5.1.0 base.  Correcting ratios fluctuate: each version's checkpoint bias k
@@ -411,11 +411,11 @@ seeds survive the checkpoint filter and hence how many matches are found.
 |------------|-------------:|------------:|-----------------:|----------------:|
 | 5.1.0→5.1.1 | 0.58% | 2s | 0.80% | 7s |
 | 5.1.1→5.1.2 | 0.53% | 2s | 0.85% | 7s |
-| 5.1.2→5.1.3 | 0.47% | 2s | 1.01% | 7s |
-| 5.1.3→5.1.4 | 0.50% | 2s | 0.82% | 7s |
+| 5.1.2→5.1.3 | 0.47% | 3s | 1.01% | 7s |
+| 5.1.3→5.1.4 | 0.50% | 2s | 0.82% | 8s |
 | 5.1.4→5.1.5 | 0.48% | 2s | 0.79% | 7s |
 | 5.1.5→5.1.6 | 0.49% | 2s | 0.78% | 7s |
-| 5.1.6→5.1.7 | 0.47% | 2s | 0.86% | 7s |
+| 5.1.6→5.1.7 | 0.47% | 2s | 0.86% | 8s |
 
 Successive onepass deltas (0.47–0.58%) are consistently smaller than
 from-base deltas to the same version (0.58–0.73%): each adjacent pair of
@@ -428,12 +428,12 @@ reference size.
 
 | Version | onepass ratio | onepass time | correcting ratio | correcting time |
 |---------|-------------:|------------:|-----------------:|----------------:|
-| 5.1.2 | 0.53% | 2s | 0.85% | 7s |
-| 5.1.3 | 0.54% | 2s | 0.81% | 7s |
-| 5.1.4 | 0.58% | 2s | 0.97% | 7s |
+| 5.1.2 | 0.53% | 2s | 0.85% | 8s |
+| 5.1.3 | 0.54% | 2s | 0.81% | 8s |
+| 5.1.4 | 0.58% | 3s | 0.97% | 7s |
 | 5.1.5 | 0.58% | 2s | 0.82% | 7s |
-| 5.1.6 | 0.62% | 2s | 0.87% | 7s |
-| 5.1.7 | 0.62% | 2s | 0.82% | 7s |
+| 5.1.6 | 0.62% | 3s | 0.87% | 8s |
+| 5.1.7 | 0.62% | 3s | 0.82% | 7s |
 
 Using 5.1.1 as reference, onepass ratios grow gradually from 0.53% to 0.62%
 as versions diverge further — slower growth than from base 5.1.0, since 5.1.1
