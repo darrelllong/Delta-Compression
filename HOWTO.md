@@ -497,6 +497,15 @@ byte[] recovered = Apply.applyDeltaInplace(r, ip, v.length);
 
 ## Running the tests
 
+To run all suites at once (builds every implementation, runs unit tests,
+then runs cross-language compatibility tests):
+
+```bash
+./tests/correctness.sh
+```
+
+Individual suites:
+
 ```bash
 # Python — 180 tests
 cd src/python

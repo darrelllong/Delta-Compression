@@ -151,6 +151,14 @@ attempt recovery from a corrupted or mismatched delta.
 
 ## Testing
 
+To run all unit and cross-language compatibility tests in one shot:
+
+```bash
+./tests/correctness.sh
+```
+
+Individual suites:
+
 | Language | Tests | Command |
 |----------|------:|---------|
 | Python | 180 | `cd src/python && python3 -m unittest test_delta -v` |
@@ -180,7 +188,9 @@ src/
   c/              Makefile project — single-header API + CLI + 45 tests
   java/delta/     Java 11+ sources — library + CLI + 43 tests
 tests/
+  correctness.sh          Run all unit + cross-language tests (all 5 implementations)
   kernel-delta-test.sh    Kernel tarball benchmark
+  transposition-benchmark.sh  Synthetic permutation benchmark
 pubs/                     Ajtai et al. 2002, Burns et al. 2003 (PDFs)
 ```
 
