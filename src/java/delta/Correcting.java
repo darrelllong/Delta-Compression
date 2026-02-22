@@ -51,7 +51,7 @@ public final class Correcting {
         long fSize = numSeeds > 0 ? Hash.nextPrime(2 * numSeeds) : 1;
         long m = fSize <= cap ? 1 : (fSize + cap - 1) / cap;
         long k = v.length >= p
-            ? Hash.fingerprint(v, v.length / 2, p) % fSize % m
+            ? Hash.fingerprint(v, Math.min(v.length / 2, v.length - p), p) % fSize % m
             : 0;
 
         if (verbose) {

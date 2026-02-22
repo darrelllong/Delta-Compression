@@ -131,7 +131,8 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 	/* Biased k (p. 348) */
 	k = 0;
 	if (v_len >= p) {
-		uint64_t fp_k = delta_fingerprint(v, v_len / 2, p);
+		size_t fp_off = v_len / 2 < v_len - p ? v_len / 2 : v_len - p;
+		uint64_t fp_k = delta_fingerprint(v, fp_off, p);
 		k = fp_k % f_size % m;
 	}
 

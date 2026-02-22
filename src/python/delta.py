@@ -624,7 +624,7 @@ def diff_correcting(R: bytes, V: bytes,
     # Biased k (p. 348): pick a V offset, use its footprint mod m.
     # This biases checkpoints toward footprints common in V.
     if len(V) >= p:
-        k = _fingerprint(V, len(V) // 2, p) % F % m
+        k = _fingerprint(V, min(len(V) // 2, len(V) - p), p) % F % m
     else:
         k = 0
 

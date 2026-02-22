@@ -725,6 +725,266 @@ public class TestDelta {
         }
     }
 
+    // ── edge cases and boundaries ─────────────────────────────────────────────
+
+    /**
+     * Single-byte inputs: r=1 v=1 (same), r=1 v=1 (different), r=0 v=1, r=1 v=0.
+     * Uses p=1 so every byte is a potential seed.
+     */
+    static void testSingleByte() {
+        byte[] one    = {0x41};
+        byte[] other  = {0x42};
+        byte[] empty  = {};
+        for (Algorithm algo : ALL_ALGOS) {
+            assertArrayEquals(one,   Apply.applyDelta(one,   Diff.diff(algo, one,   one,   opts(1))), algo + " 1b same");
+            assertArrayEquals(other, Apply.applyDelta(one,   Diff.diff(algo, one,   other, opts(1))), algo + " 1b differ");
+            assertArrayEquals(empty, Apply.applyDelta(one,   Diff.diff(algo, one,   empty, opts(1))), algo + " 1b r=1 v=0");
+            assertArrayEquals(one,   Apply.applyDelta(empty, Diff.diff(algo, empty, one,   opts(1))), algo + " 1b r=0 v=1");
+        }
+    }
+
+    /**
+     * Single-byte mutation at position 0, at position n-1, appending one byte,
+     * and dropping the last byte.  All three algorithms must produce correct output.
+     */
+    static void testBoundaryByteMutations() {
+        int n = 64, p = 4;
+        byte[] r = new byte[n];
+        for (int i = 0; i < n; i++) r[i] = (byte) i;
+
+        byte[] vFirst  = Arrays.copyOf(r, n); vFirst[0]   ^= (byte) 0xFF;
+        byte[] vLast   = Arrays.copyOf(r, n); vLast[n-1]  ^= (byte) 0xFF;
+        byte[] vAppend = Arrays.copyOf(r, n + 1); vAppend[n] = (byte) 0x5A;
+        byte[] vDrop   = Arrays.copyOf(r, n - 1);
+
+        for (Algorithm algo : ALL_ALGOS) {
+            assertArrayEquals(vFirst,  roundtrip(algo, r, vFirst,  p), algo + " byte[0] flipped");
+            assertArrayEquals(vLast,   roundtrip(algo, r, vLast,   p), algo + " byte[n-1] flipped");
+            assertArrayEquals(vAppend, roundtrip(algo, r, vAppend, p), algo + " one byte appended");
+            assertArrayEquals(vDrop,   roundtrip(algo, r, vDrop,   p), algo + " last byte dropped");
+        }
+    }
+
+    /**
+     * Reference shorter than seed length p: no seeds can be extracted from R,
+     * so the entire version must come from Add commands.  Tested for rLen 0..p-1.
+     */
+    static void testRefShorterThanSeed() {
+        int p = 8;
+        byte[] v = {0x10, 0x11, 0x12, 0x13, (byte)0xAA, (byte)0xBB, (byte)0xCC, (byte)0xDD};
+        for (int rLen = 0; rLen < p; rLen++) {
+            byte[] r = new byte[rLen];
+            for (int i = 0; i < rLen; i++) r[i] = (byte) (i + 1);
+            for (Algorithm algo : ALL_ALGOS)
+                assertArrayEquals(v, Apply.applyDelta(r, Diff.diff(algo, r, v, opts(p))),
+                    algo + " ref shorter than seed rLen=" + rLen);
+        }
+    }
+
+    /**
+     * Sweep version and reference sizes over 0, 1, p-1, p, p+1, and powers of 2
+     * up to 512.  Targets the loop-bound off-by-one at rLen == p.
+     */
+    static void testSizeSweep() {
+        int p = 4;
+        int[] sizes = {0, 1, 2, 3, p-1, p, p+1, 2*p-1, 2*p, 2*p+1,
+                       63, 64, 65, 127, 128, 129, 255, 256, 257, 511, 512, 513};
+        // Fixed big ref with pattern i*3
+        byte[] bigRef = new byte[600];
+        for (int i = 0; i < bigRef.length; i++) bigRef[i] = (byte) (i * 3 & 0xFF);
+
+        // Sweep version sizes against fixed large ref
+        for (int vLen : sizes) {
+            // v = prefix of bigRef → should produce mostly copies
+            byte[] vPrefix = Arrays.copyOf(bigRef, vLen);
+            for (Algorithm algo : ALL_ALGOS)
+                assertArrayEquals(vPrefix, roundtrip(algo, bigRef, vPrefix, p),
+                    algo + " vLen=" + vLen + " prefix ver");
+
+            // v = entirely different content → all adds
+            byte[] vNew = new byte[vLen];
+            for (int i = 0; i < vLen; i++) vNew[i] = (byte) (i * 7 + 1 & 0xFF);
+            for (Algorithm algo : ALL_ALGOS)
+                assertArrayEquals(vNew, roundtrip(algo, bigRef, vNew, p),
+                    algo + " vLen=" + vLen + " all-new ver");
+        }
+
+        // Sweep reference sizes against fixed 64-byte version
+        byte[] fixedVer = Arrays.copyOf(bigRef, 64);
+        for (int rLen : sizes) {
+            byte[] r = Arrays.copyOf(bigRef, rLen);
+            for (Algorithm algo : ALL_ALGOS)
+                assertArrayEquals(fixedVer, roundtrip(algo, r, fixedVer, p),
+                    algo + " rLen=" + rLen + " fixed ver");
+        }
+    }
+
+    /**
+     * The version_size field is a 4-byte big-endian u32.  Test boundary values
+     * where byte sign-extension bugs produce wrong results: 0x80, 0x100, 0x8000,
+     * 0x10000, 0x800000, 0x1000000.
+     */
+    static void testEncodingVersionSizeBoundaries() {
+        int[] sizes = {
+            0, 1, 127, 128, 255, 256, 257,
+            32767, 32768, 32769,
+            65535, 65536, 65537,
+            8388607, 8388608, 8388609,
+            16777215, 16777216, 16777217
+        };
+        for (int sz : sizes) {
+            List<PlacedCommand> cmds = new ArrayList<>();
+            byte[] encoded = Encoding.encodeDelta(cmds, false, sz, ZERO_HASH, ZERO_HASH);
+            Encoding.DecodeResult res = Encoding.decodeDelta(encoded);
+            assertEquals(sz, res.versionSize, "version_size=" + sz);
+            assertEquals(0, res.commands.size(), "no commands at version_size=" + sz);
+        }
+    }
+
+    /**
+     * PlacedCopy src/dst/length fields and PlacedAdd dst field are also 4-byte
+     * u32s.  Test each at 0, and at byte-boundary values 127, 128, 255, 256,
+     * 65535, 65536 where sign extension bugs manifest.
+     */
+    static void testEncodingCommandFieldBoundaries() {
+        int[] offsets = {0, 1, 127, 128, 255, 256, 257, 65535, 65536, 65537};
+
+        // copy src at boundary values
+        for (int src : offsets) {
+            List<PlacedCommand> cmds = new ArrayList<>();
+            cmds.add(new PlacedCopy(src, 0, 1));
+            PlacedCopy c = (PlacedCopy) Encoding.decodeDelta(
+                Encoding.encodeDelta(cmds, false, 1, ZERO_HASH, ZERO_HASH)).commands.get(0);
+            assertEquals(src, c.src, "copy src=" + src);
+            assertEquals(0,   c.dst,    "copy dst at src=" + src);
+            assertEquals(1,   c.length, "copy length at src=" + src);
+        }
+
+        // copy dst at boundary values
+        for (int dst : offsets) {
+            List<PlacedCommand> cmds = new ArrayList<>();
+            cmds.add(new PlacedCopy(0, dst, 1));
+            PlacedCopy c = (PlacedCopy) Encoding.decodeDelta(
+                Encoding.encodeDelta(cmds, false, dst + 1, ZERO_HASH, ZERO_HASH)).commands.get(0);
+            assertEquals(dst, c.dst, "copy dst=" + dst);
+        }
+
+        // copy length at boundary values (length=1 is the minimum)
+        for (int len : new int[]{1, 127, 128, 255, 256, 257, 65535, 65536}) {
+            List<PlacedCommand> cmds = new ArrayList<>();
+            cmds.add(new PlacedCopy(0, 0, len));
+            PlacedCopy c = (PlacedCopy) Encoding.decodeDelta(
+                Encoding.encodeDelta(cmds, false, len, ZERO_HASH, ZERO_HASH)).commands.get(0);
+            assertEquals(len, c.length, "copy length=" + len);
+        }
+
+        // add dst at boundary values
+        for (int dst : offsets) {
+            List<PlacedCommand> cmds = new ArrayList<>();
+            cmds.add(new PlacedAdd(dst, new byte[]{(byte) 0xFF}));
+            PlacedAdd a = (PlacedAdd) Encoding.decodeDelta(
+                Encoding.encodeDelta(cmds, false, dst + 1, ZERO_HASH, ZERO_HASH)).commands.get(0);
+            assertEquals(dst, a.dst, "add dst=" + dst);
+            assertArrayEquals(new byte[]{(byte) 0xFF}, a.data, "add data at dst=" + dst);
+        }
+    }
+
+    /**
+     * In-place: |V| = |R| + 1.  Tested at small sizes where the extra write byte
+     * is adjacent to the end of the reference buffer.
+     */
+    static void testInplaceVersionOneLargerTight() {
+        for (int n : new int[]{1, 2, 3, 4, 7, 8, 15, 16, 17, 31, 32, 63, 64}) {
+            byte[] r = new byte[n];
+            for (int i = 0; i < n; i++) r[i] = (byte) (i & 0xFF);
+            byte[] v = Arrays.copyOf(r, n + 1);
+            v[n] = (byte) 0x5A;
+            for (Algorithm algo : ALL_ALGOS)
+                for (CyclePolicy pol : ALL_POLICIES)
+                    assertArrayEquals(v, inplaceRoundtrip(algo, r, v, pol, 2),
+                        algo + "/" + pol + " inplace |V|=|R|+1 n=" + n);
+        }
+    }
+
+    /**
+     * In-place: |V| = |R| - 1.  Tested at small sizes where the missing write
+     * byte is right at the boundary.
+     */
+    static void testInplaceVersionOneSmallerTight() {
+        for (int n : new int[]{2, 3, 4, 5, 8, 9, 15, 16, 17, 31, 32, 65}) {
+            byte[] r = new byte[n];
+            for (int i = 0; i < n; i++) r[i] = (byte) (i & 0xFF);
+            byte[] v = Arrays.copyOf(r, n - 1);
+            for (Algorithm algo : ALL_ALGOS)
+                for (CyclePolicy pol : ALL_POLICIES)
+                    assertArrayEquals(v, inplaceRoundtrip(algo, r, v, pol, 2),
+                        algo + "/" + pol + " inplace |V|=|R|-1 n=" + n);
+        }
+    }
+
+    /**
+     * In-place: |V| = |R|, content is a two-half swap.  Tests exact-same-size
+     * in-place updates at powers of 2 where the write window never grows or shrinks.
+     */
+    static void testInplaceVersionSameSizeTight() {
+        for (int n : new int[]{2, 4, 8, 16, 32, 64, 128, 256}) {
+            byte[] r = new byte[n];
+            for (int i = 0; i < n; i++) r[i] = (byte) (i & 0xFF);
+            int half = n / 2;
+            byte[] v = new byte[n];
+            System.arraycopy(r, half, v, 0,    half);
+            System.arraycopy(r, 0,    v, half, half);
+            for (Algorithm algo : ALL_ALGOS)
+                for (CyclePolicy pol : ALL_POLICIES)
+                    assertArrayEquals(v, inplaceRoundtrip(algo, r, v, pol, 2),
+                        algo + "/" + pol + " inplace same-size swap n=" + n);
+        }
+    }
+
+    /**
+     * In-place: version is exactly 1 byte — the smallest possible output.
+     * Tests both a byte that exists in R (forces a copy) and one that doesn't
+     * (forces an add).
+     */
+    static void testInplaceVersionOneByteMin() {
+        byte[] r = new byte[64];
+        for (int i = 0; i < 64; i++) r[i] = (byte) i;
+
+        byte[] vCopy = {r[32]};           // byte that appears in R → copy
+        byte[] vAdd  = {(byte) 0xAB};     // byte not in R (0xAB = 171 > 63) → add
+
+        for (Algorithm algo : ALL_ALGOS)
+            for (CyclePolicy pol : ALL_POLICIES) {
+                assertArrayEquals(vCopy, inplaceRoundtrip(algo, r, vCopy, pol, 2),
+                    algo + "/" + pol + " inplace v=1 byte (copy)");
+                assertArrayEquals(vAdd, inplaceRoundtrip(algo, r, vAdd, pol, 2),
+                    algo + "/" + pol + " inplace v=1 byte (add)");
+            }
+    }
+
+    /**
+     * Seed length at the extremes: p=1 (every byte a seed), p=2, p=|R| (one seed),
+     * and p > |R| (no seeds possible → all-add).
+     */
+    static void testSeedLengthBoundaries() {
+        byte[] r = b("ABCDEFGHIJKLMNOP");              // 16 bytes
+        byte[] v = b("QWIJKLMNOBCDEFGHZDEFGHIJKL");   // paper example
+        for (int p : new int[]{1, 2, r.length, r.length + 1}) {
+            for (Algorithm algo : ALL_ALGOS)
+                assertArrayEquals(v, Apply.applyDelta(r, Diff.diff(algo, r, v, opts(p))),
+                    algo + " p=" + p);
+        }
+        // Also verify that p > |R| does not crash with any size of version
+        byte[] vShort = b("QW");
+        byte[] vLong  = b("QWIJKLMNOBCDEFGHZDEFGHIJKLMNOPQRSTUVWXYZ");
+        for (Algorithm algo : ALL_ALGOS) {
+            assertArrayEquals(vShort, Apply.applyDelta(r, Diff.diff(algo, r, vShort, opts(r.length + 1))),
+                algo + " p>|r| short ver");
+            assertArrayEquals(vLong, Apply.applyDelta(r, Diff.diff(algo, r, vLong, opts(r.length + 1))),
+                algo + " p>|r| long ver");
+        }
+    }
+
     // ── main ──────────────────────────────────────────────────────────────────
 
     // ── CRC-64/XZ check values ────────────────────────────────────────────────
@@ -808,6 +1068,19 @@ public class TestDelta {
 
         System.out.println("\n=== Splay tree ===");
         check("splay roundtrip",                TestDelta::testSplayRoundtrip);
+
+        System.out.println("\n=== Edge cases and boundaries ===");
+        check("single byte ref/ver",               TestDelta::testSingleByte);
+        check("boundary byte mutations",           TestDelta::testBoundaryByteMutations);
+        check("ref shorter than seed length",      TestDelta::testRefShorterThanSeed);
+        check("size sweep (ver and ref sizes)",    TestDelta::testSizeSweep);
+        check("encoding: version-size boundaries", TestDelta::testEncodingVersionSizeBoundaries);
+        check("encoding: field boundaries",        TestDelta::testEncodingCommandFieldBoundaries);
+        check("inplace: |V|=|R|+1 tight",         TestDelta::testInplaceVersionOneLargerTight);
+        check("inplace: |V|=|R|-1 tight",         TestDelta::testInplaceVersionOneSmallerTight);
+        check("inplace: |V|=|R| same-size swap",  TestDelta::testInplaceVersionSameSizeTight);
+        check("inplace: version is 1 byte",       TestDelta::testInplaceVersionOneByteMin);
+        check("seed length at boundaries",         TestDelta::testSeedLengthBoundaries);
 
         System.out.println("\n========================================");
         System.out.printf("Results: %d passed, %d failed (of %d)%n", pass, fail, tests);
