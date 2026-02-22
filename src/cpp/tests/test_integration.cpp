@@ -650,3 +650,201 @@ TEST_CASE("next_prime is prime", "[hash]") {
     CHECK(is_prime(next_prime(1048574)));
     CHECK(next_prime(1048573) == 1048573);
 }
+
+// ── edge cases and boundaries ─────────────────────────────────────────────
+
+TEST_CASE("single byte ref/ver", "[edge]") {
+    std::vector<uint8_t> one  = {0x41};
+    std::vector<uint8_t> two  = {0x42};
+    std::vector<uint8_t> none = {};
+    for (auto& [name, algo] : all_algos()) {
+        REQUIRE(apply_delta(one,  algo(one,  one,  opts(1))) == one);
+        REQUIRE(apply_delta(one,  algo(one,  two,  opts(1))) == two);
+        REQUIRE(apply_delta(one,  algo(one,  none, opts(1))).empty());
+        REQUIRE(apply_delta(none, algo(none, one,  opts(1))) == one);
+    }
+}
+
+TEST_CASE("boundary byte mutations", "[edge]") {
+    const size_t n = 64;
+    std::vector<uint8_t> r(n);
+    std::iota(r.begin(), r.end(), 0);
+    auto v_first = r; v_first[0] ^= 0xFF;
+    auto v_last  = r; v_last[n - 1] ^= 0xFF;
+    auto v_app   = r; v_app.push_back(0x5A);
+    std::vector<uint8_t> v_drop(r.begin(), r.begin() + n - 1);
+    for (auto& [name, algo] : all_algos()) {
+        REQUIRE(roundtrip(algo, r, v_first, 4) == v_first);
+        REQUIRE(roundtrip(algo, r, v_last,  4) == v_last);
+        REQUIRE(roundtrip(algo, r, v_app,   4) == v_app);
+        REQUIRE(roundtrip(algo, r, v_drop,  4) == v_drop);
+    }
+}
+
+// rLen in [0, p): no seeds extractable, exercises all-add path.
+TEST_CASE("ref shorter than seed", "[edge]") {
+    const size_t p = 8;
+    std::vector<uint8_t> v = {0x10, 0x11, 0x12, 0x13, 0xAA, 0xBB, 0xCC, 0xDD};
+    for (size_t r_len = 0; r_len < p; ++r_len) {
+        std::vector<uint8_t> r(r_len);
+        std::iota(r.begin(), r.end(), 1);
+        for (auto& [name, algo] : all_algos())
+            REQUIRE(apply_delta(r, algo(r, v, opts(p))) == v);
+    }
+}
+
+// Sizes at 0, 1, p±1, and byte-width transitions; catches loop-bound off-by-ones.
+TEST_CASE("size sweep", "[edge]") {
+    const size_t p = 4;
+    const size_t sizes[] = {0, 1, 2, 3, 4, 5, 7, 8, 9,
+                             63, 64, 65, 127, 128, 129, 255, 256, 257, 511, 512, 513};
+    std::vector<uint8_t> big_ref(600);
+    for (size_t i = 0; i < 600; ++i) big_ref[i] = static_cast<uint8_t>((i * 3) & 0xFF);
+
+    for (size_t v_len : sizes) {
+        std::vector<uint8_t> v_prefix(big_ref.begin(), big_ref.begin() + v_len);
+        std::vector<uint8_t> v_new(v_len);
+        for (size_t i = 0; i < v_len; ++i) v_new[i] = static_cast<uint8_t>((i * 7 + 1) & 0xFF);
+        for (auto& [name, algo] : all_algos()) {
+            REQUIRE(roundtrip(algo, big_ref, v_prefix, p) == v_prefix);
+            REQUIRE(roundtrip(algo, big_ref, v_new,    p) == v_new);
+        }
+    }
+    std::vector<uint8_t> fixed_ver(big_ref.begin(), big_ref.begin() + 64);
+    for (size_t r_len : sizes) {
+        std::vector<uint8_t> r(big_ref.begin(), big_ref.begin() + r_len);
+        for (auto& [name, algo] : all_algos())
+            REQUIRE(roundtrip(algo, r, fixed_ver, p) == fixed_ver);
+    }
+}
+
+// version_size at byte-sign-extension boundaries (128, 256, 32768, 65536, …).
+TEST_CASE("encoding version-size boundaries", "[edge]") {
+    std::array<uint8_t, DELTA_CRC_SIZE> zh{};
+    for (size_t sz : {size_t{0},       size_t{1},       size_t{127},     size_t{128},
+                      size_t{255},      size_t{256},     size_t{257},
+                      size_t{32767},    size_t{32768},   size_t{32769},
+                      size_t{65535},    size_t{65536},   size_t{65537},
+                      size_t{8388607},  size_t{8388608}, size_t{8388609},
+                      size_t{16777215}, size_t{16777216},size_t{16777217}}) {
+        auto encoded = encode_delta({}, false, sz, zh, zh);
+        auto [decoded, ip, vs, sc, dc] = decode_delta(encoded);
+        CHECK(vs == sz);
+        CHECK(decoded.empty());
+    }
+}
+
+// Copy/Add fields at byte-sign-extension boundaries.
+TEST_CASE("encoding command field boundaries", "[edge]") {
+    std::array<uint8_t, DELTA_CRC_SIZE> zh{};
+    const size_t offsets[] = {0, 1, 127, 128, 255, 256, 257, 65535, 65536, 65537};
+
+    // src
+    for (size_t src : offsets) {
+        auto [dec, ip, vs, sc, dc] = decode_delta(encode_delta({PlacedCopy{src, 0, 1}}, false, 1, zh, zh));
+        auto* c = std::get_if<PlacedCopy>(&dec[0]);
+        REQUIRE(c); CHECK(c->src == src); CHECK(c->dst == 0); CHECK(c->length == 1);
+    }
+    // dst
+    for (size_t dst : offsets) {
+        auto [dec, ip, vs, sc, dc] = decode_delta(encode_delta({PlacedCopy{0, dst, 1}}, false, dst + 1, zh, zh));
+        auto* c = std::get_if<PlacedCopy>(&dec[0]);
+        REQUIRE(c); CHECK(c->dst == dst);
+    }
+    // length
+    for (size_t len : {size_t{1}, size_t{127}, size_t{128}, size_t{255},
+                       size_t{256}, size_t{257}, size_t{65535}, size_t{65536}}) {
+        auto [dec, ip, vs, sc, dc] = decode_delta(encode_delta({PlacedCopy{0, 0, len}}, false, len, zh, zh));
+        auto* c = std::get_if<PlacedCopy>(&dec[0]);
+        REQUIRE(c); CHECK(c->length == len);
+    }
+    // add dst
+    for (size_t dst : offsets) {
+        auto [dec, ip, vs, sc, dc] = decode_delta(encode_delta({PlacedAdd{dst, {0xFF}}}, false, dst + 1, zh, zh));
+        auto* a = std::get_if<PlacedAdd>(&dec[0]);
+        REQUIRE(a); CHECK(a->dst == dst);
+        REQUIRE(a->data == std::vector<uint8_t>{0xFF});
+    }
+}
+
+// |V| = |R| + 1: write window extends one byte past the ref buffer.
+TEST_CASE("inplace |V|=|R|+1 tight", "[edge]") {
+    for (size_t n : {size_t{1},  size_t{2},  size_t{3},  size_t{4},
+                     size_t{7},  size_t{8},  size_t{15}, size_t{16},
+                     size_t{17}, size_t{31}, size_t{32}, size_t{63}, size_t{64}}) {
+        std::vector<uint8_t> r(n);
+        std::iota(r.begin(), r.end(), 0);
+        auto v = r;
+        v.push_back(0x5A);
+        for (auto& [name, algo] : all_algos())
+            for (auto pol : all_policies())
+                REQUIRE(inplace_roundtrip(algo, r, v, pol, 2) == v);
+    }
+}
+
+// |V| = |R| - 1: write window ends one byte short of the ref buffer.
+TEST_CASE("inplace |V|=|R|-1 tight", "[edge]") {
+    for (size_t n : {size_t{2},  size_t{3},  size_t{4},  size_t{5},
+                     size_t{8},  size_t{9},  size_t{15}, size_t{16},
+                     size_t{17}, size_t{31}, size_t{32}, size_t{65}}) {
+        std::vector<uint8_t> r(n);
+        std::iota(r.begin(), r.end(), 0);
+        std::vector<uint8_t> v(r.begin(), r.begin() + n - 1);
+        for (auto& [name, algo] : all_algos())
+            for (auto pol : all_policies())
+                REQUIRE(inplace_roundtrip(algo, r, v, pol, 2) == v);
+    }
+}
+
+// |V| = |R|, half-swap: write window fixed; exercises same-size cycle-breaking.
+TEST_CASE("inplace |V|=|R| same-size swap", "[edge]") {
+    for (size_t n : {size_t{2},  size_t{4},   size_t{8},   size_t{16},
+                     size_t{32}, size_t{64},  size_t{128}, size_t{256}}) {
+        std::vector<uint8_t> r(n);
+        std::iota(r.begin(), r.end(), 0);
+        size_t half = n / 2;
+        std::vector<uint8_t> v(n);
+        std::copy(r.begin() + half, r.end(),   v.begin());
+        std::copy(r.begin(),        r.begin() + half, v.begin() + half);
+        for (auto& [name, algo] : all_algos())
+            for (auto pol : all_policies())
+                REQUIRE(inplace_roundtrip(algo, r, v, pol, 2) == v);
+    }
+}
+
+// v = 1 byte: copy (byte in R) and add (byte absent from R).
+TEST_CASE("inplace v=1 byte", "[edge]") {
+    std::vector<uint8_t> r(64);
+    std::iota(r.begin(), r.end(), 0);
+    std::vector<uint8_t> v_copy = {r[32]};  // byte in R → copy
+    std::vector<uint8_t> v_add  = {0xAB};   // 0xAB = 171 > 63, not in R → add
+    for (auto& [name, algo] : all_algos())
+        for (auto pol : all_policies()) {
+            REQUIRE(inplace_roundtrip(algo, r, v_copy, pol, 2) == v_copy);
+            REQUIRE(inplace_roundtrip(algo, r, v_add,  pol, 2) == v_add);
+        }
+}
+
+// p = 1, 2, |R|, |R|+1: exercises no-seed boundary.
+TEST_CASE("seed length boundaries", "[edge]") {
+    std::vector<uint8_t> r = {'A','B','C','D','E','F','G','H',
+                              'I','J','K','L','M','N','O','P'};
+    std::vector<uint8_t> v = {'Q','W','I','J','K','L','M','N','O',
+                              'B','C','D','E','F','G','H',
+                              'Z','D','E','F','G','H','I','J','K','L'};
+    for (size_t p : {size_t{1}, size_t{2}, r.size(), r.size() + 1}) {
+        for (auto& [name, algo] : all_algos())
+            REQUIRE(apply_delta(r, algo(r, v, opts(p))) == v);
+    }
+    // p > |R| with varying v sizes
+    std::vector<uint8_t> v_short = {'Q','W'};
+    std::vector<uint8_t> v_long  = {'Q','W','I','J','K','L','M','N','O',
+                                    'B','C','D','E','F','G','H','Z','D',
+                                    'E','F','G','H','I','J','K','L','M',
+                                    'N','O','P','Q','R','S','T','U','V',
+                                    'W','X','Y','Z'};
+    for (auto& [name, algo] : all_algos()) {
+        REQUIRE(apply_delta(r, algo(r, v_short, opts(r.size() + 1))) == v_short);
+        REQUIRE(apply_delta(r, algo(r, v_long,  opts(r.size() + 1))) == v_long);
+    }
+}

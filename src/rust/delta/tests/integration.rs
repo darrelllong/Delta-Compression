@@ -960,3 +960,212 @@ fn test_crc64_check_value() {
     let expected: [u8; 8] = [0x99, 0x5D, 0xC9, 0xBB, 0xDF, 0x19, 0x39, 0xFA];
     assert_eq!(crc64_xz(b"123456789"), expected);
 }
+
+// ── edge cases and boundaries ─────────────────────────────────────────────
+
+#[test]
+fn test_single_byte() {
+    for (_, algo) in all_algos() {
+        assert_eq!(apply_delta(b"\x41", &algo(b"\x41", b"\x41", &opts(1))), b"\x41");
+        assert_eq!(apply_delta(b"\x41", &algo(b"\x41", b"\x42", &opts(1))), b"\x42");
+        assert_eq!(apply_delta(b"\x41", &algo(b"\x41", b"",     &opts(1))), b"");
+        assert_eq!(apply_delta(b"",     &algo(b"",     b"\x41", &opts(1))), b"\x41");
+    }
+}
+
+#[test]
+fn test_boundary_byte_mutations() {
+    let n = 64usize;
+    let r: Vec<u8> = (0..n).map(|i| (i & 0xFF) as u8).collect();
+    let mut v_first = r.clone(); v_first[0] ^= 0xFF;
+    let mut v_last  = r.clone(); v_last[n - 1] ^= 0xFF;
+    let mut v_app   = r.clone(); v_app.push(0x5A);
+    let v_drop: Vec<u8> = r[..n - 1].to_vec();
+    for (_, algo) in all_algos() {
+        assert_eq!(roundtrip(algo, &r, &v_first, 4), v_first);
+        assert_eq!(roundtrip(algo, &r, &v_last,  4), v_last);
+        assert_eq!(roundtrip(algo, &r, &v_app,   4), v_app);
+        assert_eq!(roundtrip(algo, &r, &v_drop,  4), v_drop);
+    }
+}
+
+// rLen in [0, p): no seeds extractable, exercises all-add path.
+#[test]
+fn test_ref_shorter_than_seed() {
+    let p = 8usize;
+    let v: Vec<u8> = vec![0x10, 0x11, 0x12, 0x13, 0xAA, 0xBB, 0xCC, 0xDD];
+    for r_len in 0..p {
+        let r: Vec<u8> = (1..=r_len).map(|i| (i & 0xFF) as u8).collect();
+        for (_, algo) in all_algos() {
+            assert_eq!(apply_delta(&r, &algo(&r, &v, &opts(p))), v, "r_len={}", r_len);
+        }
+    }
+}
+
+// Sizes at 0, 1, p±1, and byte-width transitions; catches loop-bound off-by-ones.
+#[test]
+fn test_size_sweep() {
+    let p = 4usize;
+    let sizes: &[usize] = &[0, 1, 2, 3, 4, 5, 7, 8, 9,
+                             63, 64, 65, 127, 128, 129, 255, 256, 257, 511, 512, 513];
+    let big_ref: Vec<u8> = (0..600u16).map(|i| ((i * 3) & 0xFF) as u8).collect();
+
+    for &v_len in sizes {
+        let v_prefix: Vec<u8> = big_ref[..v_len].to_vec();
+        let v_new: Vec<u8> = (0..v_len).map(|i| ((i * 7 + 1) & 0xFF) as u8).collect();
+        for (_, algo) in all_algos() {
+            assert_eq!(roundtrip(algo, &big_ref, &v_prefix, p), v_prefix, "vLen={} prefix", v_len);
+            assert_eq!(roundtrip(algo, &big_ref, &v_new,    p), v_new,    "vLen={} new",    v_len);
+        }
+    }
+    let fixed_ver: Vec<u8> = big_ref[..64].to_vec();
+    for &r_len in sizes {
+        let r: Vec<u8> = big_ref[..r_len].to_vec();
+        for (_, algo) in all_algos() {
+            assert_eq!(roundtrip(algo, &r, &fixed_ver, p), fixed_ver, "rLen={}", r_len);
+        }
+    }
+}
+
+// version_size at byte-sign-extension boundaries (128, 256, 32768, 65536, …).
+#[test]
+fn test_encoding_version_size_boundaries() {
+    let zh = [0u8; 8];
+    for sz in [0, 1, 127, 128, 255, 256, 257,
+               32767, 32768, 32769,
+               65535, 65536, 65537,
+               8388607, 8388608, 8388609,
+               16777215, 16777216, 16777217usize] {
+        let encoded = encode_delta(&[], false, sz, &zh, &zh);
+        let (decoded, _, vs, _, _) = decode_delta(&encoded).unwrap();
+        assert_eq!(vs, sz, "version_size={}", sz);
+        assert!(decoded.is_empty());
+    }
+}
+
+// Copy/Add fields at byte-sign-extension boundaries.
+#[test]
+fn test_encoding_command_field_boundaries() {
+    let zh = [0u8; 8];
+    let offsets = [0usize, 1, 127, 128, 255, 256, 257, 65535, 65536, 65537];
+
+    // src
+    for src in offsets {
+        let placed = vec![PlacedCommand::Copy { src, dst: 0, length: 1 }];
+        let (dec, _, _, _, _) = decode_delta(&encode_delta(&placed, false, 1, &zh, &zh)).unwrap();
+        match &dec[0] {
+            PlacedCommand::Copy { src: s, dst: d, length: l } => {
+                assert_eq!(*s, src); assert_eq!(*d, 0); assert_eq!(*l, 1);
+            }
+            _ => panic!("expected Copy"),
+        }
+    }
+    // dst
+    for dst in offsets {
+        let placed = vec![PlacedCommand::Copy { src: 0, dst, length: 1 }];
+        let (dec, _, _, _, _) = decode_delta(&encode_delta(&placed, false, dst + 1, &zh, &zh)).unwrap();
+        match &dec[0] {
+            PlacedCommand::Copy { dst: d, .. } => assert_eq!(*d, dst),
+            _ => panic!("expected Copy"),
+        }
+    }
+    // length
+    for len in [1usize, 127, 128, 255, 256, 257, 65535, 65536] {
+        let placed = vec![PlacedCommand::Copy { src: 0, dst: 0, length: len }];
+        let (dec, _, _, _, _) = decode_delta(&encode_delta(&placed, false, len, &zh, &zh)).unwrap();
+        match &dec[0] {
+            PlacedCommand::Copy { length: l, .. } => assert_eq!(*l, len),
+            _ => panic!("expected Copy"),
+        }
+    }
+    // add dst
+    for dst in offsets {
+        let placed = vec![PlacedCommand::Add { dst, data: vec![0xFF] }];
+        let (dec, _, _, _, _) = decode_delta(&encode_delta(&placed, false, dst + 1, &zh, &zh)).unwrap();
+        match &dec[0] {
+            PlacedCommand::Add { dst: d, data } => {
+                assert_eq!(*d, dst);
+                assert_eq!(data, &[0xFF]);
+            }
+            _ => panic!("expected Add"),
+        }
+    }
+}
+
+// |V| = |R| + 1: write window extends one byte past the ref buffer.
+#[test]
+fn test_inplace_version_one_larger_tight() {
+    for n in [1, 2, 3, 4, 7, 8, 15, 16, 17, 31, 32, 63, 64usize] {
+        let r: Vec<u8> = (0..n).map(|i| (i & 0xFF) as u8).collect();
+        let mut v = r.clone();
+        v.push(0x5A);
+        for (_, algo) in all_algos() {
+            for (_, pol) in all_policies() {
+                assert_eq!(inplace_roundtrip(algo, &r, &v, pol, 2), v, "n={}", n);
+            }
+        }
+    }
+}
+
+// |V| = |R| - 1: write window ends one byte short of the ref buffer.
+#[test]
+fn test_inplace_version_one_smaller_tight() {
+    for n in [2, 3, 4, 5, 8, 9, 15, 16, 17, 31, 32, 65usize] {
+        let r: Vec<u8> = (0..n).map(|i| (i & 0xFF) as u8).collect();
+        let v: Vec<u8> = r[..n - 1].to_vec();
+        for (_, algo) in all_algos() {
+            for (_, pol) in all_policies() {
+                assert_eq!(inplace_roundtrip(algo, &r, &v, pol, 2), v, "n={}", n);
+            }
+        }
+    }
+}
+
+// |V| = |R|, half-swap: write window fixed; exercises same-size cycle-breaking.
+#[test]
+fn test_inplace_version_same_size_tight() {
+    for n in [2, 4, 8, 16, 32, 64, 128, 256usize] {
+        let r: Vec<u8> = (0..n).map(|i| (i & 0xFF) as u8).collect();
+        let half = n / 2;
+        let mut v = vec![0u8; n];
+        v[..half].copy_from_slice(&r[half..]);
+        v[half..].copy_from_slice(&r[..half]);
+        for (_, algo) in all_algos() {
+            for (_, pol) in all_policies() {
+                assert_eq!(inplace_roundtrip(algo, &r, &v, pol, 2), v, "n={}", n);
+            }
+        }
+    }
+}
+
+// v = 1 byte: copy (byte in R) and add (byte absent from R).
+#[test]
+fn test_inplace_version_one_byte_min() {
+    let r: Vec<u8> = (0u8..64).collect();
+    let v_copy = vec![r[32]];    // byte in R → copy
+    let v_add  = vec![0xABu8];   // 0xAB = 171 > 63, not in R → add
+    for (_, algo) in all_algos() {
+        for (_, pol) in all_policies() {
+            assert_eq!(inplace_roundtrip(algo, &r, &v_copy, pol, 2), v_copy);
+            assert_eq!(inplace_roundtrip(algo, &r, &v_add,  pol, 2), v_add);
+        }
+    }
+}
+
+// p = 1, 2, |R|, |R|+1: exercises no-seed boundary.
+#[test]
+fn test_seed_length_boundaries() {
+    let r = b"ABCDEFGHIJKLMNOP";
+    let v = b"QWIJKLMNOBCDEFGHZDEFGHIJKL";
+    for p in [1, 2, r.len(), r.len() + 1] {
+        for (_, algo) in all_algos() {
+            assert_eq!(apply_delta(r, &algo(r, v, &opts(p))), v, "p={}", p);
+        }
+    }
+    // p > |R| with varying v sizes
+    for (_, algo) in all_algos() {
+        assert_eq!(apply_delta(r, &algo(r, b"QW",                                      &opts(r.len() + 1))), b"QW");
+        assert_eq!(apply_delta(r, &algo(r, b"QWIJKLMNOBCDEFGHZDEFGHIJKLMNOPQRSTUVWXYZ", &opts(r.len() + 1))),
+                   b"QWIJKLMNOBCDEFGHZDEFGHIJKLMNOPQRSTUVWXYZ");
+    }
+}
