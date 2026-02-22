@@ -86,7 +86,7 @@ pub fn diff_correcting(
     } else {
         (f_size + cap as u64 - 1) / cap as u64 // ceil(|F| / |C|)
     };
-    // Biased k (p. 348): pick a V offset, use its footprint mod m.
+    // Biased k (p. 348).
     let k: u64 = if v.len() >= p {
         fingerprint(v, (v.len() / 2).min(v.len() - p), p) % f_size % m
     } else {

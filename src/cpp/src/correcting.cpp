@@ -48,7 +48,7 @@ std::vector<Command> diff_correcting(
     uint64_t m = (f_size <= static_cast<uint64_t>(cap))
         ? 1
         : (f_size + static_cast<uint64_t>(cap) - 1) / static_cast<uint64_t>(cap); // ceil(|F| / |C|)
-    // Biased k (p. 348): pick a V offset, use its footprint mod m.
+    // Biased k (p. 348).
     uint64_t k = 0;
     if (v.size() >= p) {
         uint64_t fp_k = fingerprint(v, std::min(v.size() / 2, v.size() - p), p);

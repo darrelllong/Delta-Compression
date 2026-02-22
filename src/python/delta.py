@@ -621,8 +621,7 @@ def diff_correcting(R: bytes, V: bytes,
     C = q                                                # |C|
     F = _next_prime(2 * num_seeds) if num_seeds > 0 else 1  # |F|
     m = max(1, -(-F // C))                               # ceil(|F| / |C|)
-    # Biased k (p. 348): pick a V offset, use its footprint mod m.
-    # This biases checkpoints toward footprints common in V.
+    # Biased k (p. 348).
     if len(V) >= p:
         k = _fingerprint(V, min(len(V) // 2, len(V) - p), p) % F % m
     else:
