@@ -507,7 +507,7 @@ then runs cross-language compatibility tests):
 Individual suites:
 
 ```bash
-# Python — 178 tests
+# Python — 208 tests
 cd src/python
 python3 -m unittest test_delta -v
 

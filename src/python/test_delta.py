@@ -1009,5 +1009,231 @@ class TestCrcEmbeddedInDelta(unittest.TestCase):
         self.assertEqual(DELTA_CRC_SIZE, 8)
 
 
+# ── edge-case tests ──────────────────────────────────────────────────────────
+
+
+class TestSingleByte(unittest.TestCase):
+    """p=1 with 1-byte inputs exercises the minimum-seed-length path."""
+
+    def _run(self, fn):
+        # identical single bytes → at least one copy, no adds
+        cmds = fn(b'\xAB', b'\xAB', p=1)
+        self.assertEqual(apply_delta(b'\xAB', cmds), b'\xAB')
+        self.assertFalse(any(isinstance(c, AddCmd) for c in cmds))
+
+        # different single bytes → correct output
+        self.assertEqual(apply_delta(b'\xAB', fn(b'\xAB', b'\xCD', p=1)), b'\xCD')
+
+        # v empty → zero commands
+        self.assertEqual(fn(b'\xAB', b'', p=1), [])
+
+        # r empty → correct output (all-add)
+        self.assertEqual(apply_delta(b'', fn(b'', b'\xAB', p=1)), b'\xAB')
+
+    def test_greedy(self):     self._run(diff_greedy)
+    def test_onepass(self):    self._run(diff_onepass)
+    def test_correcting(self): self._run(diff_correcting)
+
+
+class TestBoundaryByteMutations(unittest.TestCase):
+    """Flip the first/last byte, append, and drop — covers prefix/suffix match paths."""
+
+    _base = bytes(range(64))
+
+    def _run(self, fn):
+        base = self._base
+        for v in [
+            bytes([base[0] ^ 0xFF]) + base[1:],   # flip first byte
+            base[:-1] + bytes([base[-1] ^ 0xFF]),  # flip last byte
+            base + b'\xAB',                         # append one byte
+            base[:-1],                              # drop last byte
+        ]:
+            self.assertEqual(roundtrip(fn, base, v, p=2), v)
+
+    def test_greedy(self):     self._run(diff_greedy)
+    def test_onepass(self):    self._run(diff_onepass)
+    def test_correcting(self): self._run(diff_correcting)
+
+
+class TestRefShorterThanSeed(unittest.TestCase):
+    """When |R| < p the encoder has no seeds and falls back to all-adds."""
+
+    def _run(self, fn):
+        p = 16
+        V = bytes(range(32))
+        for r_len in [0, 1, p - 1]:
+            R = bytes(range(r_len))
+            self.assertEqual(roundtrip(fn, R, V, p=p), V, f"|R|={r_len}")
+
+    def test_greedy(self):     self._run(diff_greedy)
+    def test_onepass(self):    self._run(diff_onepass)
+    def test_correcting(self): self._run(diff_correcting)
+
+
+class TestSizeSweep(unittest.TestCase):
+    """Roundtrip at sizes spanning zero, one, seed boundaries, and power-of-2 edges."""
+
+    def _run(self, fn):
+        p = 4
+        for n in [0, 1, 2, 3, 4, 5, 7, 8, 9, 63, 64, 65,
+                  127, 128, 129, 255, 256, 257, 511, 512, 513]:
+            R = bytes(i % 256 for i in range(n))
+            V = bytes((i + 1) % 256 for i in range(n))
+            self.assertEqual(roundtrip(fn, R, V, p=p), V, f"size={n}")
+
+    def test_greedy(self):     self._run(diff_greedy)
+    def test_onepass(self):    self._run(diff_onepass)
+    def test_correcting(self): self._run(diff_correcting)
+
+
+class TestEncodingVersionSizeBoundaries(unittest.TestCase):
+    """version_size at LEB128 encoding boundaries round-trips intact."""
+
+    _z = b'\x00' * 8
+
+    def test_boundaries(self):
+        for size in [127, 128, 255, 256, 32767, 32768,
+                     65535, 65536, 8388607, 8388608, 16777215, 16777216]:
+            delta = encode_delta([], inplace=False, version_size=size,
+                                 src_crc=self._z, dst_crc=self._z)
+            _, _, vs, _, _ = decode_delta(delta)
+            self.assertEqual(vs, size, f"version_size={size}")
+
+
+class TestEncodingCommandFieldBoundaries(unittest.TestCase):
+    """Copy and add command fields at encoding boundary values round-trip intact."""
+
+    _z = b'\x00' * 8
+
+    def _check_copy(self, src, dst, length):
+        placed = [PlacedCopy(src=src, dst=dst, length=length)]
+        delta = encode_delta(placed, inplace=False, version_size=dst + length,
+                             src_crc=self._z, dst_crc=self._z)
+        cmds, _, _, _, _ = decode_delta(delta)
+        self.assertEqual(len(cmds), 1)
+        c = cmds[0]
+        self.assertIsInstance(c, PlacedCopy)
+        self.assertEqual((c.src, c.dst, c.length), (src, dst, length))
+
+    def _check_add(self, dst, data):
+        placed = [PlacedAdd(dst=dst, data=data)]
+        delta = encode_delta(placed, inplace=False, version_size=dst + len(data),
+                             src_crc=self._z, dst_crc=self._z)
+        cmds, _, _, _, _ = decode_delta(delta)
+        self.assertEqual(len(cmds), 1)
+        c = cmds[0]
+        self.assertIsInstance(c, PlacedAdd)
+        self.assertEqual(c.dst, dst)
+        self.assertEqual(c.data, data)
+
+    def test_copy_boundaries(self):
+        for v in [127, 128, 255, 256, 32767, 32768]:
+            self._check_copy(src=v, dst=0, length=1)
+            self._check_copy(src=0, dst=v, length=1)
+            self._check_copy(src=0, dst=0, length=v)
+
+    def test_add_boundaries(self):
+        for dst in [127, 128, 255, 256, 32767, 32768]:
+            self._check_add(dst=dst, data=b'\xAB')
+        for length in [127, 128, 255, 256]:
+            self._check_add(dst=0, data=bytes(range(length)))
+
+
+class TestInplaceVersionOneLargerTight(unittest.TestCase):
+    """|V| = |R| + 1 exercises in-place when the version is one byte longer."""
+
+    def _run(self, fn, pol):
+        for n in [1, 2, 3, 4, 7, 8, 15, 16, 17, 31, 32, 63, 64]:
+            R = bytes(i % 256 for i in range(n))
+            V = bytes(i % 256 for i in range(n + 1))
+            self.assertEqual(
+                inplace_roundtrip(fn, R, V, policy=pol, p=2), V, f"n={n}")
+
+    def _run_all(self, fn):
+        for pol in ['localmin', 'constant']:
+            self._run(fn, pol)
+
+    def test_greedy(self):     self._run_all(diff_greedy)
+    def test_onepass(self):    self._run_all(diff_onepass)
+    def test_correcting(self): self._run_all(diff_correcting)
+
+
+class TestInplaceVersionOneSmallerTight(unittest.TestCase):
+    """|V| = |R| - 1 exercises in-place when the version is one byte shorter."""
+
+    def _run(self, fn, pol):
+        for n in [2, 3, 4, 5, 8, 9, 15, 16, 17, 31, 32, 65]:
+            R = bytes(i % 256 for i in range(n))
+            V = bytes(i % 256 for i in range(n - 1))
+            self.assertEqual(
+                inplace_roundtrip(fn, R, V, policy=pol, p=2), V, f"n={n}")
+
+    def _run_all(self, fn):
+        for pol in ['localmin', 'constant']:
+            self._run(fn, pol)
+
+    def test_greedy(self):     self._run_all(diff_greedy)
+    def test_onepass(self):    self._run_all(diff_onepass)
+    def test_correcting(self): self._run_all(diff_correcting)
+
+
+class TestInplaceVersionSameSizeTight(unittest.TestCase):
+    """|V| = |R|: in-place reconstruction with the halves swapped."""
+
+    def _run(self, fn, pol):
+        for n in [2, 4, 8, 16, 32, 64, 128, 256]:
+            half = n // 2
+            R = bytes(range(n))
+            V = R[half:] + R[:half]
+            self.assertEqual(
+                inplace_roundtrip(fn, R, V, policy=pol, p=2), V, f"n={n}")
+
+    def _run_all(self, fn):
+        for pol in ['localmin', 'constant']:
+            self._run(fn, pol)
+
+    def test_greedy(self):     self._run_all(diff_greedy)
+    def test_onepass(self):    self._run_all(diff_onepass)
+    def test_correcting(self): self._run_all(diff_correcting)
+
+
+class TestInplaceVersionOneByteMin(unittest.TestCase):
+    """V = 1 byte: minimum version size for in-place reconstruction."""
+
+    def _run(self, fn, pol):
+        # copy path: R contains the target byte
+        self.assertEqual(
+            inplace_roundtrip(fn, b'\xAB' * 16, b'\xAB', policy=pol, p=1), b'\xAB')
+        # add path: p=2 means no seed fits in a 1-byte V
+        self.assertEqual(
+            inplace_roundtrip(fn, b'\x00' * 16, b'\xFF', policy=pol, p=2), b'\xFF')
+
+    def _run_all(self, fn):
+        for pol in ['localmin', 'constant']:
+            self._run(fn, pol)
+
+    def test_greedy(self):     self._run_all(diff_greedy)
+    def test_onepass(self):    self._run_all(diff_onepass)
+    def test_correcting(self): self._run_all(diff_correcting)
+
+
+class TestSeedLengthBoundaries(unittest.TestCase):
+    """p = 1, 2, |R|, and |R|+1 exercise seed-length edge cases."""
+
+    _R = bytes(range(16)) * 4                          # 64 bytes, repeating
+    _V = bytes(range(16)) * 3 + bytes(range(15, -1, -1))  # last block reversed
+
+    def _run(self, fn):
+        R, V = self._R, self._V
+        self.assertEqual(roundtrip(fn, R, V, p=1), V)
+        self.assertEqual(roundtrip(fn, R, V, p=2), V)
+        self.assertEqual(roundtrip(fn, R, V, p=len(R)), V)      # one seed in R
+        self.assertEqual(roundtrip(fn, R, V, p=len(R) + 1), V)  # no seeds in R
+
+    def test_greedy(self):     self._run(diff_greedy)
+    def test_onepass(self):    self._run(diff_onepass)
+    def test_correcting(self): self._run(diff_correcting)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -165,6 +165,32 @@ delta_place_commands(const delta_commands_t *cmds)
 
 /* ── Unplace: convert placed commands back to algorithm commands ────── */
 
+static size_t
+pcmd_dst(const delta_placed_command_t *cmd)
+{
+	return cmd->tag == PCMD_COPY ? cmd->copy.dst : cmd->add.dst;
+}
+
+static void
+qsort_indices(size_t *idx, size_t n, const delta_placed_command_t *data)
+{
+	size_t i, j, tmp, pivot;
+	if (n < 2) { return; }
+	/* Move middle element to last as pivot — avoids O(n²) on sorted input. */
+	tmp = idx[n / 2]; idx[n / 2] = idx[n - 1]; idx[n - 1] = tmp;
+	pivot = pcmd_dst(&data[idx[n - 1]]);
+	i = 0;
+	for (j = 0; j < n - 1; j++) {
+		if (pcmd_dst(&data[idx[j]]) <= pivot) {
+			tmp = idx[i]; idx[i] = idx[j]; idx[j] = tmp;
+			i++;
+		}
+	}
+	tmp = idx[i]; idx[i] = idx[n - 1]; idx[n - 1] = tmp;
+	qsort_indices(idx, i, data);
+	qsort_indices(idx + i + 1, n - i - 1, data);
+}
+
 delta_commands_t
 delta_unplace_commands(const delta_placed_commands_t *placed)
 {
@@ -175,35 +201,10 @@ delta_unplace_commands(const delta_placed_commands_t *placed)
 	delta_commands_init(&cmds);
 	if (placed->len == 0) { return cmds; }
 
-	/* Sort indices by destination offset. */
 	indices = delta_malloc(placed->len * sizeof(*indices));
 	for (i = 0; i < placed->len; i++) { indices[i] = i; }
 
-	/* Insertion sort by dst (qsort needs a comparator that can access
-	 * placed->data, but C qsort lacks a context pointer portably). */
-	for (i = 1; i < placed->len; i++) {
-		size_t tmp = indices[i];
-		size_t key;
-		size_t j = i;
-		if (placed->data[tmp].tag == PCMD_COPY) {
-			key = placed->data[tmp].copy.dst;
-		} else {
-			key = placed->data[tmp].add.dst;
-		}
-		while (j > 0) {
-			size_t prev = indices[j - 1];
-			size_t prev_dst;
-			if (placed->data[prev].tag == PCMD_COPY) {
-				prev_dst = placed->data[prev].copy.dst;
-			} else {
-				prev_dst = placed->data[prev].add.dst;
-			}
-			if (prev_dst <= key) { break; }
-			indices[j] = indices[j - 1];
-			j--;
-		}
-		indices[j] = tmp;
-	}
+	qsort_indices(indices, placed->len, placed->data);
 
 	for (i = 0; i < placed->len; i++) {
 		const delta_placed_command_t *pc = &placed->data[indices[i]];
