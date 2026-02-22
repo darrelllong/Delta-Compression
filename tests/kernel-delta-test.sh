@@ -24,7 +24,7 @@
 
 set -euo pipefail
 
-WORKDIR="/tmp/delta-kernel-test"
+WORKDIR="${WORKDIR:-/tmp/delta-kernel-test}"
 KERNEL_BASE="https://cdn.kernel.org/pub/linux/kernel/v5.x"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
