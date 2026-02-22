@@ -51,11 +51,7 @@ private:
 
 // ── Primality testing (for hash table auto-sizing) ───────────────────────
 
-/// Miller-Rabin probabilistic primality test with confidence k=100.
 bool is_prime(size_t n);
-
-/// Miller-Rabin with explicit confidence parameter.
-bool is_prime_mr(size_t n, uint32_t k);
 
 /// Smallest prime >= n.
 size_t next_prime(size_t n);

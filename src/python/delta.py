@@ -33,7 +33,6 @@ import time
 from collections import defaultdict, deque
 from contextlib import contextmanager
 from dataclasses import dataclass
-from random import randrange as _randrange
 from typing import List, Union
 
 
@@ -160,18 +159,21 @@ def _witness(a: int, n: int) -> bool:
     return x != 1
 
 
-def _is_prime(n: int, k: int = 100) -> bool:
-    """Miller-Rabin probabilistic primality test with confidence k.
+# Fixed witnesses for deterministic Miller-Rabin.
+# Sufficient for all n < 3,317,044,064,679,887,385,961,981 (> 2^81).
+# Jaeschke, Math. Comp. 61(204), 1993.
+_MR_WITNESSES = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37)
 
-    Pr[false positive] <= 4^{-k}.  With the default k = 100, the
-    probability of a composite being reported as prime is < 10^{-60}.
-    """
+
+def _is_prime(n: int) -> bool:
+    """Deterministic Miller-Rabin primality test."""
     if n < 2 or (n != 2 and n % 2 == 0):
         return False
     if n == 2 or n == 3:
         return True
-    for _ in range(k):
-        a = _randrange(2, n - 1)
+    for a in _MR_WITNESSES:
+        if a >= n:
+            break
         if _witness(a, n):
             return False
     return True

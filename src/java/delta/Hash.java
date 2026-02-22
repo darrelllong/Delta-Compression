@@ -1,8 +1,6 @@
 package delta;
 
 import java.math.BigInteger;
-import java.util.concurrent.ThreadLocalRandom;
-
 import static delta.Types.*;
 
 /**
@@ -95,12 +93,16 @@ public final class Hash {
 
     // ── Primality testing ────────────────────────────────────────────
 
-    /** Miller-Rabin probabilistic primality test with 100 random witnesses. */
-    public static boolean isPrime(long n) {
-        return isPrime(n, 100);
-    }
+    /**
+     * Fixed witnesses for deterministic Miller-Rabin.
+     * Sufficient for all n &lt; 3,317,044,064,679,887,385,961,981 (&gt; 2^81).
+     * Jaeschke, Math. Comp. 61(204), 1993.
+     */
+    private static final long[] MR_WITNESSES = {
+        2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37
+    };
 
-    public static boolean isPrime(long n, int k) {
+    public static boolean isPrime(long n) {
         if (n < 2) return false;
         if (n < 4) return true;
         if (n % 2 == 0) return false;
@@ -110,9 +112,8 @@ public final class Hash {
         int r = nm1.getLowestSetBit();
         BigInteger d = nm1.shiftRight(r);
 
-        ThreadLocalRandom rng = ThreadLocalRandom.current();
-        for (int i = 0; i < k; i++) {
-            long a = 2 + rng.nextLong(n - 3);
+        for (long a : MR_WITNESSES) {
+            if (a >= n) break;
             BigInteger x = BigInteger.valueOf(a).modPow(d, bn);
             if (x.equals(BigInteger.ONE) || x.equals(nm1)) continue;
             boolean found = false;

@@ -1,7 +1,6 @@
 #include "delta/hash.h"
 #include "delta/types.h"
 
-#include <random>
 
 namespace delta {
 
@@ -99,20 +98,20 @@ static bool witness(uint64_t a, uint64_t n) {
     return x != 1;
 }
 
-bool is_prime(size_t n) {
-    return is_prime_mr(n, 100);
-}
+/// Fixed witnesses for deterministic Miller-Rabin.
+///
+/// Sufficient for all n < 3,317,044,064,679,887,385,961,981 (> 2^81).
+/// Jaeschke, Math. Comp. 61(204), 1993.
+static constexpr uint64_t MR_WITNESSES[] = {
+    2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37
+};
 
-bool is_prime_mr(size_t n, uint32_t k) {
+bool is_prime(size_t n) {
     uint64_t n64 = static_cast<uint64_t>(n);
     if (n64 < 2 || (n64 != 2 && n64 % 2 == 0)) { return false; }
     if (n64 == 2 || n64 == 3) { return true; }
-
-    thread_local std::mt19937_64 rng{std::random_device{}()};
-    std::uniform_int_distribution<uint64_t> dist(2, n64 - 2);
-
-    for (uint32_t i = 0; i < k; ++i) {
-        uint64_t a = dist(rng);
+    for (uint64_t a : MR_WITNESSES) {
+        if (a >= n64) { break; }
         if (witness(a, n64)) { return false; }
     }
     return true;

@@ -8,7 +8,6 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 /* ── Mersenne prime arithmetic ─────────────────────────────────────── */
 
@@ -148,31 +147,23 @@ witness(uint64_t a, uint64_t n)
 	return x != 1;
 }
 
-/* Simple xorshift64 PRNG for witness generation. */
-static uint64_t
-xorshift64(uint64_t *state)
-{
-	uint64_t s = *state;
-	s ^= s << 13;
-	s ^= s >> 7;
-	s ^= s << 17;
-	*state = s;
-	return s;
-}
+/* Fixed witnesses for deterministic Miller-Rabin.
+ * Sufficient for all n < 3,317,044,064,679,887,385,961,981 (> 2^81).
+ * Jaeschke, Math. Comp. 61(204), 1993. */
+static const uint64_t MR_WITNESSES[] = {
+	2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37
+};
 
 bool
 delta_is_prime(size_t n)
 {
 	uint64_t n64 = (uint64_t)n;
-	uint64_t rng_state;
-	uint32_t i;
+	size_t i;
 	if (n64 < 2 || (n64 != 2 && n64 % 2 == 0)) { return false; }
 	if (n64 == 2 || n64 == 3) { return true; }
-
-	rng_state = n64 ^ 0xdeadbeefcafebabeULL ^ (uint64_t)time(NULL);
-	for (i = 0; i < 100; i++) {
-		uint64_t a = xorshift64(&rng_state) % (n64 - 3) + 2;
-		if (witness(a, n64)) { return false; }
+	for (i = 0; i < sizeof(MR_WITNESSES) / sizeof(MR_WITNESSES[0]); i++) {
+		if (MR_WITNESSES[i] >= n64) { break; }
+		if (witness(MR_WITNESSES[i], n64)) { return false; }
 	}
 	return true;
 }

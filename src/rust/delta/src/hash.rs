@@ -144,8 +144,6 @@ pub fn crc64_xz(data: &[u8]) -> [u8; DELTA_CRC_SIZE] {
 
 // ── Primality testing (for hash table auto-sizing) ───────────────────────
 
-use rand::Rng;
-
 /// Modular exponentiation: base^exp mod modulus (uses u128 to avoid overflow).
 fn power_mod(base: u64, mut exp: u64, modulus: u64) -> u64 {
     if modulus == 1 {
@@ -192,16 +190,13 @@ fn witness(a: u64, n: u64) -> bool {
     x != 1
 }
 
-/// Miller-Rabin probabilistic primality test with confidence `k`.
+/// Fixed witnesses for deterministic Miller-Rabin.
 ///
-/// Pr[false positive] <= 4^{-k}.  With the default k = 100, the
-/// probability of a composite being reported as prime is < 10^{-60}.
-pub fn is_prime(n: usize) -> bool {
-    is_prime_mr(n, 100)
-}
+/// Sufficient for all n < 3,317,044,064,679,887,385,961,981 (> 2^81).
+/// Jaeschke, Math. Comp. 61(204), 1993.
+const WITNESSES: &[u64] = &[2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37];
 
-/// Miller-Rabin with explicit confidence parameter.
-pub fn is_prime_mr(n: usize, k: u32) -> bool {
+pub fn is_prime(n: usize) -> bool {
     let n = n as u64;
     if n < 2 || (n != 2 && n % 2 == 0) {
         return false;
@@ -209,12 +204,9 @@ pub fn is_prime_mr(n: usize, k: u32) -> bool {
     if n == 2 || n == 3 {
         return true;
     }
-    let mut rng = rand::thread_rng();
-    for _ in 0..k {
-        let a = rng.gen_range(2..n - 1);
-        if witness(a, n) {
-            return false;
-        }
+    for &a in WITNESSES {
+        if a >= n { break; }
+        if witness(a, n) { return false; }
     }
     true
 }
