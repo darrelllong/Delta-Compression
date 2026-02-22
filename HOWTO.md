@@ -511,11 +511,11 @@ Individual suites:
 cd src/python
 python3 -m unittest test_delta -v
 
-# Rust — 45 tests
+# Rust — 56 tests
 cd src/rust/delta
 cargo test
 
-# C++ — 53 test cases
+# C++ — 64 test cases
 cd src/cpp
 cmake -B build && cmake --build build
 ctest --test-dir build
