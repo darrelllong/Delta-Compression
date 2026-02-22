@@ -511,7 +511,7 @@ Individual suites:
 cd src/python
 python3 -m unittest test_delta -v
 
-# Rust — 64 tests
+# Rust — 45 tests
 cd src/rust/delta
 cargo test
 
@@ -524,7 +524,7 @@ ctest --test-dir build
 cd src/c
 make && bash test_delta.sh
 
-# Java — 41 unit tests
+# Java — 52 unit tests
 cd src/java
 make test
 ```

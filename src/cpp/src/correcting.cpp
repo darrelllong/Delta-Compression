@@ -51,8 +51,7 @@ std::vector<Command> diff_correcting(
     // Biased k (p. 348): pick a V offset, use its footprint mod m.
     uint64_t k = 0;
     if (v.size() >= p) {
-        size_t off = std::min(v.size() / 2, v.size() - p);
-        uint64_t fp_k = fingerprint(v, off, p);
+        uint64_t fp_k = fingerprint(v, std::min(v.size() / 2, v.size() - p), p);
         k = fp_k % f_size % m;
     }
 

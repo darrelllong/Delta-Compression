@@ -88,9 +88,7 @@ pub fn diff_correcting(
     };
     // Biased k (p. 348): pick a V offset, use its footprint mod m.
     let k: u64 = if v.len() >= p {
-        let off = (v.len() / 2).min(v.len() - p);
-        let fp_k = fingerprint(v, off, p);
-        fp_k % f_size % m
+        fingerprint(v, (v.len() / 2).min(v.len() - p), p) % f_size % m
     } else {
         0
     };
