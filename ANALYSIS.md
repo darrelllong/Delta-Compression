@@ -67,16 +67,13 @@ roughly matches seed granularity.  When the reference is small enough
 that |F| ≤ |C|, the stride is m=1 and every seed is a checkpoint —
 equivalent to direct indexing with no filtering overhead.
 
-The footprint modulus |F| is chosen as a prime using the Miller-Rabin
-probabilistic primality test (Rabin 1980) with 100 random witnesses
-drawn uniformly from [2, n-2).  Each witness independently has at most
-a 1/4 probability of being a "liar" (falsely certifying a composite as
-prime), so 100 rounds give Pr[false positive] ≤ 4^{-100} < 10^{-60}.
-Using random witnesses avoids the brittleness of fixed witness sets,
-which can be fooled by adversarially chosen composites — fixed witnesses
-are, to put it mildly, weak sauce.  Carmichael numbers (561, 1105,
-1729, ...) pass the Fermat test for all bases coprime to n, but
-Miller-Rabin with random witnesses catches them reliably.
+The footprint modulus |F| is chosen as a prime using a deterministic
+Miller-Rabin primality test with the fixed witness set {2, 3, 5, 7, 11,
+13, 17, 19, 23, 29, 31, 37}.  This set is proven sufficient for all n <
+3,317,044,064,679,887,385,961,981 (> 2^81), far exceeding any table
+size that arises in practice (Jaeschke, Math. Comp. 61(204), 1993).
+No random number generator is required: the result is deterministic and
+identical across all five language implementations.
 
 ## Splay tree: design and tradeoffs
 

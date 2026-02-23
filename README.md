@@ -207,8 +207,8 @@ formalized string-to-string correction (edit distance).  Tichy extended
 it to block moves — the model solved by the algorithms here.
 Reichenberger and Miller-Myers are the prior O(n^2) optimal algorithms
 that Ajtai et al. improve upon.  Rabin's paper describes the
-Miller-Rabin probabilistic primality test used for hash table
-auto-sizing.  Kahn's algorithm is used for topological sorting of the
+deterministic Miller-Rabin primality test (fixed witness set, Jaeschke
+1993) used for hash table auto-sizing.  Kahn's algorithm is used for topological sorting of the
 CRWI digraph during in-place conversion.  Sleator and Tarjan's splay
 tree provides an alternative to hash tables for fingerprint lookup;
 frequent fingerprints self-promote to the root, giving sub-logarithmic
