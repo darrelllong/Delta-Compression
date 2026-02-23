@@ -82,22 +82,20 @@ Tarjan-Sleator self-adjusting binary search tree (Sleator and Tarjan 1985).
 Every access splays the accessed node to the root via zig/zig-zig/zig-zag
 rotations, giving amortized O(log n) per operation.
 
-**Why it helps for onepass:** onepass inserts a seed from R and then
-looks it up shortly after when it scans the corresponding V region.
-The splay tree exploits this temporal locality: a recently-inserted seed
-is near the root, so the lookup is cheap.  On 871 MB kernel tarballs
-this gives a ~17% algorithm speedup (0.5s vs 0.6s), though in total
-wall time the benefit shrinks to ~5% (1.9s vs 2.0s) because ~1.44s of
-hashing overhead (SHAKE128, since replaced by CRC-64/XZ) dominated both.
+**Onepass:** onepass inserts a seed from R and then looks it up shortly
+after when it scans the corresponding V region.  The splay tree exploits
+this temporal locality in principle, but O(log n) rotations per access
+outweigh the locality benefit in practice: on 871 MB kernel tarballs the
+splay tree is ~55% slower than the hash table in algorithm time (0.78s
+vs 0.50s).  Total wall time is dominated by I/O (~3.5s reading two 831 MB
+files), so the algorithm-time difference is masked.
 
 **Why it hurts for correcting:** correcting's R pass inserts millions
 of checkpoint seeds in random order before any V lookups begin.  The
 build phase has no locality benefit, and O(log n) per insertion is
 slower than O(1) hash table insertion.  Lookups during the V pass also
 lack the recent-access advantage.  On kernel tarballs, correcting+splay
-is ~3.3× slower in total wall time (50s vs 15s); hashing adds the
-same ~1.44s SHAKE128 overhead (since replaced by CRC-64/XZ) to both,
-reducing the ratio slightly from 3.5× (49s vs 14s) algorithm-only.
+is ~7.5× slower in algorithm time (44s vs 5.9s).
 
 **Why splay improves correcting ratio:** the hash table indexes seeds by
 `f / m` (where `f = fp % |F|`), so two seeds with the same `f / m`
@@ -116,8 +114,8 @@ distribution — which natural language and source code both follow closely
 — the weighted average access cost is O(log H) where H is the entropy of
 the distribution, substantially less than O(log n).  On kernel tarballs
 the effect is visible: common boilerplate dominates the fingerprint
-distribution, limiting the practical slowdown to 3.5× rather than what
-the asymptotic ratio would suggest.
+distribution, limiting the practical slowdown to ~7.5× algorithm-only
+rather than what an adversarial access pattern would produce.
 
 ## Delta integrity verification
 
@@ -239,7 +237,7 @@ Total: O(n log n + E).
 
 | Script | Purpose |
 |--------|---------|
-| `tests/correctness.sh` | Builds all five implementations and runs unit tests + cross-language compatibility (178/64/53/45/41 tests) |
+| `tests/correctness.sh` | Builds all five implementations and runs unit tests + cross-language compatibility (208/56/64/45/52 tests) |
 | `tests/kernel-delta-test.sh` | Performance benchmark on Linux 5.1.0–5.1.7 kernel tarballs (~831 MB each) |
 | `tests/transposition-benchmark.sh` | Performance benchmark on synthetic block permutations (16 MB–1 GB) |
 
@@ -255,45 +253,44 @@ data requirements of the kernel tests.
 
 All five implementations, same input pair, default flags.  All produce
 byte-identical delta files.  CRC-64/XZ overhead is negligible (~70 ms
-total for two 871 MB files at ~12 GB/s); Python's 69–354s algorithm
+total for two 871 MB files at ~12 GB/s); Python's 247–583s algorithm
 time dominates regardless.
 
-**onepass** (delta: 5.1 MB, ratio: 0.58%)
+**onepass** (delta: 4.8 MB, ratio: 0.58%)
 
 | Implementation | Time |
 |----------------|-----:|
-| Rust | 2.0s |
-| C | 2.1s |
-| C++ | 2.2s |
-| Java | 3.6s |
-| Python | 69s |
+| C | 4s |
+| Rust | 4s |
+| C++ | 4s |
+| Java | 6s |
+| Python | 247s |
 
-**correcting** (delta: 7.0 MB, ratio: 0.81%)
+**correcting** (delta: 6.7 MB, ratio: 0.81%)
 
 | Implementation | Time |
 |----------------|-----:|
-| Rust | 7.0s |
-| Java | 8.8s |
-| C | 15.0s |
-| C++ | 15.0s |
-| Python | 354s |
+| Rust | 9s |
+| Java | 11s |
+| C | 17s |
+| C++ | 18s |
+| Python | 583s |
 
-Rust leads on both algorithms.  For correcting, Java outperforms C and
-C++ by ~1.7×; for onepass the JVM warmup shows and Java lands between
-C++ and Python.  C and C++ are within measurement noise of each other
-on correcting; C edges C++ slightly on onepass.  Python is 30–50×
-slower than Rust.
+C leads onepass by a narrow margin; Rust, C, and C++ are within a
+second of each other.  For correcting, Rust leads and Java outperforms
+C and C++ by ~1.6×.  Python is ~60× slower than Rust on both algorithms.
 
-**Rust, default vs `--splay` (onepass)**
+**Rust, default vs `--splay`**
 
 | Algorithm | Flags | Time | Delta | Copies | Median copy |
 |-----------|-------|-----:|------:|-------:|------------:|
-| onepass | (default) | 2.0s | 5.1 MB | 205,030 | 89 B |
-| onepass | `--splay` | 1.9s | 5.1 MB | 205,030 | 89 B |
-| correcting | (default) | 7.0s | 7.0 MB | 243,546 | 91 B |
+| onepass | (default) | 4s | 4.8 MB | 205,030 | 89 B |
+| onepass | `--splay` | 4s | 4.8 MB | 205,030 | 89 B |
+| correcting | (default) | 9s | 6.7 MB | 243,546 | 91 B |
+| correcting | `--splay` | 47s | 6.6 MB | 243,756 | 91 B |
 
 The copy-length distribution is heavy-tailed: median is 89–91 bytes
-(barely above the 16-byte seed length), but the mean is 3,500–4,200
+(barely above the 16-byte seed length), but the mean is 3,600–4,200
 bytes and the maximum reaches 14 MB.  Most copies are short, but most
 *bytes* come from long copies.
 
@@ -305,9 +302,6 @@ one over the version or output file (`dst_crc`, verified after).  At
 ~12 GB/s, checksumming an 871 MB kernel tarball takes ~35 ms — ~70 ms
 total overhead per encode or decode, negligible at any algorithm speed.
 
-The benchmarks above (SHAKE128 era, ~1.44 s overhead) were collected
-before the format switch.  Current timings are algorithm-dominated.
-
 ### Cross-version kernel benchmark (linux-5.1.x, C++)
 
 All six ordered pairs of linux-5.1.1, 5.1.2, and 5.1.3 (~831 MB each),
@@ -315,19 +309,18 @@ encoded with the C++ implementation (default flags):
 
 | Ref → Ver | onepass Ratio | onepass Time | correcting Ratio | correcting Time |
 |-----------|-------------:|------------:|-----------------:|----------------:|
-| 5.1.1 → 5.1.2 | 0.54% | 5.2s | 0.86% | 15.2s |
-| 5.1.1 → 5.1.3 | 0.55% | 3.5s | 0.81% | 15.3s |
-| 5.1.2 → 5.1.1 | 0.53% | 2.2s | 0.81% | 15.3s |
-| 5.1.2 → 5.1.3 | 0.47% | 2.1s | 1.02% | 15.4s |
-| 5.1.3 → 5.1.1 | 0.54% | 2.2s | 0.78% | 15.4s |
-| 5.1.3 → 5.1.2 | 0.47% | 2.1s | 0.85% | 15.4s |
+| 5.1.1 → 5.1.2 | 0.54% | 5s | 0.86% | 19s |
+| 5.1.1 → 5.1.3 | 0.55% | 5s | 0.81% | 18s |
+| 5.1.2 → 5.1.1 | 0.53% | 4s | 0.81% | 18s |
+| 5.1.2 → 5.1.3 | 0.47% | 4s | 1.02% | 18s |
+| 5.1.3 → 5.1.1 | 0.54% | 4s | 0.78% | 18s |
+| 5.1.3 → 5.1.2 | 0.47% | 4s | 0.85% | 18s |
 
-Onepass is 4–7× faster than correcting and achieves better ratios on
-every pair.  The 5.1.1 → 5.1.2 onepass time (5.2s) is elevated by a
-cold mmap cache on the first run; subsequent pairs drop to 2.1–2.2s
-(algorithm: ~0.7–0.8s + ~1.44s hashing).  Correcting times are nearly
-uniform (~15s = ~13.8s algorithm + ~1.44s hashing) because encoding is
-dominated by the build phase over the 831 MB reference.
+Onepass is 4–5× faster than correcting and achieves better ratios on
+every pair.  The 5.1.1 → 5.1.2 onepass time (5s) is slightly elevated
+by a cold mmap cache on the first run; subsequent pairs drop to 4s.
+Correcting times are nearly uniform (~18s) because encoding is dominated
+by the build phase over the 831 MB reference.
 
 ### Extended kernel benchmark (linux-5.1.0–5.1.7, Rust)
 
@@ -338,13 +331,13 @@ flags).  All tarballs are ~831 MB post-gunzip.
 
 | Version | onepass ratio | onepass time | correcting ratio | correcting time |
 |---------|-------------:|------------:|-----------------:|----------------:|
-| 5.1.1 | 0.58% | 2s | 0.80% | 7s |
-| 5.1.2 | 0.65% | 2s | 1.00% | 7s |
-| 5.1.3 | 0.66% | 2s | 1.04% | 7s |
-| 5.1.4 | 0.69% | 2s | 1.06% | 7s |
-| 5.1.5 | 0.70% | 2s | 0.86% | 7s |
-| 5.1.6 | 0.73% | 2s | 1.00% | 8s |
-| 5.1.7 | 0.73% | 2s | 0.88% | 8s |
+| 5.1.1 | 0.58% | 4s | 0.81% | 9s |
+| 5.1.2 | 0.66% | 4s | 1.01% | 9s |
+| 5.1.3 | 0.66% | 4s | 1.04% | 9s |
+| 5.1.4 | 0.70% | 4s | 1.06% | 9s |
+| 5.1.5 | 0.71% | 4s | 0.87% | 9s |
+| 5.1.6 | 0.74% | 4s | 1.01% | 9s |
+| 5.1.7 | 0.74% | 4s | 0.88% | 9s |
 
 Onepass ratios climb steadily as versions accumulate changes from the fixed
 5.1.0 base.  Correcting ratios fluctuate: each version's checkpoint bias k
@@ -355,13 +348,13 @@ seeds survive the checkpoint filter and hence how many matches are found.
 
 | Transition | onepass ratio | onepass time | correcting ratio | correcting time |
 |------------|-------------:|------------:|-----------------:|----------------:|
-| 5.1.0→5.1.1 | 0.58% | 2s | 0.80% | 7s |
-| 5.1.1→5.1.2 | 0.53% | 2s | 0.85% | 7s |
-| 5.1.2→5.1.3 | 0.47% | 3s | 1.01% | 7s |
-| 5.1.3→5.1.4 | 0.50% | 2s | 0.82% | 8s |
-| 5.1.4→5.1.5 | 0.48% | 2s | 0.79% | 7s |
-| 5.1.5→5.1.6 | 0.49% | 2s | 0.78% | 7s |
-| 5.1.6→5.1.7 | 0.47% | 2s | 0.86% | 8s |
+| 5.1.0→5.1.1 | 0.58% | 4s | 0.81% | 9s |
+| 5.1.1→5.1.2 | 0.54% | 4s | 0.86% | 9s |
+| 5.1.2→5.1.3 | 0.47% | 4s | 1.02% | 9s |
+| 5.1.3→5.1.4 | 0.50% | 4s | 0.82% | 9s |
+| 5.1.4→5.1.5 | 0.48% | 4s | 0.79% | 9s |
+| 5.1.5→5.1.6 | 0.50% | 4s | 0.79% | 9s |
+| 5.1.6→5.1.7 | 0.47% | 4s | 0.86% | 9s |
 
 Successive onepass deltas (0.47–0.58%) are consistently smaller than
 from-base deltas to the same version (0.58–0.73%): each adjacent pair of
@@ -374,12 +367,12 @@ reference size.
 
 | Version | onepass ratio | onepass time | correcting ratio | correcting time |
 |---------|-------------:|------------:|-----------------:|----------------:|
-| 5.1.2 | 0.53% | 2s | 0.85% | 8s |
-| 5.1.3 | 0.54% | 2s | 0.81% | 8s |
-| 5.1.4 | 0.58% | 3s | 0.97% | 7s |
-| 5.1.5 | 0.58% | 2s | 0.82% | 7s |
-| 5.1.6 | 0.62% | 3s | 0.87% | 8s |
-| 5.1.7 | 0.62% | 3s | 0.82% | 7s |
+| 5.1.2 | 0.54% | 4s | 0.86% | 9s |
+| 5.1.3 | 0.55% | 4s | 0.81% | 9s |
+| 5.1.4 | 0.58% | 4s | 0.98% | 9s |
+| 5.1.5 | 0.59% | 4s | 0.83% | 9s |
+| 5.1.6 | 0.62% | 4s | 0.87% | 9s |
+| 5.1.7 | 0.63% | 4s | 0.83% | 9s |
 
 Using 5.1.1 as reference, onepass ratios grow gradually from 0.53% to 0.62%
 as versions diverge further — slower growth than from base 5.1.0, since 5.1.1
@@ -389,19 +382,20 @@ the from-5.1.1 ratios grow while successive ratios stay flat (0.47–0.50%).
 
 ### Splay tree: correcting compression ratio
 
-The correcting+splay cross-version kernel results (same six pairs, ~831 MB):
+The correcting+splay cross-version kernel results (same six pairs, ~831 MB,
+Rust):
 
 | Ref → Ver | Ratio (hash) | Ratio (splay) | Time (hash) | Time (splay) |
 |-----------|-------------:|--------------:|------------:|-------------:|
-| 5.1.1 → 5.1.2 | 0.86% | 0.85% | 15.2s | 50.3s |
-| 5.1.1 → 5.1.3 | 0.81% | 0.80% | 15.3s | 51.0s |
-| 5.1.2 → 5.1.1 | 0.81% | 0.80% | 15.3s | 50.3s |
-| 5.1.2 → 5.1.3 | 1.02% | 1.00% | 15.4s | 50.0s |
-| 5.1.3 → 5.1.1 | 0.78% | 0.78% | 15.4s | 50.6s |
-| 5.1.3 → 5.1.2 | 0.85% | 0.83% | 15.4s | 50.1s |
+| 5.1.1 → 5.1.2 | 0.86% | 0.85% | 9s | 47s |
+| 5.1.1 → 5.1.3 | 0.81% | 0.80% | 9s | 47s |
+| 5.1.2 → 5.1.1 | 0.81% | 0.80% | 9s | 47s |
+| 5.1.2 → 5.1.3 | 1.02% | 1.00% | 9s | 47s |
+| 5.1.3 → 5.1.1 | 0.78% | 0.78% | 9s | 47s |
+| 5.1.3 → 5.1.2 | 0.85% | 0.83% | 9s | 47s |
 
 Splay wins on ratio by a small but consistent margin (~0.01–0.02 pp) on
-every pair, at ~3.3× the time.
+every pair, at ~5× the wall time (~7.5× algorithm-only).
 
 ### Transposition benchmark
 

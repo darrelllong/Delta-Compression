@@ -84,16 +84,26 @@ row() {
         "$ratio" "$elapsed"
 }
 
-# encode_quiet <ref> <ver> <delta_file>
-# Encodes and returns timing (seconds); no verbose output.
+# encode_timed <ref> <ver> <delta_file>
+# Run encode once (warm-up already done by caller) and print elapsed seconds
+# to one decimal place.  Uses python3 for sub-second precision; falls back to
+# date +%s%3N (milliseconds) if python3 is absent.
 encode_timed() {
     local ref="$1" ver="$2" delta_file="$3"
-    "$DELTA" encode "$ALGO" "$ref" "$ver" "$delta_file" > /dev/null 2>&1
-    local t0 t1
-    t0=$(date +%s)
-    "$DELTA" encode "$ALGO" "$ref" "$ver" "$delta_file" > /dev/null 2>&1
-    t1=$(date +%s)
-    echo $((t1 - t0))
+    if command -v python3 > /dev/null 2>&1; then
+        python3 - "$DELTA" encode "$ALGO" "$ref" "$ver" "$delta_file" <<'EOF'
+import sys, subprocess, time
+t0 = time.perf_counter()
+subprocess.run(sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+print(f"{time.perf_counter()-t0:.1f}")
+EOF
+    else
+        local t0 t1
+        t0=$(date +%s%3N)
+        "$DELTA" encode "$ALGO" "$ref" "$ver" "$delta_file" > /dev/null 2>&1
+        t1=$(date +%s%3N)
+        python3 -c "print(f'{($t1-$t0)/1000:.1f}')" 2>/dev/null || echo $(( (t1 - t0 + 500) / 1000 ))
+    fi
 }
 
 # tar_name <i>   → linux-5.1.tar (i=0) or linux-5.1.$i.tar (i>0)
