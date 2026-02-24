@@ -1,6 +1,6 @@
 package delta
 
-import java.util.{Arrays => JArrays, Random}
+import scala.util.Random
 
 /**
  * Integration tests for the Scala delta compression library.
@@ -23,7 +23,7 @@ val allPolicies = CyclePolicy.values
 // ── assertion helpers ─────────────────────────────────────────────────────────
 
 def assertArrayEquals(expected: Array[Byte], actual: Array[Byte], msg: String = "byte arrays differ"): Unit =
-  if !JArrays.equals(expected, actual) then
+  if !expected.sameElements(actual) then
     throw new AssertionError(s"$msg: expected ${expected.length} bytes, got ${actual.length}")
 
 def assertTrue(cond: Boolean, msg: String): Unit =
@@ -59,18 +59,9 @@ val zeroHash = new Array[Byte](deltaCrcSize)
 
 def b(s: String): Array[Byte] = s.getBytes("ISO-8859-1")
 
-def concat(parts: Array[Byte]*): Array[Byte] = {
-  val out = new Array[Byte](parts.map(_.length).sum)
-  var pos = 0
-  for a <- parts do { System.arraycopy(a, 0, out, pos, a.length); pos += a.length }
-  out
-}
+def concat(parts: Array[Byte]*): Array[Byte] = Array.concat(parts*)
 
-def repeatBytes(data: Array[Byte], n: Int): Array[Byte] = {
-  val out = new Array[Byte](data.length * n)
-  for i <- 0 until n do System.arraycopy(data, 0, out, i * data.length, data.length)
-  out
-}
+def repeatBytes(data: Array[Byte], n: Int): Array[Byte] = Array.concat(Seq.fill(n)(data)*)
 
 def shuffle(arr: Array[Int], rng: Random): Unit = {
   var i = arr.length - 1
@@ -82,7 +73,7 @@ def shuffle(arr: Array[Int], rng: Random): Unit = {
 }
 
 def hexToBytes(hex: String): Array[Byte] =
-  Array.tabulate(hex.length / 2)(i => Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16).toByte)
+  hex.grouped(2).map(BigInt(_, 16).toByte).toArray
 
 /** Standard encode path: diff → place → encode → decode → applyPlacedTo. */
 def roundtrip(algo: Algorithm, r: Array[Byte], v: Array[Byte], p: Int): Array[Byte] = {
@@ -366,7 +357,7 @@ def testInplaceVarlenJunk(): Unit = {
   for i <- perm do {
     parts += blocks(i)
     val junkLen = 50 + rng.nextInt(251)
-    parts += java.util.Arrays.copyOf(junk, math.min(junkLen, junk.length))
+    parts += junk.take(math.min(junkLen, junk.length))
   }
   val v = concat(parts.toSeq*)
   for algo <- allAlgos do for pol <- allPolicies do
@@ -402,7 +393,7 @@ def testInplaceVarlenHalfBlockScramble(): Unit = {
   val blocks = makeBlocks(); val r = blocksRef(blocks)
   val halves = blocks.flatMap { blk =>
     val mid = blk.length / 2
-    List(java.util.Arrays.copyOf(blk, mid), java.util.Arrays.copyOfRange(blk, mid, blk.length))
+    List(blk.take(mid), blk.drop(mid))
   }
   val rng  = new Random(5555)
   val perm = Array.tabulate(halves.length)(identity); shuffle(perm, rng)
@@ -448,7 +439,7 @@ def testLocalminPicksSmallest(): Unit = {
 
 def testCorrectingCheckpointingTinyTable(): Unit = {
   val r = repeatBytes(b("ABCDEFGHIJKLMNOP"), 20)
-  val v = concat(java.util.Arrays.copyOfRange(r, 0, 160), b("XXXXYYYY"), java.util.Arrays.copyOfRange(r, 160, r.length))
+  val v = concat(r.take(160), b("XXXXYYYY"), r.drop(160))
   val o = DiffOptions(p = 16, q = 7)
   val cmds = diff(Algorithm.Correcting, r, v, o)
   assertArrayEquals(v, applyDelta(r, cmds), "correcting q=7 tiny table")
@@ -456,10 +447,7 @@ def testCorrectingCheckpointingTinyTable(): Unit = {
 
 def testCorrectingCheckpointingVariousSizes(): Unit = {
   val r = Array.tabulate[Byte](2000)(i => (i & 0xFF).toByte)
-  val v = new Array[Byte](2050)
-  System.arraycopy(r, 0, v, 0, 500)
-  JArrays.fill(v, 500, 550, 0xFF.toByte)
-  System.arraycopy(r, 500, v, 550, 1500)
+  val v = r.take(500) ++ Array.fill(50)(0xFF.toByte) ++ r.drop(500)
   for q <- Array(7, 31, 101, 1009, tableSize) do {
     val o    = DiffOptions(p = 16, q = q)
     val cmds = diff(Algorithm.Correcting, r, v, o)
@@ -562,8 +550,8 @@ def testBoundaryByteMutations(): Unit = {
   val r      = Array.tabulate[Byte](n)(i => i.toByte)
   val vFirst  = { val a = r.clone(); a(0)   = (a(0).toInt   ^ 0xFF).toByte; a }
   val vLast   = { val a = r.clone(); a(n-1) = (a(n-1).toInt ^ 0xFF).toByte; a }
-  val vAppend = { val a = java.util.Arrays.copyOf(r, n + 1); a(n) = 0x5A; a }
-  val vDrop   = java.util.Arrays.copyOf(r, n - 1)
+  val vAppend = { val a = r.padTo(n + 1, 0.toByte); a(n) = 0x5A; a }
+  val vDrop   = r.take(n - 1)
   for algo <- allAlgos do {
     assertArrayEquals(vFirst,  roundtrip(algo, r, vFirst,  p), s"$algo byte[0] flipped")
     assertArrayEquals(vLast,   roundtrip(algo, r, vLast,   p), s"$algo byte[n-1] flipped")
@@ -590,16 +578,16 @@ def testSizeSweep(): Unit = {
   val bigRef = Array.tabulate[Byte](600)(i => (i * 3 & 0xFF).toByte)
 
   for vLen <- sizes do {
-    val vPrefix = java.util.Arrays.copyOf(bigRef, vLen)
+    val vPrefix = bigRef.take(vLen)
     for algo <- allAlgos do
       assertArrayEquals(vPrefix, roundtrip(algo, bigRef, vPrefix, p), s"$algo vLen=$vLen prefix ver")
     val vNew = Array.tabulate[Byte](vLen)(i => (i * 7 + 1 & 0xFF).toByte)
     for algo <- allAlgos do
       assertArrayEquals(vNew, roundtrip(algo, bigRef, vNew, p), s"$algo vLen=$vLen all-new ver")
   }
-  val fixedVer = java.util.Arrays.copyOf(bigRef, 64)
+  val fixedVer = bigRef.take(64)
   for rLen <- sizes do {
-    val r = java.util.Arrays.copyOf(bigRef, rLen)
+    val r = bigRef.take(rLen)
     for algo <- allAlgos do
       assertArrayEquals(fixedVer, roundtrip(algo, r, fixedVer, p), s"$algo rLen=$rLen fixed ver")
   }
@@ -647,7 +635,7 @@ def testEncodingCommandFieldBoundaries(): Unit = {
 def testInplaceVersionOneLargerTight(): Unit = {
   for n <- Array(1, 2, 3, 4, 7, 8, 15, 16, 17, 31, 32, 63, 64) do {
     val r = Array.tabulate[Byte](n)(i => (i & 0xFF).toByte)
-    val v = { val a = java.util.Arrays.copyOf(r, n + 1); a(n) = 0x5A; a }
+    val v = { val a = r.padTo(n + 1, 0.toByte); a(n) = 0x5A; a }
     for algo <- allAlgos do for pol <- allPolicies do
       assertArrayEquals(v, inplaceRoundtrip(algo, r, v, pol, 2), s"$algo/$pol inplace |V|=|R|+1 n=$n")
   }
@@ -656,7 +644,7 @@ def testInplaceVersionOneLargerTight(): Unit = {
 def testInplaceVersionOneSmallerTight(): Unit = {
   for n <- Array(2, 3, 4, 5, 8, 9, 15, 16, 17, 31, 32, 65) do {
     val r = Array.tabulate[Byte](n)(i => (i & 0xFF).toByte)
-    val v = java.util.Arrays.copyOf(r, n - 1)
+    val v = r.take(n - 1)
     for algo <- allAlgos do for pol <- allPolicies do
       assertArrayEquals(v, inplaceRoundtrip(algo, r, v, pol, 2), s"$algo/$pol inplace |V|=|R|-1 n=$n")
   }
@@ -666,9 +654,7 @@ def testInplaceVersionSameSizeTight(): Unit = {
   for n <- Array(2, 4, 8, 16, 32, 64, 128, 256) do {
     val r    = Array.tabulate[Byte](n)(i => (i & 0xFF).toByte)
     val half = n / 2
-    val v    = new Array[Byte](n)
-    System.arraycopy(r, half, v, 0, half)
-    System.arraycopy(r, 0, v, half, half)
+    val v    = r.slice(half, n) ++ r.slice(0, half)
     for algo <- allAlgos do for pol <- allPolicies do
       assertArrayEquals(v, inplaceRoundtrip(algo, r, v, pol, 2), s"$algo/$pol inplace same-size swap n=$n")
   }

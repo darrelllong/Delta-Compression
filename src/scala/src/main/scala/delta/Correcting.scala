@@ -138,7 +138,7 @@ def diffCorrecting(r: Array[Byte], v: Array[Byte], opts: DiffOptions): List[Comm
                       val oldest = buf.removeHead()
                       if !oldest.dummy then commands += oldest.cmd
                     }
-                    buf += new BufEntry(vS, vM, Command.Add(java.util.Arrays.copyOfRange(v, vS, vM)), false)
+                    buf += new BufEntry(vS, vM, Command.Add(v.slice(vS, vM)), false)
                   }
                   if buf.size >= bufCap then {
                     val oldest = buf.removeHead()
@@ -158,16 +158,18 @@ def diffCorrecting(r: Array[Byte], v: Array[Byte], opts: DiffOptions): List[Comm
                       effectiveStart = math.min(effectiveStart, tail.vStart)
                       buf.removeLast()
                     } else if tail.vEnd > vM && tail.vStart < vM then {
-                      if tail.cmd.isInstanceOf[Command.Add] then {
+                      tail.cmd match {
+                      case _: Command.Add =>
                         val keep = vM - tail.vStart
                         if keep > 0 then {
-                          tail.cmd  = Command.Add(java.util.Arrays.copyOfRange(v, tail.vStart, vM))
+                          tail.cmd  = Command.Add(v.slice(tail.vStart, vM))
                           tail.vEnd = vM
                         } else {
                           buf.removeLast()
                         }
                         effectiveStart = math.min(effectiveStart, vM)
-                      }
+                      case _ =>
+                    }
                       correcting = false
                     } else correcting = false
                   }
@@ -195,7 +197,7 @@ def diffCorrecting(r: Array[Byte], v: Array[Byte], opts: DiffOptions): List[Comm
 
   // Step (8): flush buffer and trailing add
   for entry <- buf do if !entry.dummy then commands += entry.cmd
-  if vS < v.length then commands += Command.Add(java.util.Arrays.copyOfRange(v, vS, v.length))
+  if vS < v.length then commands += Command.Add(v.slice(vS, v.length))
 
   if verbose then printStats(commands.toList)
   commands.toList

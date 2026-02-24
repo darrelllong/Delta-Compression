@@ -1,6 +1,5 @@
 package delta
 
-import java.util.{PriorityQueue => JPQ}
 import scala.collection.mutable
 
 /**
@@ -36,11 +35,11 @@ def applyPlacedTo(r: Array[Byte], commands: List[PlacedCommand], out: Array[Byte
   var maxWritten = 0
   for cmd <- commands do cmd match {
     case c: PlacedCommand.Copy =>
-      System.arraycopy(r, c.src, out, c.dst, c.length)
+      Array.copy(r, c.src, out, c.dst, c.length)
       val end = c.dst + c.length
       if end > maxWritten then maxWritten = end
     case c: PlacedCommand.Add =>
-      System.arraycopy(c.data, 0, out, c.dst, c.data.length)
+      c.data.copyToArray(out, c.dst)
       val end = c.dst + c.data.length
       if end > maxWritten then maxWritten = end
   }
@@ -50,8 +49,8 @@ def applyPlacedTo(r: Array[Byte], commands: List[PlacedCommand], out: Array[Byte
 /** Apply placed commands in-place within a single buffer. */
 def applyPlacedInplaceTo(commands: List[PlacedCommand], buf: Array[Byte]): Unit =
   for cmd <- commands do cmd match {
-    case c: PlacedCommand.Copy => System.arraycopy(buf, c.src, buf, c.dst, c.length)
-    case c: PlacedCommand.Add  => System.arraycopy(c.data, 0, buf, c.dst, c.data.length)
+    case c: PlacedCommand.Copy => Array.copy(buf, c.src, buf, c.dst, c.length)
+    case c: PlacedCommand.Add  => c.data.copyToArray(buf, c.dst)
   }
 
 /** Reconstruct version from reference + algorithm commands. */
@@ -60,9 +59,9 @@ def applyDelta(r: Array[Byte], commands: List[Command]): Array[Byte] = {
   var pos = 0
   for cmd <- commands do cmd match {
     case c: Command.Copy =>
-      System.arraycopy(r, c.offset, out, pos, c.length); pos += c.length
+      Array.copy(r, c.offset, out, pos, c.length); pos += c.length
     case c: Command.Add =>
-      System.arraycopy(c.data, 0, out, pos, c.data.length); pos += c.data.length
+      c.data.copyToArray(out, pos); pos += c.data.length
   }
   out
 }
@@ -71,9 +70,9 @@ def applyDelta(r: Array[Byte], commands: List[Command]): Array[Byte] = {
 def applyDeltaInplace(r: Array[Byte], commands: List[PlacedCommand], versionSize: Int): Array[Byte] = {
   val bufSize = math.max(r.length, versionSize)
   val buf     = new Array[Byte](bufSize)
-  System.arraycopy(r, 0, buf, 0, r.length)
+  r.copyToArray(buf)
   applyPlacedInplaceTo(commands, buf)
-  if buf.length != versionSize then java.util.Arrays.copyOf(buf, versionSize) else buf
+  if buf.length != versionSize then buf.take(versionSize) else buf
 }
 
 /**
@@ -188,18 +187,16 @@ def makeInplace(r: Array[Byte], commands: List[Command], policy: CyclePolicy): L
   var sccPtr    = 0
   val scanPos   = Array(0)
 
-  // Heap: Array[Int](2) = [length, index], min-heap by (length, index)
-  val heap = new JPQ[Array[Int]]((a, b) => {
-    val c = Integer.compare(a(0), b(0))
-    if c != 0 then c else Integer.compare(a(1), b(1))
-  })
-  for i <- 0 until n do if inDeg(i) == 0 then heap.add(Array(copies(i)(3), i))
+  // Min-heap by (length, index): smallest copy length first, ties broken by index.
+  given Ordering[Array[Int]] = Ordering.by((a: Array[Int]) => (a(0), a(1))).reverse
+  val heap = mutable.PriorityQueue.empty[Array[Int]]
+  for i <- 0 until n do if inDeg(i) == 0 then heap.enqueue(Array(copies(i)(3), i))
   var processed = 0
 
   while processed < n do {
     // Drain all ready vertices.
-    while !heap.isEmpty do {
-      val entry = heap.poll()
+    while heap.nonEmpty do {
+      val entry = heap.dequeue()
       val v     = entry(1)
       if !removed(v) then {
         removed(v) = true
@@ -208,7 +205,7 @@ def makeInplace(r: Array[Byte], commands: List[Command], policy: CyclePolicy): L
         if sccId(v) != -1 then sccActive(sccId(v)) -= 1
         for w <- adj(v) do if !removed(w) then {
           inDeg(w) -= 1
-          if inDeg(w) == 0 then heap.add(Array(copies(w)(3), w))
+          if inDeg(w) == 0 then heap.enqueue(Array(copies(w)(3), w))
         }
       }
     }
@@ -247,14 +244,14 @@ def makeInplace(r: Array[Byte], commands: List[Command], policy: CyclePolicy): L
 
       // Convert victim: materialize copy data as literal add.
       val ci = copies(victim)
-      adds += PlacedCommand.Add(ci(2), java.util.Arrays.copyOfRange(r, ci(1), ci(1) + ci(3)))
+      adds += PlacedCommand.Add(ci(2), r.slice(ci(1), ci(1) + ci(3)))
       removed(victim) = true
       processed += 1
       if sccId(victim) != -1 then sccActive(sccId(victim)) -= 1
 
       for w <- adj(victim) do if !removed(w) then {
         inDeg(w) -= 1
-        if inDeg(w) == 0 then heap.add(Array(copies(w)(3), w))
+        if inDeg(w) == 0 then heap.enqueue(Array(copies(w)(3), w))
       }
     }
   }

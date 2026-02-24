@@ -132,7 +132,7 @@ private def cmdDecode(args: Array[String]): Unit = {
 
   // Pre-check: verify reference matches embedded src_crc.
   val rCrc = Crc64.hash8(r)
-  if !java.util.Arrays.equals(rCrc, result.srcCrc) then {
+  if !rCrc.sameElements(result.srcCrc) then {
     if !ignoreHash then {
       System.err.printf("source file does not match delta: expected %s, got %s%n",
         toHex(result.srcCrc), toHex(rCrc))
@@ -151,7 +151,7 @@ private def cmdDecode(args: Array[String]): Unit = {
   val outCrc = Crc64.hash8(out)
 
   // Post-check: verify output matches embedded dst_crc.
-  if !java.util.Arrays.equals(outCrc, result.dstCrc) then {
+  if !outCrc.sameElements(result.dstCrc) then {
     if !ignoreHash then {
       System.err.println("output integrity check failed")
       sys.exit(1)

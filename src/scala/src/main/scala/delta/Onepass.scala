@@ -30,8 +30,8 @@ def diffOnepass(r: Array[Byte], v: Array[Byte], opts: DiffOptions): List[Command
   val htRFp  = if !useSplay then new Array[Long](q) else null
   val htVOff = if !useSplay then new Array[Int](q)  else null
   val htROff = if !useSplay then new Array[Int](q)  else null
-  val htVVer = if !useSplay then { val a = new Array[Long](q); java.util.Arrays.fill(a, -1L); a } else null
-  val htRVer = if !useSplay then { val a = new Array[Long](q); java.util.Arrays.fill(a, -1L); a } else null
+  val htVVer = if !useSplay then Array.fill(q)(-1L) else null
+  val htRVer = if !useSplay then Array.fill(q)(-1L) else null
 
   // Splay trees store Array[Long](2) = [offset, version]
   val spV: SplayTree[Array[Long]] = if useSplay then new SplayTree() else null
@@ -134,7 +134,7 @@ def diffOnepass(r: Array[Byte], v: Array[Byte], opts: DiffOptions): List[Command
         if ml < p then { vC += 1; rC += 1 }
         else {
           // Step (6): encode
-          if vS < vM then commands += Command.Add(java.util.Arrays.copyOfRange(v, vS, vM))
+          if vS < vM then commands += Command.Add(v.slice(vS, vM))
           commands += Command.Copy(rM, ml)
           vS = vM + ml
 
@@ -148,7 +148,7 @@ def diffOnepass(r: Array[Byte], v: Array[Byte], opts: DiffOptions): List[Command
   }
 
   // Step (8): trailing add
-  if vS < v.length then commands += Command.Add(java.util.Arrays.copyOfRange(v, vS, v.length))
+  if vS < v.length then commands += Command.Add(v.slice(vS, v.length))
   if verbose then printStats(commands.toList)
   commands.toList
 }

@@ -86,7 +86,7 @@ def diffGreedy(r: Array[Byte], v: Array[Byte], opts: DiffOptions): List[Command]
       if bestLen < p then vC += 1
       else {
         // Step (6): encode
-        if vS < vC then commands += Command.Add(java.util.Arrays.copyOfRange(v, vS, vC))
+        if vS < vC then commands += Command.Add(v.slice(vS, vC))
         commands += Command.Copy(bestRm, bestLen)
         vS = vC + bestLen
         // Step (7): advance past matched region
@@ -96,7 +96,7 @@ def diffGreedy(r: Array[Byte], v: Array[Byte], opts: DiffOptions): List[Command]
   }
 
   // Step (8): trailing add
-  if vS < v.length then commands += Command.Add(java.util.Arrays.copyOfRange(v, vS, v.length))
+  if vS < v.length then commands += Command.Add(v.slice(vS, v.length))
   if verbose then printStats(commands.toList)
   commands.toList
 }

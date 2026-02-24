@@ -1,7 +1,5 @@
 package delta
 
-import java.math.BigInteger
-
 // ── Karp-Rabin rolling hash (Karp & Rabin 1987; Section 2.1.3) ────────────
 
 /** Reduce 128-bit value (hi:lo) modulo 2^61-1. */
@@ -10,11 +8,11 @@ def modMersenne(hi: Long, lo: Long): Long = {
   val upper = (hi << 3) | (lo >>> 61)
   val lower = lo & p
   var r     = upper + lower
-  if java.lang.Long.compareUnsigned(r, p) >= 0 then r -= p
+  if r >= p then r -= p   // r < 2*p < 2^62, so always non-negative; plain >= suffices
   val upper2 = r >>> 61
   val lower2 = r & p
   var r2     = upper2 + lower2
-  if java.lang.Long.compareUnsigned(r2, p) >= 0 then r2 -= p
+  if r2 >= p then r2 -= p
   r2
 }
 
@@ -34,7 +32,7 @@ def fingerprint(data: Array[Byte], offset: Int, p: Int): Long = {
     val hi  = Math.multiplyHigh(h, hashBase)
     val lo  = h * hashBase
     val nl  = lo + b
-    val nh  = if java.lang.Long.compareUnsigned(nl, lo) < 0 then hi + 1L else hi
+    val nh  = if lo < 0 && nl >= 0 then hi + 1L else hi  // carry: lo near 2^64, wraps positive
     h = modMersenne(nh, nl)
     i += 1
   }
@@ -65,12 +63,12 @@ class RollingHash(data: Array[Byte], offset: Int, p: Int) {
   /** Slide window one byte right: remove oldByte from left, add newByte to right. */
   def roll(oldByte: Int, newByte: Int): Unit = {
     val sub = mulmod(oldByte.toLong, bp)
-    val v   = if java.lang.Long.compareUnsigned(value, sub) >= 0 then value - sub
+    val v   = if value >= sub then value - sub   // both in [0, p); plain >= suffices
               else hashMod - (sub - value)
     val hi  = Math.multiplyHigh(v, hashBase)
     val lo  = v * hashBase
     val nl  = lo + newByte
-    val nh  = if java.lang.Long.compareUnsigned(nl, lo) < 0 then hi + 1L else hi
+    val nh  = if lo < 0 && nl >= 0 then hi + 1L else hi  // carry: same as fingerprint
     value = modMersenne(nh, nl)
   }
 }
@@ -89,19 +87,19 @@ def isPrime(n: Long): Boolean = {
   if n < 4L then return true
   if n % 2L == 0L then return false
 
-  val bn  = BigInteger.valueOf(n)
-  val nm1 = bn.subtract(BigInteger.ONE)
-  val r   = nm1.getLowestSetBit
-  val d   = nm1.shiftRight(r)
+  val bn  = BigInt(n)
+  val nm1 = bn - 1
+  var r   = 0; while !nm1.testBit(r) do r += 1  // lowest set bit = trailing zeros
+  val d   = nm1 >> r
 
   for a <- mrWitnesses do {
     if a >= n then return true
-    var x = BigInteger.valueOf(a).modPow(d, bn)
-    if x != BigInteger.ONE && x != nm1 then {
+    var x = BigInt(a).modPow(d, bn)
+    if x != 1 && x != nm1 then {
       var found = false
       var j     = 0
       while !found && j < r - 1 do {
-        x = x.modPow(BigInteger.TWO, bn)
+        x = x.modPow(BigInt(2), bn)
         if x == nm1 then found = true
         j += 1
       }

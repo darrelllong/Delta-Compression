@@ -10,12 +10,12 @@ package delta
  *   ADD:  type=2, dst:u32, len:u32, data
  */
 
-class DecodeResult(
-  val commands:    List[PlacedCommand],
-  val inplace:     Boolean,
-  val versionSize: Int,
-  val srcCrc:      Array[Byte],
-  val dstCrc:      Array[Byte],
+case class DecodeResult(
+  commands:    List[PlacedCommand],
+  inplace:     Boolean,
+  versionSize: Int,
+  srcCrc:      Array[Byte],
+  dstCrc:      Array[Byte],
 )
 
 /** Encode placed commands to the unified binary delta format. */
@@ -31,11 +31,11 @@ def encodeDelta(commands: List[PlacedCommand], inplace: Boolean,
   var pos = 0
 
   // Header
-  System.arraycopy(deltaMagic, 0, out, pos, deltaMagic.length); pos += deltaMagic.length
+  deltaMagic.copyToArray(out, pos); pos += deltaMagic.length
   out(pos) = if inplace then deltaFlagInplace else 0; pos += 1
   putU32BE(out, pos, versionSize); pos += deltaU32Size
-  System.arraycopy(srcCrc, 0, out, pos, deltaCrcSize); pos += deltaCrcSize
-  System.arraycopy(dstCrc, 0, out, pos, deltaCrcSize); pos += deltaCrcSize
+  srcCrc.copyToArray(out, pos); pos += deltaCrcSize
+  dstCrc.copyToArray(out, pos); pos += deltaCrcSize
 
   for cmd <- commands do cmd match {
     case c: PlacedCommand.Copy =>
@@ -47,12 +47,12 @@ def encodeDelta(commands: List[PlacedCommand], inplace: Boolean,
       out(pos) = deltaCmdAdd.toByte; pos += 1
       putU32BE(out, pos, c.dst);         pos += deltaU32Size
       putU32BE(out, pos, c.data.length); pos += deltaU32Size
-      System.arraycopy(c.data, 0, out, pos, c.data.length); pos += c.data.length
+      c.data.copyToArray(out, pos); pos += c.data.length
   }
 
   out(pos) = deltaCmdEnd.toByte; pos += 1
 
-  if pos != out.length then java.util.Arrays.copyOf(out, pos) else out
+  if pos != out.length then out.take(pos) else out
 }
 
 /** Decode the unified binary delta format. */
@@ -64,8 +64,8 @@ def decodeDelta(data: Array[Byte]): DecodeResult = {
   val inplace     = (data(deltaMagic.length).toInt & deltaFlagInplace.toInt) != 0
   val versionSize = getU32BE(data, deltaMagic.length + 1)
   val crcOff      = deltaMagic.length + 1 + deltaU32Size
-  val srcCrc      = java.util.Arrays.copyOfRange(data, crcOff, crcOff + deltaCrcSize)
-  val dstCrc      = java.util.Arrays.copyOfRange(data, crcOff + deltaCrcSize, crcOff + 2 * deltaCrcSize)
+  val srcCrc      = data.slice(crcOff, crcOff + deltaCrcSize)
+  val dstCrc      = data.slice(crcOff + deltaCrcSize, crcOff + 2 * deltaCrcSize)
   var pos         = deltaHeaderSize
   val commands    = scala.collection.mutable.ListBuffer[PlacedCommand]()
 
@@ -85,14 +85,14 @@ def decodeDelta(data: Array[Byte]): DecodeResult = {
         val dst = getU32BE(data, pos); pos += deltaU32Size
         val len = getU32BE(data, pos); pos += deltaU32Size
         if pos + len > data.length then throw new IllegalArgumentException("unexpected EOF")
-        val payload = java.util.Arrays.copyOfRange(data, pos, pos + len); pos += len
+        val payload = data.slice(pos, pos + len); pos += len
         commands += PlacedCommand.Add(dst, payload)
       case other =>
         throw new IllegalArgumentException(s"unknown command type: $other")
     }
   }
 
-  new DecodeResult(commands.toList, inplace, versionSize, srcCrc, dstCrc)
+  DecodeResult(commands.toList, inplace, versionSize, srcCrc, dstCrc)
 }
 
 /** Check if binary data is an in-place delta. */
