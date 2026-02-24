@@ -34,7 +34,12 @@ if [ -f "../python/delta.py" ]; then
 fi
 
 if [ -d "../java/out" ] && [ -f "../java/out/delta/Delta.class" ]; then
-    JAVA_DELTA="java -cp ../java/out delta.Delta"
+    # Prefer the same Java used to compile (Makefile sets JAVA=/opt/homebrew/opt/openjdk@17/bin/java).
+    JAVA_BIN="${JAVA:-java}"
+    if [ "$JAVA_BIN" = "java" ] && [ -x "/opt/homebrew/opt/openjdk@17/bin/java" ]; then
+        JAVA_BIN="/opt/homebrew/opt/openjdk@17/bin/java"
+    fi
+    JAVA_DELTA="$JAVA_BIN -cp ../java/out delta.Delta"
 fi
 
 check() {
