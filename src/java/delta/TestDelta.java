@@ -112,8 +112,8 @@ public class TestDelta {
         List<PlacedCommand> placed = Apply.placeCommands(cmds);
         byte[] delta = Encoding.encodeDelta(placed, false, Apply.outputSize(cmds), ZERO_HASH, ZERO_HASH);
         Encoding.DecodeResult res = Encoding.decodeDelta(delta);
-        byte[] out = new byte[res.versionSize];
-        Apply.applyPlacedTo(r, res.commands, out);
+        byte[] out = new byte[res.versionSize()];
+        Apply.applyPlacedTo(r, res.commands(), out);
         return out;
     }
 
@@ -132,7 +132,7 @@ public class TestDelta {
         List<PlacedCommand> ip = Apply.makeInplace(r, cmds, pol);
         byte[] delta = Encoding.encodeDelta(ip, true, v.length, ZERO_HASH, ZERO_HASH);
         Encoding.DecodeResult res = Encoding.decodeDelta(delta);
-        return Apply.applyDeltaInplace(r, res.commands, res.versionSize);
+        return Apply.applyDeltaInplace(r, res.commands(), res.versionSize());
     }
 
     /**
@@ -145,10 +145,10 @@ public class TestDelta {
         List<PlacedCommand> placed = Apply.placeCommands(cmds);
         byte[] standard = Encoding.encodeDelta(placed, false, v.length, ZERO_HASH, ZERO_HASH);
         Encoding.DecodeResult res = Encoding.decodeDelta(standard);
-        assertFalse(res.inplace, "standard delta should not be flagged as inplace");
-        List<Command> cmds2 = Apply.unplaceCommands(res.commands);
+        assertFalse(res.inplace(), "standard delta should not be flagged as inplace");
+        List<Command> cmds2 = Apply.unplaceCommands(res.commands());
         List<PlacedCommand> ip = Apply.makeInplace(r, cmds2, pol);
-        return Encoding.encodeDelta(ip, true, res.versionSize, ZERO_HASH, ZERO_HASH);
+        return Encoding.encodeDelta(ip, true, res.versionSize(), ZERO_HASH, ZERO_HASH);
     }
 
     /**
@@ -245,16 +245,16 @@ public class TestDelta {
         placed.add(new PlacedCopy(888, 3, 488));
         byte[] encoded = Encoding.encodeDelta(placed, false, 491, ZERO_HASH, ZERO_HASH);
         Encoding.DecodeResult res = Encoding.decodeDelta(encoded);
-        assertFalse(res.inplace, "should not be inplace");
-        assertEquals(491, res.versionSize, "version size");
-        assertEquals(2, res.commands.size(), "command count");
-        PlacedAdd a = (PlacedAdd) res.commands.get(0);
-        assertEquals(0, a.dst, "add dst");
-        assertArrayEquals(new byte[]{100, 101, 102}, a.data, "add data");
-        PlacedCopy c = (PlacedCopy) res.commands.get(1);
-        assertEquals(888, c.src, "copy src");
-        assertEquals(3, c.dst, "copy dst");
-        assertEquals(488, c.length, "copy length");
+        assertFalse(res.inplace(), "should not be inplace");
+        assertEquals(491, res.versionSize(), "version size");
+        assertEquals(2, res.commands().size(), "command count");
+        PlacedAdd a = (PlacedAdd) res.commands().get(0);
+        assertEquals(0, a.dst(), "add dst");
+        assertArrayEquals(new byte[]{100, 101, 102}, a.data(), "add data");
+        PlacedCopy c = (PlacedCopy) res.commands().get(1);
+        assertEquals(888, c.src(), "copy src");
+        assertEquals(3, c.dst(), "copy dst");
+        assertEquals(488, c.length(), "copy length");
     }
 
     /** The inplace flag bit in the header is set/clear independently of commands. */
@@ -267,9 +267,9 @@ public class TestDelta {
         assertTrue( Encoding.isInplaceDelta(inplace),  "inplace should be inplace");
         Encoding.DecodeResult r1 = Encoding.decodeDelta(standard);
         Encoding.DecodeResult r2 = Encoding.decodeDelta(inplace);
-        assertFalse(r1.inplace, "standard decoded inplace flag");
-        assertTrue( r2.inplace, "inplace decoded inplace flag");
-        assertEquals(r1.versionSize, r2.versionSize, "version sizes match");
+        assertFalse(r1.inplace(), "standard decoded inplace flag");
+        assertTrue( r2.inplace(), "inplace decoded inplace flag");
+        assertEquals(r1.versionSize(), r2.versionSize(), "version sizes match");
     }
 
     static void testLargeCopyRoundtrip() {
@@ -277,11 +277,11 @@ public class TestDelta {
         placed.add(new PlacedCopy(100_000, 0, 50_000));
         byte[] encoded = Encoding.encodeDelta(placed, false, 50_000, ZERO_HASH, ZERO_HASH);
         Encoding.DecodeResult res = Encoding.decodeDelta(encoded);
-        assertEquals(1, res.commands.size(), "command count");
-        PlacedCopy c = (PlacedCopy) res.commands.get(0);
-        assertEquals(100_000, c.src, "copy src");
-        assertEquals(0, c.dst, "copy dst");
-        assertEquals(50_000, c.length, "copy length");
+        assertEquals(1, res.commands().size(), "command count");
+        PlacedCopy c = (PlacedCopy) res.commands().get(0);
+        assertEquals(100_000, c.src(), "copy src");
+        assertEquals(0, c.dst(), "copy dst");
+        assertEquals(50_000, c.length(), "copy length");
     }
 
     static void testLargeAddRoundtrip() {
@@ -291,10 +291,10 @@ public class TestDelta {
         placed.add(new PlacedAdd(0, bigData));
         byte[] encoded = Encoding.encodeDelta(placed, false, bigData.length, ZERO_HASH, ZERO_HASH);
         Encoding.DecodeResult res = Encoding.decodeDelta(encoded);
-        assertEquals(1, res.commands.size(), "command count");
-        PlacedAdd a = (PlacedAdd) res.commands.get(0);
-        assertEquals(0, a.dst, "add dst");
-        assertArrayEquals(bigData, a.data, "add data");
+        assertEquals(1, res.commands().size(), "command count");
+        PlacedAdd a = (PlacedAdd) res.commands().get(0);
+        assertEquals(0, a.dst(), "add dst");
+        assertArrayEquals(bigData, a.data(), "add data");
     }
 
     /** Block shared by R and V is offset by a few bytes; backward extension must find it. */
@@ -590,11 +590,11 @@ public class TestDelta {
         List<PlacedCommand> ipLmin  = Apply.makeInplace(r, cmds, CyclePolicy.LOCALMIN);
         long addConst = ipConst.stream()
             .filter(c -> c instanceof PlacedAdd)
-            .mapToLong(c -> ((PlacedAdd) c).data.length)
+            .mapToLong(c -> ((PlacedAdd) c).data().length)
             .sum();
         long addLmin = ipLmin.stream()
             .filter(c -> c instanceof PlacedAdd)
-            .mapToLong(c -> ((PlacedAdd) c).data.length)
+            .mapToLong(c -> ((PlacedAdd) c).data().length)
             .sum();
         assertTrue(addLmin <= addConst,
             "localmin (" + addLmin + ") should produce <= add bytes as constant (" + addConst + ")");
@@ -661,7 +661,7 @@ public class TestDelta {
                 for (CyclePolicy pol : ALL_POLICIES) {
                     byte[] ipDelta = viaInplaceSubcommand(algo, r, v, pol, 2);
                     Encoding.DecodeResult res = Encoding.decodeDelta(ipDelta);
-                    byte[] recovered = Apply.applyDeltaInplace(r, res.commands, v.length);
+                    byte[] recovered = Apply.applyDeltaInplace(r, res.commands(), v.length);
                     assertArrayEquals(v, recovered,
                         algo + "/" + pol + " subcommand roundtrip case " + i);
                 }
@@ -681,7 +681,7 @@ public class TestDelta {
                 List<PlacedCommand> ip = Apply.makeInplace(r, cmds, pol);
                 byte[] ipDelta = Encoding.encodeDelta(ip, true, v.length, ZERO_HASH, ZERO_HASH);
                 Encoding.DecodeResult res = Encoding.decodeDelta(ipDelta);
-                assertTrue(res.inplace,
+                assertTrue(res.inplace(),
                     algo + "/" + pol + ": inplace delta should be detected as inplace");
             }
     }
@@ -813,8 +813,8 @@ public class TestDelta {
             List<PlacedCommand> cmds = new ArrayList<>();
             byte[] encoded = Encoding.encodeDelta(cmds, false, sz, ZERO_HASH, ZERO_HASH);
             Encoding.DecodeResult res = Encoding.decodeDelta(encoded);
-            assertEquals(sz, res.versionSize, "version_size=" + sz);
-            assertEquals(0, res.commands.size(), "no commands at version_size=" + sz);
+            assertEquals(sz, res.versionSize(), "version_size=" + sz);
+            assertEquals(0, res.commands().size(), "no commands at version_size=" + sz);
         }
     }
 
@@ -827,10 +827,10 @@ public class TestDelta {
             List<PlacedCommand> cmds = new ArrayList<>();
             cmds.add(new PlacedCopy(src, 0, 1));
             PlacedCopy c = (PlacedCopy) Encoding.decodeDelta(
-                Encoding.encodeDelta(cmds, false, 1, ZERO_HASH, ZERO_HASH)).commands.get(0);
-            assertEquals(src, c.src, "copy src=" + src);
-            assertEquals(0,   c.dst,    "copy dst at src=" + src);
-            assertEquals(1,   c.length, "copy length at src=" + src);
+                Encoding.encodeDelta(cmds, false, 1, ZERO_HASH, ZERO_HASH)).commands().get(0);
+            assertEquals(src, c.src(), "copy src=" + src);
+            assertEquals(0,   c.dst(),    "copy dst at src=" + src);
+            assertEquals(1,   c.length(), "copy length at src=" + src);
         }
 
         // dst
@@ -838,8 +838,8 @@ public class TestDelta {
             List<PlacedCommand> cmds = new ArrayList<>();
             cmds.add(new PlacedCopy(0, dst, 1));
             PlacedCopy c = (PlacedCopy) Encoding.decodeDelta(
-                Encoding.encodeDelta(cmds, false, dst + 1, ZERO_HASH, ZERO_HASH)).commands.get(0);
-            assertEquals(dst, c.dst, "copy dst=" + dst);
+                Encoding.encodeDelta(cmds, false, dst + 1, ZERO_HASH, ZERO_HASH)).commands().get(0);
+            assertEquals(dst, c.dst(), "copy dst=" + dst);
         }
 
         // length
@@ -847,8 +847,8 @@ public class TestDelta {
             List<PlacedCommand> cmds = new ArrayList<>();
             cmds.add(new PlacedCopy(0, 0, len));
             PlacedCopy c = (PlacedCopy) Encoding.decodeDelta(
-                Encoding.encodeDelta(cmds, false, len, ZERO_HASH, ZERO_HASH)).commands.get(0);
-            assertEquals(len, c.length, "copy length=" + len);
+                Encoding.encodeDelta(cmds, false, len, ZERO_HASH, ZERO_HASH)).commands().get(0);
+            assertEquals(len, c.length(), "copy length=" + len);
         }
 
         // add dst
@@ -856,9 +856,9 @@ public class TestDelta {
             List<PlacedCommand> cmds = new ArrayList<>();
             cmds.add(new PlacedAdd(dst, new byte[]{(byte) 0xFF}));
             PlacedAdd a = (PlacedAdd) Encoding.decodeDelta(
-                Encoding.encodeDelta(cmds, false, dst + 1, ZERO_HASH, ZERO_HASH)).commands.get(0);
-            assertEquals(dst, a.dst, "add dst=" + dst);
-            assertArrayEquals(new byte[]{(byte) 0xFF}, a.data, "add data at dst=" + dst);
+                Encoding.encodeDelta(cmds, false, dst + 1, ZERO_HASH, ZERO_HASH)).commands().get(0);
+            assertEquals(dst, a.dst(), "add dst=" + dst);
+            assertArrayEquals(new byte[]{(byte) 0xFF}, a.data(), "add data at dst=" + dst);
         }
     }
 

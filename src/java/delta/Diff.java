@@ -32,14 +32,12 @@ public final class Diff {
         long totalCopy = 0, totalAdd = 0;
         int numCopies = 0, numAdds = 0;
         for (Command cmd : commands) {
-            if (cmd instanceof CopyCmd) {
-                CopyCmd c = (CopyCmd) cmd;
-                totalCopy += c.length;
+            if (cmd instanceof CopyCmd c) {
+                totalCopy += c.length();
                 numCopies++;
-                copyLens.add(c.length);
-            } else if (cmd instanceof AddCmd) {
-                AddCmd a = (AddCmd) cmd;
-                totalAdd += a.data.length;
+                copyLens.add(c.length());
+            } else if (cmd instanceof AddCmd a) {
+                totalAdd += a.data().length;
                 numAdds++;
             }
         }
@@ -59,16 +57,11 @@ public final class Diff {
 
     public static List<Command> diff(Algorithm algo, byte[] r, byte[] v,
                                      DiffOptions opts) {
-        switch (algo) {
-            case GREEDY:
-                return Greedy.diff(r, v, opts);
-            case ONEPASS:
-                return Onepass.diff(r, v, opts);
-            case CORRECTING:
-                return Correcting.diff(r, v, opts);
-            default:
-                throw new IllegalArgumentException("unknown algorithm: " + algo);
-        }
+        return switch (algo) {
+            case GREEDY     -> Greedy.diff(r, v, opts);
+            case ONEPASS    -> Onepass.diff(r, v, opts);
+            case CORRECTING -> Correcting.diff(r, v, opts);
+        };
     }
 
     public static List<Command> diffDefault(Algorithm algo, byte[] r, byte[] v) {

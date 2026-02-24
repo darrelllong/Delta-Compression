@@ -17,6 +17,14 @@ import static delta.Types.*;
 public final class Encoding {
     private Encoding() {}
 
+    public record DecodeResult(
+        List<PlacedCommand> commands,
+        boolean inplace,
+        int versionSize,
+        byte[] srcCrc,
+        byte[] dstCrc
+    ) {}
+
     /** Encode placed commands to the unified binary delta format. */
     public static byte[] encodeDelta(List<PlacedCommand> commands,
                                      boolean inplace, int versionSize,
@@ -26,8 +34,8 @@ public final class Encoding {
         for (PlacedCommand cmd : commands) {
             if (cmd instanceof PlacedCopy) {
                 est += 1 + DELTA_COPY_PAYLOAD;
-            } else if (cmd instanceof PlacedAdd) {
-                est += 1 + DELTA_ADD_HEADER + ((PlacedAdd) cmd).data.length;
+            } else if (cmd instanceof PlacedAdd a) {
+                est += 1 + DELTA_ADD_HEADER + a.data().length;
             }
         }
         byte[] out = new byte[est];
@@ -42,19 +50,17 @@ public final class Encoding {
         System.arraycopy(dstCrc, 0, out, pos, DELTA_CRC_SIZE); pos += DELTA_CRC_SIZE;
 
         for (PlacedCommand cmd : commands) {
-            if (cmd instanceof PlacedCopy) {
-                PlacedCopy c = (PlacedCopy) cmd;
+            if (cmd instanceof PlacedCopy c) {
                 out[pos++] = DELTA_CMD_COPY;
-                putU32BE(out, pos, c.src); pos += DELTA_U32_SIZE;
-                putU32BE(out, pos, c.dst); pos += DELTA_U32_SIZE;
-                putU32BE(out, pos, c.length); pos += DELTA_U32_SIZE;
-            } else if (cmd instanceof PlacedAdd) {
-                PlacedAdd a = (PlacedAdd) cmd;
+                putU32BE(out, pos, c.src());  pos += DELTA_U32_SIZE;
+                putU32BE(out, pos, c.dst());  pos += DELTA_U32_SIZE;
+                putU32BE(out, pos, c.length()); pos += DELTA_U32_SIZE;
+            } else if (cmd instanceof PlacedAdd a) {
                 out[pos++] = DELTA_CMD_ADD;
-                putU32BE(out, pos, a.dst); pos += DELTA_U32_SIZE;
-                putU32BE(out, pos, a.data.length); pos += DELTA_U32_SIZE;
-                System.arraycopy(a.data, 0, out, pos, a.data.length);
-                pos += a.data.length;
+                putU32BE(out, pos, a.dst());        pos += DELTA_U32_SIZE;
+                putU32BE(out, pos, a.data().length); pos += DELTA_U32_SIZE;
+                System.arraycopy(a.data(), 0, out, pos, a.data().length);
+                pos += a.data().length;
             }
         }
 
@@ -79,12 +85,12 @@ public final class Encoding {
             }
         }
 
-        boolean inplace = (data[DELTA_MAGIC.length] & DELTA_FLAG_INPLACE) != 0;
-        int versionSize = getU32BE(data, DELTA_MAGIC.length + 1);
-        int crcOff = DELTA_MAGIC.length + 1 + DELTA_U32_SIZE;
-        byte[] srcCrc = new byte[DELTA_CRC_SIZE];
-        byte[] dstCrc = new byte[DELTA_CRC_SIZE];
-        System.arraycopy(data, crcOff, srcCrc, 0, DELTA_CRC_SIZE);
+        boolean inplace    = (data[DELTA_MAGIC.length] & DELTA_FLAG_INPLACE) != 0;
+        int versionSize    = getU32BE(data, DELTA_MAGIC.length + 1);
+        int crcOff         = DELTA_MAGIC.length + 1 + DELTA_U32_SIZE;
+        byte[] srcCrc      = new byte[DELTA_CRC_SIZE];
+        byte[] dstCrc      = new byte[DELTA_CRC_SIZE];
+        System.arraycopy(data, crcOff,                 srcCrc, 0, DELTA_CRC_SIZE);
         System.arraycopy(data, crcOff + DELTA_CRC_SIZE, dstCrc, 0, DELTA_CRC_SIZE);
         int pos = DELTA_HEADER_SIZE;
         List<PlacedCommand> commands = new ArrayList<>();
@@ -94,22 +100,19 @@ public final class Encoding {
             if (t == DELTA_CMD_END) break;
 
             if (t == DELTA_CMD_COPY) {
-                if (pos + DELTA_COPY_PAYLOAD > data.length) {
+                if (pos + DELTA_COPY_PAYLOAD > data.length)
                     throw new IllegalArgumentException("unexpected EOF");
-                }
                 int src = getU32BE(data, pos); pos += DELTA_U32_SIZE;
                 int dst = getU32BE(data, pos); pos += DELTA_U32_SIZE;
                 int len = getU32BE(data, pos); pos += DELTA_U32_SIZE;
                 commands.add(new PlacedCopy(src, dst, len));
             } else if (t == DELTA_CMD_ADD) {
-                if (pos + DELTA_ADD_HEADER > data.length) {
+                if (pos + DELTA_ADD_HEADER > data.length)
                     throw new IllegalArgumentException("unexpected EOF");
-                }
                 int dst = getU32BE(data, pos); pos += DELTA_U32_SIZE;
                 int len = getU32BE(data, pos); pos += DELTA_U32_SIZE;
-                if (pos + len > data.length) {
+                if (pos + len > data.length)
                     throw new IllegalArgumentException("unexpected EOF");
-                }
                 byte[] payload = new byte[len];
                 System.arraycopy(data, pos, payload, 0, len);
                 pos += len;
@@ -131,22 +134,6 @@ public final class Encoding {
         return (data[DELTA_MAGIC.length] & DELTA_FLAG_INPLACE) != 0;
     }
 
-    public static final class DecodeResult {
-        public final List<PlacedCommand> commands;
-        public final boolean inplace;
-        public final int versionSize;
-        public final byte[] srcCrc;
-        public final byte[] dstCrc;
-        DecodeResult(List<PlacedCommand> commands, boolean inplace, int versionSize,
-                     byte[] srcCrc, byte[] dstCrc) {
-            this.commands = commands;
-            this.inplace = inplace;
-            this.versionSize = versionSize;
-            this.srcCrc = srcCrc;
-            this.dstCrc = dstCrc;
-        }
-    }
-
     private static void putU32BE(byte[] buf, int off, int value) {
         buf[off]     = (byte) (value >>> 24);
         buf[off + 1] = (byte) (value >>> 16);
@@ -155,9 +142,9 @@ public final class Encoding {
     }
 
     private static int getU32BE(byte[] buf, int off) {
-        return ((buf[off] & 0xFF) << 24)
+        return ((buf[off]     & 0xFF) << 24)
              | ((buf[off + 1] & 0xFF) << 16)
              | ((buf[off + 2] & 0xFF) << 8)
-             | (buf[off + 3] & 0xFF);
+             |  (buf[off + 3] & 0xFF);
     }
 }
