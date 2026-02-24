@@ -73,7 +73,7 @@ Miller-Rabin primality test with the fixed witness set {2, 3, 5, 7, 11,
 3,317,044,064,679,887,385,961,981 (> 2^81), far exceeding any table
 size that arises in practice (Jaeschke, Math. Comp. 61(204), 1993).
 No random number generator is required: the result is deterministic and
-identical across all five language implementations.
+identical across all eight language implementations.
 
 ## Splay tree: design and tradeoffs
 
@@ -133,7 +133,7 @@ CRC-64/XZ (ECMA-182 reflected, polynomial `0x42F0E1EBA9EA3693`)
 was chosen for speed: software implementations run at ~12 GB/s, making
 the overhead negligible even on multi-gigabyte kernel tarballs.  The
 8-byte output gives a 2^{-32} probability of an undetected random error,
-sufficient for accidental-error detection in delta workflows.  All five
+sufficient for accidental-error detection in delta workflows.  All eight
 implementations use the same table-driven algorithm (reflected polynomial
 `0xC96C5795D7870F42`, init = xorout = `0xFFFFFFFFFFFFFFFF`), verified
 against the standard check value `crc64_xz(b"123456789") =
@@ -237,12 +237,12 @@ Total: O(n log n + E).
 
 | Script | Purpose |
 |--------|---------|
-| `tests/correctness.sh` | Builds all five implementations and runs unit tests + cross-language compatibility (208/56/64/45/52 tests) |
+| `tests/correctness.sh` | Builds all eight implementations and runs unit tests + cross-language compatibility (208/56/64/45/52/52/52/52 tests) |
 | `tests/kernel-delta-test.sh` | Performance benchmark on Linux 5.1.0–5.1.7 kernel tarballs (~831 MB each) |
 | `tests/transposition-benchmark.sh` | Performance benchmark on synthetic block permutations (16 MB–1 GB) |
 
 `tests/correctness.sh` is the primary correctness gate: it verifies that
-all five implementations agree on every encode/decode round-trip and that
+all eight implementations agree on every encode/decode round-trip and that
 any implementation can decode a delta produced by any other.  The benchmark
 scripts are separate so they can be run independently without the multi-GB
 data requirements of the kernel tests.
@@ -251,7 +251,7 @@ data requirements of the kernel tests.
 
 ### Kernel tarball benchmark (linux-5.1 → linux-5.1.1, 871 MB)
 
-All five implementations, same input pair, default flags.  All produce
+All eight implementations, same input pair, default flags.  All produce
 byte-identical delta files.  CRC-64/XZ overhead is negligible (~70 ms
 total for two 871 MB files at ~12 GB/s); Python's 247–583s algorithm
 time dominates regardless.
@@ -263,7 +263,10 @@ time dominates regardless.
 | C | 4s |
 | Rust | 4s |
 | C++ | 4s |
+| Go | 5s |
 | Java | 6s |
+| Kotlin | 6s |
+| Scala | 6s |
 | Python | 247s |
 
 **correcting** (delta: 6.7 MB, ratio: 0.81%)
@@ -272,13 +275,20 @@ time dominates regardless.
 |----------------|-----:|
 | Rust | 9s |
 | Java | 11s |
+| Kotlin | 11s |
+| Scala | 11s |
+| Go | 13s |
 | C | 17s |
 | C++ | 18s |
 | Python | 583s |
 
 C leads onepass by a narrow margin; Rust, C, and C++ are within a
-second of each other.  For correcting, Rust leads and Java outperforms
-C and C++ by ~1.6×.  Python is ~60× slower than Rust on both algorithms.
+second of each other.  Go sits between the JVM group and C/Rust/C++ for
+onepass, and just above the JVM group for correcting.  Java, Kotlin, and
+Scala cluster together — all three compile to JVM bytecode and run on
+the same JDK 17 runtime.  All eight compiled/JIT implementations
+produce byte-identical delta files.  Python is ~60× slower than Rust on
+both algorithms.
 
 **Rust, default vs `--splay`**
 

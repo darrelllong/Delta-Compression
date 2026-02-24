@@ -11,11 +11,14 @@
 # Exit status: 0 if all suites pass, 1 if any fail.
 #
 # Suites run:
-#   Python  — 180 unit tests  (python3 -m unittest)
-#   Rust    — 67 tests        (cargo test)
-#   C++     — 55 tests        (ctest)
+#   Python  — 208 unit tests  (python3 -m unittest)
+#   Rust    — 56 tests        (cargo test)
+#   C++     — 64 tests        (ctest)
 #   C       — 45 tests        (test_delta.sh)
-#   Java    — 43 unit tests   (make test)
+#   Java    — 52 unit tests   (make test)
+#   Go      — 52 tests        (go test)
+#   Kotlin  — 52 unit tests   (make test)
+#   Scala   — 52 unit tests   (make test)
 #   Cross   — cross-language byte-identical encode/decode (src/c/test_delta.sh)
 
 set -uo pipefail
@@ -43,19 +46,19 @@ run_suite() {
 
 # ── Python ────────────────────────────────────────────────────────────────────
 
-banner "Python (180 tests)"
+banner "Python (208 tests)"
 run_suite "Python unit tests" \
     bash -c "cd '$REPO_ROOT/src/python' && python3 -m unittest test_delta -v"
 
 # ── Rust ──────────────────────────────────────────────────────────────────────
 
-banner "Rust (67 tests)"
+banner "Rust (56 tests)"
 run_suite "Rust tests" \
     bash -c "cd '$REPO_ROOT/src/rust/delta' && cargo test"
 
 # ── C++ ───────────────────────────────────────────────────────────────────────
 
-banner "C++ (55 tests)"
+banner "C++ (64 tests)"
 run_suite "C++ build + ctest" \
     bash -c "cd '$REPO_ROOT/src/cpp' && cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_BUILD_PARALLEL_LEVEL=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) 2>&1 | tail -3 && cmake --build build --parallel && ctest --test-dir build --output-on-failure"
 
@@ -67,9 +70,27 @@ run_suite "C build + integration tests" \
 
 # ── Java ──────────────────────────────────────────────────────────────────────
 
-banner "Java (43 tests)"
+banner "Java (52 tests)"
 run_suite "Java build + unit tests" \
     bash -c "cd '$REPO_ROOT/src/java' && make test"
+
+# ── Go ────────────────────────────────────────────────────────────────────────
+
+banner "Go (52 tests)"
+run_suite "Go tests" \
+    bash -c "cd '$REPO_ROOT/src/go' && go test ./delta/..."
+
+# ── Kotlin ────────────────────────────────────────────────────────────────────
+
+banner "Kotlin (52 tests)"
+run_suite "Kotlin build + unit tests" \
+    bash -c "cd '$REPO_ROOT/src/kotlin' && make test"
+
+# ── Scala ─────────────────────────────────────────────────────────────────────
+
+banner "Scala (52 tests)"
+run_suite "Scala build + unit tests" \
+    bash -c "cd '$REPO_ROOT/src/scala' && make test"
 
 # ── Cross-language compatibility ───────────────────────────────────────────────
 

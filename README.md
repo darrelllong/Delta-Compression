@@ -5,9 +5,9 @@ reconstructed from the old file plus the (small) delta.  Supports
 in-place reconstruction — the new version can be rebuilt directly in
 the buffer holding the old version, with no scratch space.
 
-Five implementations — Python, Rust, C++, C, and Java — producing
-byte-identical binary deltas.  Encode with any one, decode with any
-other.
+Eight implementations — Python, Rust, C++, C, Java, Go, Kotlin, and
+Scala — producing byte-identical binary deltas.  Encode with any one,
+decode with any other.
 
 Implements the algorithms from two papers:
 
@@ -67,6 +67,34 @@ java -cp out delta.Delta encode onepass old.bin new.bin delta.bin
 java -cp out delta.Delta decode old.bin delta.bin recovered.bin
 ```
 
+### Go
+
+```bash
+cd src/go
+go build ./cmd/delta
+./delta encode onepass old.bin new.bin delta.bin
+./delta decode old.bin delta.bin recovered.bin
+```
+
+### Kotlin
+
+```bash
+cd src/kotlin
+make
+java -cp delta.jar delta.Delta encode onepass old.bin new.bin delta.bin
+java -cp delta.jar delta.Delta decode old.bin delta.bin recovered.bin
+```
+
+### Scala
+
+```bash
+cd src/scala
+make
+# SCALA_LIB = /path/to/scala/lib/scala.jar (set in Makefile)
+java -cp delta.jar:$SCALA_LIB delta.Delta encode onepass old.bin new.bin delta.bin
+java -cp delta.jar:$SCALA_LIB delta.Delta decode old.bin delta.bin recovered.bin
+```
+
 ## Algorithms
 
 | Algorithm | Time | Space | Best for |
@@ -123,7 +151,7 @@ Cycle-breaking policies:
 
 ## Binary delta format
 
-Unified format used by all five implementations:
+Unified format used by all eight implementations:
 
 ```
 Header (25 bytes):
@@ -166,6 +194,9 @@ Individual suites:
 | C++ | 64 | `cd src/cpp && cmake -B build && cmake --build build && ctest --test-dir build` |
 | C | 45 | `cd src/c && make && bash test_delta.sh` |
 | Java | 52 | `cd src/java && make test` |
+| Go | 52 | `cd src/go && go test ./delta/...` |
+| Kotlin | 52 | `cd src/kotlin && make test` |
+| Scala | 52 | `cd src/scala && make test` |
 
 Tests cover all three algorithms, binary round-trips, paper examples,
 edge cases (empty/identical/completely different files), in-place
@@ -174,9 +205,9 @@ transpositions (8–64 blocks with controlled transpositions),
 checkpointing correctness, and cross-language compatibility.
 A kernel tarball benchmark (`tests/kernel-delta-test.sh`) exercises
 onepass and correcting on ~871 MB inputs.  On linux-5.1 → 5.1.1, all
-five implementations produce identical deltas; C and Rust lead onepass
+eight implementations produce identical deltas; C and Rust lead onepass
 (4s), Rust leads correcting (9s), Python slowest (247s / 583s); see
-`HOWTO.md` for the full table.
+`ANALYSIS.md` for the full table.
 
 ## Project layout
 
@@ -186,9 +217,12 @@ src/
   rust/delta/     Cargo crate — library + clap CLI + 56 tests
   cpp/            CMake project — static library + CLI11 CLI + Catch2 tests (64)
   c/              Makefile project — single-header API + CLI + 45 tests
-  java/delta/     Java 11+ sources — library + CLI + 52 tests
+  java/           Makefile project — library + CLI + 52 tests
+  go/             Go module — library + CLI + 52 tests
+  kotlin/         Makefile project (JVM) — library + CLI + 52 tests
+  scala/          Makefile project (JVM/Scala 3) — library + CLI + 52 tests
 tests/
-  correctness.sh          Run all unit + cross-language tests (all 5 implementations)
+  correctness.sh          Run all unit + cross-language tests (all 8 implementations)
   kernel-delta-test.sh    Kernel tarball benchmark
   transposition-benchmark.sh  Synthetic permutation benchmark
 pubs/                     Ajtai et al. 2002, Burns et al. 2003 (PDFs)
