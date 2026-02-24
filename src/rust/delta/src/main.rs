@@ -243,7 +243,7 @@ fn main() {
                 cycles_broken = stats.cycles_broken;
                 p
             } else {
-                place_commands(&commands)
+                place_commands(commands)
             };
             let elapsed = t0.elapsed();
 
@@ -455,7 +455,7 @@ fn main() {
 
             let t0 = Instant::now();
             let pol: CyclePolicy = policy.into();
-            let commands = unplace_commands(&placed);
+            let commands = unplace_commands(placed);
             let (ip_placed, ip_stats) = make_inplace(r, &commands, pol);
             let elapsed = t0.elapsed();
 

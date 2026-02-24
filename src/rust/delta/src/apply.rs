@@ -12,25 +12,21 @@ pub fn output_size(commands: &[Command]) -> usize {
 }
 
 /// Convert algorithm output to placed commands with sequential destinations.
-pub fn place_commands(commands: &[Command]) -> Vec<PlacedCommand> {
+///
+/// Consumes the command list so that `Add` payloads are moved, not copied.
+pub fn place_commands(commands: Vec<Command>) -> Vec<PlacedCommand> {
     let mut placed = Vec::with_capacity(commands.len());
     let mut dst = 0;
     for cmd in commands {
         match cmd {
             Command::Copy { offset, length } => {
-                placed.push(PlacedCommand::Copy {
-                    src: *offset,
-                    dst,
-                    length: *length,
-                });
+                placed.push(PlacedCommand::Copy { src: offset, dst, length });
                 dst += length;
             }
             Command::Add { data } => {
-                placed.push(PlacedCommand::Add {
-                    dst,
-                    data: data.clone(),
-                });
-                dst += data.len();
+                let len = data.len();
+                placed.push(PlacedCommand::Add { dst, data }); // move, no clone
+                dst += len;
             }
         }
     }
@@ -41,20 +37,18 @@ pub fn place_commands(commands: &[Command]) -> Vec<PlacedCommand> {
 ///
 /// Commands are sorted by destination offset to recover original sequential
 /// order, then each PlacedCopy/PlacedAdd is converted to Copy/Add.
-pub fn unplace_commands(placed: &[PlacedCommand]) -> Vec<Command> {
-    let mut sorted: Vec<&PlacedCommand> = placed.iter().collect();
-    sorted.sort_by_key(|c| match c {
+///
+/// Consumes the placed list so that `Add` payloads are moved, not copied.
+pub fn unplace_commands(mut placed: Vec<PlacedCommand>) -> Vec<Command> {
+    placed.sort_by_key(|c| match c {
         PlacedCommand::Copy { dst, .. } => *dst,
         PlacedCommand::Add { dst, .. } => *dst,
     });
-    sorted
+    placed
         .into_iter()
         .map(|c| match c {
-            PlacedCommand::Copy { src, length, .. } => Command::Copy {
-                offset: *src,
-                length: *length,
-            },
-            PlacedCommand::Add { data, .. } => Command::Add { data: data.clone() },
+            PlacedCommand::Copy { src, length, .. } => Command::Copy { offset: src, length },
+            PlacedCommand::Add { data, .. } => Command::Add { data }, // move, no clone
         })
         .collect()
 }

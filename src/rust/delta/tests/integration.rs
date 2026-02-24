@@ -15,8 +15,9 @@ fn opts(p: usize) -> DiffOptions {
 
 fn roundtrip(algo_fn: DiffFn, r: &[u8], v: &[u8], p: usize) -> Vec<u8> {
     let cmds = algo_fn(r, v, &opts(p));
-    let placed = place_commands(&cmds);
-    let delta = encode_delta(&placed, false, output_size(&cmds), &crc64_xz(r), &crc64_xz(v));
+    let sz = output_size(&cmds);
+    let placed = place_commands(cmds);
+    let delta = encode_delta(&placed, false, sz, &crc64_xz(r), &crc64_xz(v));
     let (placed2, _, _, sc, dc) = decode_delta(&delta).unwrap();
     assert_eq!(sc, crc64_xz(r));
     assert_eq!(dc, crc64_xz(v));
@@ -496,7 +497,7 @@ fn test_standard_not_detected_as_inplace() {
         .copied()
         .collect();
     let cmds = diff_greedy(&r, &v, &opts(2));
-    let placed = place_commands(&cmds);
+    let placed = place_commands(cmds);
     let delta = encode_delta(&placed, false, v.len(), &crc64_xz(&r), &crc64_xz(&v));
     assert!(!is_inplace_delta(&delta));
 }
@@ -837,14 +838,14 @@ fn via_inplace_subcommand(
 ) -> Vec<u8> {
     // Step 1: encode a standard delta (compute CRCs in same pass as data)
     let cmds = algo_fn(r, v, &opts(p));
-    let placed = place_commands(&cmds);
+    let placed = place_commands(cmds);
     let sc = crc64_xz(r);
     let dc = crc64_xz(v);
     let standard = encode_delta(&placed, false, v.len(), &sc, &dc);
     // Step 2: decode it back, unplace, convert to inplace; preserve CRCs
     let (placed2, is_ip, version_size, src_crc, dst_crc) = decode_delta(&standard).unwrap();
     assert!(!is_ip, "standard delta should not be flagged as inplace");
-    let cmds2 = unplace_commands(&placed2);
+    let cmds2 = unplace_commands(placed2);
     let (ip, _) = make_inplace(r, &cmds2, policy);
     encode_delta(&ip, true, version_size, &src_crc, &dst_crc)
 }
