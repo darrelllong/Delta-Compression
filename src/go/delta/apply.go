@@ -267,7 +267,7 @@ func MakeInplace(r []byte, commands []Command, policy CyclePolicy) []PlacedComma
 	heap.Init(h)
 	for i := 0; i < n; i++ {
 		if inDeg[i] == 0 {
-			heap.Push(h, [2]int{copies[i].dst, i})
+			heap.Push(h, [2]int{copies[i].length, i})
 		}
 	}
 	processed := 0
@@ -290,7 +290,7 @@ func MakeInplace(r []byte, commands []Command, policy CyclePolicy) []PlacedComma
 				if !removed[w] {
 					inDeg[w]--
 					if inDeg[w] == 0 {
-						heap.Push(h, [2]int{copies[w].dst, w})
+						heap.Push(h, [2]int{copies[w].length, w})
 					}
 				}
 			}
@@ -328,8 +328,8 @@ func MakeInplace(r []byte, commands []Command, policy CyclePolicy) []PlacedComma
 				if cycle != nil {
 					victim = cycle[0]
 					for _, v := range cycle {
-						if copies[v].dst < copies[victim].dst ||
-							(copies[v].dst == copies[victim].dst && v < victim) {
+						if copies[v].length < copies[victim].length ||
+							(copies[v].length == copies[victim].length && v < victim) {
 							victim = v
 						}
 					}
@@ -354,7 +354,7 @@ func MakeInplace(r []byte, commands []Command, policy CyclePolicy) []PlacedComma
 			if !removed[w] {
 				inDeg[w]--
 				if inDeg[w] == 0 {
-					heap.Push(h, [2]int{copies[w].dst, w})
+					heap.Push(h, [2]int{copies[w].length, w})
 				}
 			}
 		}
@@ -546,7 +546,7 @@ func PlacedSummaryOf(commands []PlacedCommand) PlacedSummary {
 	}
 }
 
-// ── Min-heap for (dst, index) pairs ──
+// ── Min-heap for (length, index) pairs ──
 
 type pairHeap [][2]int
 
