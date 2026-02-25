@@ -49,9 +49,8 @@ def diffCorrecting(r: Array[Byte], v: Array[Byte], opts: DiffOptions): List[Comm
   }
 
   // Step (1): Build lookup structure for R (first-found policy)
-  val htFp:   Array[Long]    = if !useSplay then new Array[Long](cap)    else null
-  val htOff:  Array[Int]     = if !useSplay then new Array[Int](cap)     else null
-  val htUsed: Array[Boolean] = if !useSplay then new Array[Boolean](cap) else null
+  val htFp:  Array[Long] = if !useSplay then Array.fill(cap)(-1L) else null
+  val htOff: Array[Int]  = if !useSplay then new Array[Int](cap)  else null
   // splay value = Array[Long](2) = [full_fp, offset]
   val splayR: SplayTree[Array[Long]] = if useSplay then new SplayTree() else null
 
@@ -70,14 +69,14 @@ def diffCorrecting(r: Array[Byte], v: Array[Byte], opts: DiffOptions): List[Comm
         val i0 = i
         var loop = true
         while loop do {
-          if !htUsed(i) then { loop = false }              // empty — store here
+          if htFp(i) == -1L then { loop = false }          // empty — store here
           else if htFp(i) == fp then { i = -1; loop = false } // dup fp — skip
           else {
             i += 1; if i == cap then { i = 0 }
             if i == i0 then { i = -1; loop = false }      // table full
           }
         }
-        if i >= 0 then { htFp(i) = fp; htOff(i) = a; htUsed(i) = true }
+        if i >= 0 then { htFp(i) = fp; htOff(i) = a }
       }
     }
     a += 1
@@ -122,7 +121,7 @@ def diffCorrecting(r: Array[Byte], v: Array[Byte], opts: DiffOptions): List[Comm
             var found = -1
             var loop = true
             while loop do {
-              if !htUsed(i) then { loop = false }          // empty — chain ends
+              if htFp(i) == -1L then { loop = false }      // empty — chain ends
               else if htFp(i) == fpV then { found = i; loop = false }
               else {
                 i += 1; if i == cap then { i = 0 }

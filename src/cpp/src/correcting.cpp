@@ -66,7 +66,7 @@ std::vector<Command> diff_correcting(
             cap, (unsigned long long)f_size, (unsigned long long)m,
             (unsigned long long)k, (unsigned long long)m,
             (unsigned long long)expected, (unsigned long long)occ_est,
-            cap * 24 / 1048576);
+            cap * 16 / 1048576);
     }
 
     // Debug counters
@@ -75,12 +75,13 @@ std::vector<Command> diff_correcting(
     size_t dbg_scan_fp_mismatch = 0, dbg_scan_byte_mismatch = 0;
 
     // Step (1): Build lookup structure for R (first-found policy)
-    using HSlot = std::optional<std::pair<uint64_t, size_t>>;
-    std::vector<HSlot> h_r_ht;
+    struct CSlot { uint64_t fp; size_t offset; };
+    static constexpr uint64_t EMPTY_FP = UINT64_MAX;
+    std::vector<CSlot> h_r_ht;
     SplayTree<std::pair<uint64_t, size_t>> h_r_sp; // (full_fp, offset)
 
     if (!use_splay) {
-        h_r_ht.resize(cap);
+        h_r_ht.assign(cap, CSlot{EMPTY_FP, 0});
     }
 
     std::optional<RollingHash> rh_build;
@@ -105,14 +106,14 @@ std::vector<Command> diff_correcting(
             size_t i = static_cast<size_t>(f / m);
             const size_t i0 = i;
             for (;;) {
-                if (!h_r_ht[i].has_value()) { break; }           // empty — store here
-                if (h_r_ht[i]->first == fp) { i = SIZE_MAX; break; } // dup fp — skip
+                if (h_r_ht[i].fp == EMPTY_FP) { break; }           // empty — store here
+                if (h_r_ht[i].fp == fp) { i = SIZE_MAX; break; }    // dup fp — skip
                 if (++i == cap) { i = 0; }
                 ++dbg_build_probes;
-                if (i == i0) { i = SIZE_MAX; break; }            // table full
+                if (i == i0) { i = SIZE_MAX; break; }               // table full
             }
             if (i != SIZE_MAX) {
-                h_r_ht[i] = std::make_pair(fp, a); // linear probing (Section 7 Step 1)
+                h_r_ht[i] = CSlot{fp, a}; // linear probing (Section 7 Step 1)
                 ++dbg_build_stored;
             }
         }
@@ -145,8 +146,10 @@ std::vector<Command> diff_correcting(
             size_t i = static_cast<size_t>(f_v / m);
             const size_t i0 = i;
             for (;;) {
-                if (!h_r_ht[i].has_value()) { return std::nullopt; } // empty — chain ends
-                if (h_r_ht[i]->first == fp_v) { return *h_r_ht[i]; }
+                if (h_r_ht[i].fp == EMPTY_FP) { return std::nullopt; } // empty — chain ends
+                if (h_r_ht[i].fp == fp_v) {
+                    return std::make_pair(h_r_ht[i].fp, h_r_ht[i].offset);
+                }
                 if (++i == cap) { i = 0; }
                 if (i == i0) { return std::nullopt; }               // full table
             }

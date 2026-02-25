@@ -66,8 +66,9 @@ deque_pop_back(buf_deque_t *d)
 typedef struct {
 	uint64_t fp;
 	size_t offset;
-	bool occupied;
 } corr_slot_t;
+
+#define CORR_EMPTY_FP UINT64_MAX
 
 /* ── Splay value for correcting ────────────────────────────────────── */
 
@@ -149,14 +150,15 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 		        (unsigned long long)m, (unsigned long long)k,
 		        (unsigned long long)m, (unsigned long long)expected,
 		        (unsigned long long)occ_est,
-		        cap * 24 / 1048576);
+		        cap * sizeof(*h_r_ht) / 1048576);
 	}
 
 	/* Step (1): Build lookup structure for R (first-found policy) */
 	if (use_splay) {
 		delta_splay_init(&h_r_sp, sizeof(corr_splay_val_t));
 	} else {
-		h_r_ht = delta_calloc(cap, sizeof(*h_r_ht));
+		h_r_ht = delta_malloc(cap * sizeof(*h_r_ht));
+		memset(h_r_ht, 0xFF, cap * sizeof(*h_r_ht));
 	}
 
 	if (num_seeds > 0) {
@@ -188,7 +190,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 				size_t i = (size_t)(f / m);
 				size_t i0 = i;
 				for (;;) {
-					if (!h_r_ht[i].occupied) { break; }       /* empty — store here */
+					if (h_r_ht[i].fp == CORR_EMPTY_FP) { break; }  /* empty — store here */
 					if (h_r_ht[i].fp == fp) { i = (size_t)-1; break; } /* dup fp — skip */
 					if (++i == cap) { i = 0; }
 					dbg_build_probes++;
@@ -197,7 +199,6 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 				if (i != (size_t)-1) {
 					h_r_ht[i].fp = fp;
 					h_r_ht[i].offset = a;
-					h_r_ht[i].occupied = true;
 					dbg_build_stored++;
 				}
 			}
@@ -275,7 +276,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 			size_t i = (size_t)(f_v / m);
 			size_t i0 = i;
 			for (;;) {
-				if (!h_r_ht[i].occupied) { break; }       /* empty — chain ends */
+				if (h_r_ht[i].fp == CORR_EMPTY_FP) { break; }  /* empty — chain ends */
 				if (h_r_ht[i].fp == fp_v) {
 					if (memcmp(&r[h_r_ht[i].offset],
 					           &v[v_c], p) != 0) {

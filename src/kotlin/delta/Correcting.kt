@@ -47,17 +47,15 @@ fun diffCorrecting(r: ByteArray, v: ByteArray, opts: DiffOptions): List<Command>
     // Step (1): Build lookup structure for R (first-found policy)
     val htFp:   LongArray?
     val htOff:  IntArray?
-    val htUsed: BooleanArray?
     val splayR: SplayTree<LongArray>?  // value = [full_fp, offset]
 
     if (useSplay) {
         splayR = SplayTree()
-        htFp = null; htOff = null; htUsed = null
+        htFp = null; htOff = null
     } else {
         splayR = null
-        htFp   = LongArray(cap)
+        htFp   = LongArray(cap) { -1L }
         htOff  = IntArray(cap)
-        htUsed = BooleanArray(cap)
     }
 
     var rhR: RollingHash? = if (numSeeds > 0) RollingHash(r, 0, p) else null
@@ -77,12 +75,12 @@ fun diffCorrecting(r: ByteArray, v: ByteArray, opts: DiffOptions): List<Command>
             var i = (f / m).toInt()
             val i0 = i
             while (true) {
-                if (!htUsed!![i]) { break }                    // empty — store here
+                if (htFp!![i] == -1L) { break }               // empty — store here
                 if (htFp!![i] == fp) { i = -1; break }        // dup fp — skip
                 if (++i == cap) { i = 0 }
                 if (i == i0) { i = -1; break }                 // table full
             }
-            if (i >= 0) { htFp!![i] = fp; htOff!![i] = a; htUsed[i] = true }
+            if (i >= 0) { htFp!![i] = fp; htOff!![i] = a }
         }
     }
 
@@ -125,7 +123,7 @@ fun diffCorrecting(r: ByteArray, v: ByteArray, opts: DiffOptions): List<Command>
             val i0 = i
             var found = -1
             while (true) {
-                if (!htUsed!![i]) { break }                    // empty — chain ends
+                if (htFp!![i] == -1L) { break }               // empty — chain ends
                 if (htFp!![i] == fpV) { found = i; break }
                 if (++i == cap) { i = 0 }
                 if (i == i0) { break }                         // full table — not found

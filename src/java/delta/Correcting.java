@@ -2,6 +2,7 @@ package delta;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Deque;
 import java.util.List;
 
@@ -66,15 +67,14 @@ public final class Correcting {
         // Step (1): Build lookup structure for R (first-found policy)
         long[] htFp = null;
         int[] htOff = null;
-        boolean[] htUsed = null;
         SplayTree<long[]> splayR = null; // value = {full_fp, offset}
 
         if (useSplay) {
             splayR = new SplayTree<>();
         } else {
             htFp = new long[cap];
+            Arrays.fill(htFp, -1L);
             htOff = new int[cap];
-            htUsed = new boolean[cap];
         }
 
         Hash.RollingHash rhR = numSeeds > 0 ? new Hash.RollingHash(r, 0, p) : null;
@@ -95,7 +95,7 @@ public final class Correcting {
                 int i = (int) (f / m);
                 int i0 = i;
                 for (;;) {
-                    if (!htUsed[i]) { break; }                 // empty — store here
+                    if (htFp[i] == -1L) { break; }            // empty — store here
                     if (htFp[i] == fp) { i = -1; break; }     // dup fp — skip
                     if (++i == cap) { i = 0; }
                     if (i == i0) { i = -1; break; }            // table full
@@ -103,7 +103,6 @@ public final class Correcting {
                 if (i != -1) {
                     htFp[i] = fp;
                     htOff[i] = a;
-                    htUsed[i] = true;
                 }
             }
         }
@@ -150,7 +149,7 @@ public final class Correcting {
                 int i0 = i;
                 int found = -1;
                 for (;;) {
-                    if (!htUsed[i]) { break; }                 // empty — chain ends
+                    if (htFp[i] == -1L) { break; }            // empty — chain ends
                     if (htFp[i] == fpV) { found = i; break; }
                     if (++i == cap) { i = 0; }
                     if (i == i0) { break; }                    // full table — not found

@@ -79,15 +79,14 @@ func diffCorrecting(r, v []byte, opts DiffOptions) []Command {
 	// Step (1): build lookup structure for R (first-found / insert-if-absent policy).
 	var htFp []int64
 	var htOff []int
-	var htUsed []bool
 	var splayR *SplayTree[[2]int64] // value = [full_fp, offset]
 
 	if useSplay {
 		splayR = &SplayTree[[2]int64]{}
 	} else {
 		htFp = make([]int64, cap_)
+		for i := range htFp { htFp[i] = -1 }
 		htOff = make([]int, cap_)
-		htUsed = make([]bool, cap_)
 	}
 
 	if numSeeds > 0 {
@@ -113,7 +112,7 @@ func diffCorrecting(r, v []byte, opts DiffOptions) []Command {
 				i := int(f / m)
 				i0 := i
 				for {
-					if !htUsed[i] { break }             // empty — store here
+					if htFp[i] == -1 { break }          // empty — store here
 					if htFp[i] == fp { i = -1; break }  // dup fp — skip
 					i++
 					if i == cap_ { i = 0 }
@@ -122,7 +121,6 @@ func diffCorrecting(r, v []byte, opts DiffOptions) []Command {
 				if i >= 0 {
 					htFp[i] = fp
 					htOff[i] = a
-					htUsed[i] = true
 				}
 			}
 		}
@@ -134,8 +132,8 @@ func diffCorrecting(r, v []byte, opts DiffOptions) []Command {
 		if useSplay {
 			storedCount = splayR.Len()
 		} else {
-			for _, u := range htUsed {
-				if u {
+			for _, fp := range htFp {
+				if fp != -1 {
 					storedCount++
 				}
 			}
@@ -217,7 +215,7 @@ func diffCorrecting(r, v []byte, opts DiffOptions) []Command {
 			i0 := i
 			found := -1
 			for {
-				if !htUsed[i] { break }               // empty — chain ends
+				if htFp[i] == -1 { break }            // empty — chain ends
 				if htFp[i] == fpV { found = i; break }
 				i++
 				if i == cap_ { i = 0 }
