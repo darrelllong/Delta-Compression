@@ -641,7 +641,7 @@ def diff_correcting(R: bytes, V: bytes,
     # Debug counters (verbose mode only)
     dbg_build_passed = 0
     dbg_build_stored = 0
-    dbg_build_skip_coll = 0
+    dbg_build_probes = 0  # extra slots scanned past the first
     dbg_scan_checkpoints = 0
     dbg_scan_match = 0
     dbg_scan_fp_miss = 0
@@ -663,20 +663,28 @@ def diff_correcting(R: bytes, V: bytes,
             continue                     # not a checkpoint seed
         dbg_build_passed += 1
         i = f // m
-        if i >= C:
-            continue                     # safety: rounding can overshoot
-        if H_R[i] is None:
-            H_R[i] = (fp, a)            # first-found (Section 7 Step 1)
+        i0 = i
+        while True:
+            if H_R[i] is None:
+                break                    # empty — store here
+            if H_R[i][0] == fp:
+                i = -1; break           # same fp already stored — skip
+            i += 1
+            if i == C:
+                i = 0
+            dbg_build_probes += 1
+            if i == i0:
+                i = -1; break           # table full (safety)
+        if i >= 0:
+            H_R[i] = (fp, a)            # linear probing (Section 7 Step 1)
             dbg_build_stored += 1
-        else:
-            dbg_build_skip_coll += 1
 
     if verbose:
         passed_pct = dbg_build_passed / num_seeds * 100 if num_seeds else 0
         occ_pct = dbg_build_stored / C * 100 if C else 0
         print(f"  build: {num_seeds} seeds, {dbg_build_passed} passed "
               f"checkpoint ({passed_pct:.2f}%), "
-              f"{dbg_build_stored} stored, {dbg_build_skip_coll} collisions\n"
+              f"{dbg_build_stored} stored, {dbg_build_probes} extra probes\n"
               f"  build: table occupancy {dbg_build_stored}/{C} ({occ_pct:.1f}%)",
               file=sys.stderr)
 
@@ -725,22 +733,23 @@ def diff_correcting(R: bytes, V: bytes,
             v_c += 1
             continue                     # not a checkpoint — skip
 
-        # Checkpoint passed — look up H_R at index i = floor(f/m).
+        # Checkpoint passed — look up H_R via linear probing.
         dbg_scan_checkpoints += 1
         i = f_v // m
-        if i >= C:
-            v_c += 1
-            continue                     # safety: rounding can overshoot
-        entry = H_R[i]
-        if entry is None:
-            v_c += 1
-            continue                     # no R entry at this slot
-
-        stored_fp, r_offset = entry
-        if stored_fp != fp_v:
-            # Different full fingerprint mapped to same slot (fp % |F|
-            # differ but floor(f/m) collides).
-            dbg_scan_fp_miss += 1
+        i0 = i
+        r_offset = -1
+        while True:
+            entry = H_R[i]
+            if entry is None:
+                break                    # empty — end of chain
+            if entry[0] == fp_v:
+                r_offset = entry[1]; break
+            i += 1
+            if i == C:
+                i = 0
+            if i == i0:
+                break                    # full table — not found
+        if r_offset < 0:
             v_c += 1
             continue
 

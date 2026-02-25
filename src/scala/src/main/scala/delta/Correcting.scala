@@ -66,8 +66,18 @@ def diffCorrecting(r: Array[Byte], v: Array[Byte], opts: DiffOptions): List[Comm
       if useSplay then {
         splayR.insertOrGet(fp, Array(fp, a.toLong))
       } else {
-        val i = (f / m).toInt
-        if i < cap && !htUsed(i) then { htFp(i) = fp; htOff(i) = a; htUsed(i) = true }
+        var i = (f / m).toInt
+        val i0 = i
+        var loop = true
+        while loop do {
+          if !htUsed(i) then { loop = false }              // empty — store here
+          else if htFp(i) == fp then { i = -1; loop = false } // dup fp — skip
+          else {
+            i += 1; if i == cap then { i = 0 }
+            if i == i0 then { i = -1; loop = false }      // table full
+          }
+        }
+        if i >= 0 then { htFp(i) = fp; htOff(i) = a; htUsed(i) = true }
       }
     }
     a += 1
@@ -107,9 +117,19 @@ def diffCorrecting(r: Array[Byte], v: Array[Byte], opts: DiffOptions): List[Comm
               case None        => None
             }
           } else {
-            val i = (fV / m).toInt
-            if i >= cap || !htUsed(i) then None
-            else Some((htFp(i), htOff(i)))
+            var i = (fV / m).toInt
+            val i0 = i
+            var found = -1
+            var loop = true
+            while loop do {
+              if !htUsed(i) then { loop = false }          // empty — chain ends
+              else if htFp(i) == fpV then { found = i; loop = false }
+              else {
+                i += 1; if i == cap then { i = 0 }
+                if i == i0 then { loop = false }           // full table — not found
+              }
+            }
+            if found < 0 then None else Some((htFp(found), htOff(found)))
           }
 
         lookupResult match {

@@ -103,24 +103,25 @@ pub fn diff_correcting(
             if use_splay { "splay tree" } else { "hash table" },
             cap, f_size, m, k,
             m, expected, occ_est,
-            cap * 24 / 1_048_576
+            cap * std::mem::size_of::<CSlot>() / 1_048_576
         );
     }
 
     // Debug counters
     let mut dbg_build_passed: usize = 0;
     let mut dbg_build_stored: usize = 0;
-    let mut dbg_build_skipped_collision: usize = 0;
+    let mut dbg_build_probes: usize = 0; // extra slots scanned past the first
     let mut dbg_scan_checkpoints: usize = 0;
     let mut dbg_scan_match: usize = 0;
     let mut dbg_scan_fp_mismatch: usize = 0;
     let mut dbg_scan_byte_mismatch: usize = 0;
 
-    // Step (1): Build lookup structure for R (first-found policy)
+    // Step (1): Build lookup structure for R (first-found policy, linear probing)
     // Flat slot array — fp == u64::MAX marks empty slots.
     let mut h_r_ht: Vec<CSlot> = if !use_splay { vec![EMPTY_CSLOT; cap] } else { Vec::new() };
     let mut h_r_sp: SplayTree<(u64, usize)> = SplayTree::new(); // (full_fp, offset)
 
+    let build_start = std::time::Instant::now();
     let mut rh_r = if num_seeds > 0 { Some(RollingHash::new(r, 0, p)) } else { None };
     for a in 0..num_seeds {
         let fp = if a == 0 {
@@ -142,18 +143,25 @@ pub fn diff_correcting(
             if val.1 == a {
                 dbg_build_stored += 1;
             } else {
-                dbg_build_skipped_collision += 1;
+                dbg_build_probes += 1;
             }
         } else {
-            let i = (f / m) as usize;
-            if i >= cap {
-                continue; // safety
+            // Linear probing: find empty slot or existing fp (first-found policy).
+            // Uses branch-based wraparound (i += 1; if i == cap { i = 0 }) rather
+            // than modulo to avoid division in the hot path.
+            let mut i = (f / m) as usize;
+            let i0 = i;
+            loop {
+                let slot_fp = h_r_ht[i].fp;
+                if slot_fp == u64::MAX { break; }           // empty — store here
+                if slot_fp == fp { i = usize::MAX; break; } // same fp already stored — skip
+                i += 1; if i == cap { i = 0; }
+                dbg_build_probes += 1;
+                if i == i0 { i = usize::MAX; break; }       // table full (safety)
             }
-            if h_r_ht[i].fp == u64::MAX {
+            if i != usize::MAX {
                 h_r_ht[i] = CSlot { fp, offset: a }; // first-found (Section 7 Step 1)
                 dbg_build_stored += 1;
-            } else {
-                dbg_build_skipped_collision += 1;
             }
         }
     }
@@ -172,23 +180,29 @@ pub fn diff_correcting(
         };
         eprintln!(
             "  build: {} seeds, {} passed checkpoint ({:.2}%), \
-             {} stored, {} collisions\n  \
-             build: table occupancy {}/{} ({:.1}%)",
+             {} stored, {} extra probes\n  \
+             build: table occupancy {}/{} ({:.1}%), elapsed {:.2}s",
             num_seeds, dbg_build_passed, passed_pct,
-            dbg_build_stored, dbg_build_skipped_collision,
-            stored_count, cap, occ_pct
+            dbg_build_stored, dbg_build_probes,
+            stored_count, cap, occ_pct,
+            build_start.elapsed().as_secs_f64()
         );
     }
 
-    // Lookup helper
+    // Lookup helper — linear probing mirrors the build chain.
     let lookup_r = |h_r_ht: &[CSlot], h_r_sp: &mut SplayTree<(u64, usize)>, fp_v: u64, f_v: u64| -> Option<(u64, usize)> {
         if use_splay {
             h_r_sp.find(fp_v).copied()
         } else {
-            let i = (f_v / m) as usize;
-            if i >= cap { return None; }
-            let slot = &h_r_ht[i];
-            if slot.fp == u64::MAX { None } else { Some((slot.fp, slot.offset)) }
+            let mut i = (f_v / m) as usize;
+            let i0 = i;
+            loop {
+                let slot = &h_r_ht[i];
+                if slot.fp == u64::MAX { return None; } // empty — end of chain
+                if slot.fp == fp_v { return Some((fp_v, slot.offset)); }
+                i += 1; if i == cap { i = 0; }
+                if i == i0 { return None; } // full table — not found
+            }
         }
     };
 

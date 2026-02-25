@@ -93,7 +93,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 	size_t rh_v_pos = 0;
 	buf_deque_t buf;
 	size_t dbg_build_passed = 0, dbg_build_stored = 0;
-	size_t dbg_build_skipped = 0;
+	size_t dbg_build_probes = 0; /* extra slots scanned past the first */
 	size_t dbg_scan_checkpoints = 0, dbg_scan_match = 0;
 	size_t dbg_scan_fp_mismatch = 0, dbg_scan_byte_mismatch = 0;
 
@@ -182,18 +182,23 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 				if (existing->offset == a) {
 					dbg_build_stored++;
 				} else {
-					dbg_build_skipped++;
+					dbg_build_probes++;
 				}
 			} else {
 				size_t i = (size_t)(f / m);
-				if (i >= cap) { continue; }
-				if (!h_r_ht[i].occupied) {
+				size_t i0 = i;
+				for (;;) {
+					if (!h_r_ht[i].occupied) { break; }       /* empty — store here */
+					if (h_r_ht[i].fp == fp) { i = (size_t)-1; break; } /* dup fp — skip */
+					if (++i == cap) { i = 0; }
+					dbg_build_probes++;
+					if (i == i0) { i = (size_t)-1; break; }  /* table full */
+				}
+				if (i != (size_t)-1) {
 					h_r_ht[i].fp = fp;
 					h_r_ht[i].offset = a;
 					h_r_ht[i].occupied = true;
 					dbg_build_stored++;
-				} else {
-					dbg_build_skipped++;
 				}
 			}
 		}
@@ -207,10 +212,10 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 		    ? (double)stored_count / cap * 100.0 : 0.0;
 		fprintf(stderr,
 		        "  build: %zu seeds, %zu passed checkpoint (%.2f%%), "
-		        "%zu stored, %zu collisions\n"
+		        "%zu stored, %zu extra probes\n"
 		        "  build: table occupancy %zu/%zu (%.1f%%)\n",
 		        num_seeds, dbg_build_passed, passed_pct,
-		        dbg_build_stored, dbg_build_skipped,
+		        dbg_build_stored, dbg_build_probes,
 		        stored_count, cap, occ_pct);
 	}
 
@@ -268,20 +273,22 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 			}
 		} else {
 			size_t i = (size_t)(f_v / m);
-			if (i < cap && h_r_ht[i].occupied) {
+			size_t i0 = i;
+			for (;;) {
+				if (!h_r_ht[i].occupied) { break; }       /* empty — chain ends */
 				if (h_r_ht[i].fp == fp_v) {
 					if (memcmp(&r[h_r_ht[i].offset],
 					           &v[v_c], p) != 0) {
 						dbg_scan_byte_mismatch++;
-						v_c++;
-						continue;
+					} else {
+						dbg_scan_match++;
+						r_offset = h_r_ht[i].offset;
+						found = true;
 					}
-					dbg_scan_match++;
-					r_offset = h_r_ht[i].offset;
-					found = true;
-				} else {
-					dbg_scan_fp_mismatch++;
+					break;  /* byte mismatch or match — stop probing */
 				}
+				if (++i == cap) { i = 0; }
+				if (i == i0) { break; }                   /* full table — not found */
 			}
 		}
 

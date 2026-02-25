@@ -93,8 +93,14 @@ public final class Correcting {
                 splayR.insertOrGet(fp, new long[]{fp, a});
             } else {
                 int i = (int) (f / m);
-                if (i >= cap) continue;
-                if (!htUsed[i]) {
+                int i0 = i;
+                for (;;) {
+                    if (!htUsed[i]) { break; }                 // empty — store here
+                    if (htFp[i] == fp) { i = -1; break; }     // dup fp — skip
+                    if (++i == cap) { i = 0; }
+                    if (i == i0) { i = -1; break; }            // table full
+                }
+                if (i != -1) {
                     htFp[i] = fp;
                     htOff[i] = a;
                     htUsed[i] = true;
@@ -141,9 +147,17 @@ public final class Correcting {
                 rOffset = (int) entry[1];
             } else {
                 int i = (int) (fV / m);
-                if (i >= cap || !htUsed[i]) { vC++; continue; }
-                storedFp = htFp[i];
-                rOffset = htOff[i];
+                int i0 = i;
+                int found = -1;
+                for (;;) {
+                    if (!htUsed[i]) { break; }                 // empty — chain ends
+                    if (htFp[i] == fpV) { found = i; break; }
+                    if (++i == cap) { i = 0; }
+                    if (i == i0) { break; }                    // full table — not found
+                }
+                if (found < 0) { vC++; continue; }
+                storedFp = htFp[found];
+                rOffset = htOff[found];
             }
 
             if (storedFp != fpV) { vC++; continue; }

@@ -111,10 +111,15 @@ func diffCorrecting(r, v []byte, opts DiffOptions) []Command {
 				}
 			} else {
 				i := int(f / m)
-				if i >= cap_ {
-					continue
+				i0 := i
+				for {
+					if !htUsed[i] { break }             // empty — store here
+					if htFp[i] == fp { i = -1; break }  // dup fp — skip
+					i++
+					if i == cap_ { i = 0 }
+					if i == i0 { i = -1; break }         // table full
 				}
-				if !htUsed[i] {
+				if i >= 0 {
 					htFp[i] = fp
 					htOff[i] = a
 					htUsed[i] = true
@@ -209,12 +214,21 @@ func diffCorrecting(r, v []byte, opts DiffOptions) []Command {
 			rOffset = int(entry[1])
 		} else {
 			i := int(fV / m)
-			if i >= cap_ || !htUsed[i] {
+			i0 := i
+			found := -1
+			for {
+				if !htUsed[i] { break }               // empty — chain ends
+				if htFp[i] == fpV { found = i; break }
+				i++
+				if i == cap_ { i = 0 }
+				if i == i0 { break }                   // full table — not found
+			}
+			if found < 0 {
 				vC++
 				continue
 			}
-			storedFp = htFp[i]
-			rOffset = htOff[i]
+			storedFp = htFp[found]
+			rOffset = htOff[found]
 		}
 
 		if storedFp != fpV {

@@ -74,9 +74,15 @@ fun diffCorrecting(r: ByteArray, v: ByteArray, opts: DiffOptions): List<Command>
         if (useSplay) {
             splayR!!.insertOrGet(fp, longArrayOf(fp, a.toLong()))
         } else {
-            val i = (f / m).toInt()
-            if (i >= cap) continue
-            if (!htUsed!![i]) { htFp!![i] = fp; htOff!![i] = a; htUsed[i] = true }
+            var i = (f / m).toInt()
+            val i0 = i
+            while (true) {
+                if (!htUsed!![i]) { break }                    // empty — store here
+                if (htFp!![i] == fp) { i = -1; break }        // dup fp — skip
+                if (++i == cap) { i = 0 }
+                if (i == i0) { i = -1; break }                 // table full
+            }
+            if (i >= 0) { htFp!![i] = fp; htOff!![i] = a; htUsed[i] = true }
         }
     }
 
@@ -115,9 +121,17 @@ fun diffCorrecting(r: ByteArray, v: ByteArray, opts: DiffOptions): List<Command>
             if (entry == null) { vC++; continue }
             storedFp = entry[0]; rOffset = entry[1].toInt()
         } else {
-            val i = (fV / m).toInt()
-            if (i >= cap || !htUsed!![i]) { vC++; continue }
-            storedFp = htFp!![i]; rOffset = htOff!![i]
+            var i = (fV / m).toInt()
+            val i0 = i
+            var found = -1
+            while (true) {
+                if (!htUsed!![i]) { break }                    // empty — chain ends
+                if (htFp!![i] == fpV) { found = i; break }
+                if (++i == cap) { i = 0 }
+                if (i == i0) { break }                         // full table — not found
+            }
+            if (found < 0) { vC++; continue }
+            storedFp = htFp!![found]; rOffset = htOff!![found]
         }
 
         if (storedFp != fpV) { vC++; continue }

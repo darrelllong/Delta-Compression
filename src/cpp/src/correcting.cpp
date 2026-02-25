@@ -70,7 +70,7 @@ std::vector<Command> diff_correcting(
     }
 
     // Debug counters
-    size_t dbg_build_passed = 0, dbg_build_stored = 0, dbg_build_skipped_collision = 0;
+    size_t dbg_build_passed = 0, dbg_build_stored = 0, dbg_build_probes = 0;
     size_t dbg_scan_checkpoints = 0, dbg_scan_match = 0;
     size_t dbg_scan_fp_mismatch = 0, dbg_scan_byte_mismatch = 0;
 
@@ -100,19 +100,20 @@ std::vector<Command> diff_correcting(
         if (use_splay) {
             // insert_or_get implements first-found policy
             auto& val = h_r_sp.insert_or_get(fp, std::make_pair(fp, a));
-            if (val.second == a) {
-                ++dbg_build_stored;
-            } else {
-                ++dbg_build_skipped_collision;
-            }
+            if (val.second == a) { ++dbg_build_stored; } else { ++dbg_build_probes; }
         } else {
             size_t i = static_cast<size_t>(f / m);
-            if (i >= cap) { continue; } // safety
-            if (!h_r_ht[i].has_value()) {
-                h_r_ht[i] = std::make_pair(fp, a); // first-found (Section 7 Step 1)
+            const size_t i0 = i;
+            for (;;) {
+                if (!h_r_ht[i].has_value()) { break; }           // empty — store here
+                if (h_r_ht[i]->first == fp) { i = SIZE_MAX; break; } // dup fp — skip
+                if (++i == cap) { i = 0; }
+                ++dbg_build_probes;
+                if (i == i0) { i = SIZE_MAX; break; }            // table full
+            }
+            if (i != SIZE_MAX) {
+                h_r_ht[i] = std::make_pair(fp, a); // linear probing (Section 7 Step 1)
                 ++dbg_build_stored;
-            } else {
-                ++dbg_build_skipped_collision;
             }
         }
     }
@@ -125,14 +126,15 @@ std::vector<Command> diff_correcting(
             ? static_cast<double>(stored_count) / cap * 100.0 : 0.0;
         std::fprintf(stderr,
             "  build: %zu seeds, %zu passed checkpoint (%.2f%%), "
-            "%zu stored, %zu collisions\n"
+            "%zu stored, %zu extra probes\n"
             "  build: table occupancy %zu/%zu (%.1f%%)\n",
             num_seeds, dbg_build_passed, passed_pct,
-            dbg_build_stored, dbg_build_skipped_collision,
+            dbg_build_stored, dbg_build_probes,
             stored_count, cap, occ_pct);
     }
 
     // Lookup helper: returns (full_fp, offset) pair if found, nullopt otherwise.
+    // Linear probing mirrors the build chain exactly.
     auto lookup_r = [&](uint64_t fp_v, uint64_t f_v)
         -> std::optional<std::pair<uint64_t, size_t>> {
         if (use_splay) {
@@ -141,9 +143,13 @@ std::vector<Command> diff_correcting(
             return std::nullopt;
         } else {
             size_t i = static_cast<size_t>(f_v / m);
-            if (i >= cap) { return std::nullopt; }
-            if (h_r_ht[i].has_value()) { return *h_r_ht[i]; }
-            return std::nullopt;
+            const size_t i0 = i;
+            for (;;) {
+                if (!h_r_ht[i].has_value()) { return std::nullopt; } // empty — chain ends
+                if (h_r_ht[i]->first == fp_v) { return *h_r_ht[i]; }
+                if (++i == cap) { i = 0; }
+                if (i == i0) { return std::nullopt; }               // full table
+            }
         }
     };
 
