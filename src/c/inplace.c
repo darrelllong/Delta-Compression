@@ -2,14 +2,25 @@
  * inplace.c — In-place delta conversion (Burns, Long, Stockmeyer —
  *             IEEE TKDE 2003)
  *
- * A CRWI (Copy-Read/Write-Intersection) digraph is built over the copy
- * commands: edge i→j means copy i reads from a region that copy j will
- * overwrite, so i must execute before j.  When the digraph is acyclic, a
- * topological order provides a valid serial schedule with no conversion
- * needed.  A cycle i₁→i₂→…→iₖ→i₁ represents a circular dependency with
- * no valid schedule; breaking it materializes one copy as a literal add
- * (reading its bytes from R before the buffer is modified).
- * Tarjan SCC (O(n+E)) + per-SCC Kahn topological sort + cycle breaking.
+ * High-level flow (functions listed in call order below):
+ *
+ *   1. Parse commands → copies[] + adds_t (assign sequential write offsets).
+ *   2. build_crwi_digraph(): sort copies by dst, binary-search read intervals
+ *      to find all CRWI edges.  O(n log n + E).
+ *   3. run_kahn():
+ *        a. tarjan_scc() → build_scc_list(): SCC decomposition.  O(n + E).
+ *        b. Global Kahn on a min-heap keyed by (copy length, index);
+ *           when the heap stalls, pick_victim() finds the shortest copy in
+ *           a cycle and materialises it as a literal add.
+ *           Total cycle-breaking work O(n + E) via three amortisations:
+ *           scc_id filter, color=2 persistence, scan resumption.
+ *   4. Assemble result: topo-ordered copies, then all adds.
+ *
+ * CRWI edge i→j: copy i reads from a region that copy j will overwrite,
+ * so i must run before j.  A cycle → circular dependency; break it by
+ * materialising the shortest copy as a literal (bytes read from R before
+ * any overwrite occurs).
+ *
  * R.E. Tarjan, SIAM J. Comput., 1(2):146-160, June 1972.
  */
 
@@ -18,17 +29,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ── Copy info for building the digraph ────────────────────────────── */
+/* ── copy_info_t ─────────────────────────────────────────────────────── */
 
 typedef struct {
 	size_t idx, src, dst, length;
 } copy_info_t;
 
-/* ── Dynamic arrays used by find_cycle ─────────────────────────────── */
-
-typedef struct { size_t v; size_t ni; } stk_entry_t;
-
-/* ── (dst, idx) pair used to sort writes by destination ─────────────── */
+/* ── write_pair_t (sort copies by write destination) ────────────────── */
 
 typedef struct { size_t dst; size_t idx; } write_pair_t;
 
@@ -39,21 +46,14 @@ static int cmp_write_pair(const void *a, const void *b)
 	return (da > db) - (da < db);
 }
 
-typedef struct {
-	size_t *data;
-	size_t  len;
-	size_t  cap;
-} size_buf_t;
+/* ── size_buf_t (dynamic array of size_t) ───────────────────────────── */
 
-typedef struct {
-	stk_entry_t *data;
-	size_t       len;
-	size_t       cap;
-} stk_buf_t;
+typedef struct { size_t *data; size_t len; size_t cap; } size_buf_t;
 
 static void size_buf_init(size_buf_t *b) { b->data = NULL; b->len = 0; b->cap = 0; }
 static void size_buf_free(size_buf_t *b) { free(b->data); b->data = NULL; b->len = 0; b->cap = 0; }
-static void size_buf_push(size_buf_t *b, size_t v) {
+static void size_buf_push(size_buf_t *b, size_t v)
+{
 	if (b->len == b->cap) {
 		b->cap = b->cap ? b->cap * 2 : 16;
 		b->data = delta_realloc(b->data, b->cap * sizeof(*b->data));
@@ -61,9 +61,15 @@ static void size_buf_push(size_buf_t *b, size_t v) {
 	b->data[b->len++] = v;
 }
 
+/* ── stk_buf_t (DFS call-stack frames) ──────────────────────────────── */
+
+typedef struct { size_t v; size_t ni; } stk_entry_t;
+typedef struct { stk_entry_t *data; size_t len; size_t cap; } stk_buf_t;
+
 static void stk_buf_init(stk_buf_t *b) { b->data = NULL; b->len = 0; b->cap = 0; }
 static void stk_buf_free(stk_buf_t *b) { free(b->data); b->data = NULL; b->len = 0; b->cap = 0; }
-static void stk_buf_push(stk_buf_t *b, size_t v, size_t ni) {
+static void stk_buf_push(stk_buf_t *b, size_t v, size_t ni)
+{
 	if (b->len == b->cap) {
 		b->cap = b->cap ? b->cap * 2 : 16;
 		b->data = delta_realloc(b->data, b->cap * sizeof(*b->data));
@@ -73,7 +79,73 @@ static void stk_buf_push(stk_buf_t *b, size_t v, size_t ni) {
 	b->len++;
 }
 
-/* ── SCC result: flat vertex array + per-SCC offsets (sentinel at end) ── */
+/* ── adj_list_t (CRWI digraph adjacency list) ───────────────────────── */
+
+typedef struct {
+	size_t **nbrs;    /* nbrs[i][0..nbr_len[i]) = out-neighbours of i */
+	size_t  *nbr_len;
+	size_t  *nbr_cap;
+	size_t   n;
+} adj_list_t;
+
+static adj_list_t adj_list_alloc(size_t n)
+{
+	adj_list_t a;
+	a.nbrs    = delta_calloc(n, sizeof(*a.nbrs));
+	a.nbr_len = delta_calloc(n, sizeof(*a.nbr_len));
+	a.nbr_cap = delta_calloc(n, sizeof(*a.nbr_cap));
+	a.n       = n;
+	return a;
+}
+
+static void adj_list_free(adj_list_t *a)
+{
+	size_t i;
+	for (i = 0; i < a->n; i++) { free(a->nbrs[i]); }
+	free(a->nbrs); free(a->nbr_len); free(a->nbr_cap);
+}
+
+static void adj_list_push(adj_list_t *a, size_t i, size_t j)
+{
+	if (a->nbr_len[i] == a->nbr_cap[i]) {
+		a->nbr_cap[i] = a->nbr_cap[i] ? a->nbr_cap[i] * 2 : 4;
+		a->nbrs[i] = delta_realloc(a->nbrs[i],
+		                 a->nbr_cap[i] * sizeof(*a->nbrs[i]));
+	}
+	a->nbrs[i][a->nbr_len[i]++] = j;
+}
+
+/* ── adds_t (accumulator for literal adds) ──────────────────────────── */
+
+typedef struct {
+	size_t   *dsts;
+	uint8_t **datas;  /* heap-allocated; ownership transferred to result */
+	size_t   *lens;
+	size_t    len;
+	size_t    cap;
+} adds_t;
+
+static void adds_init(adds_t *a)
+{
+	a->dsts = NULL; a->datas = NULL; a->lens = NULL;
+	a->len  = 0;    a->cap   = 0;
+}
+
+static void adds_push(adds_t *a, size_t dst, uint8_t *data, size_t len)
+{
+	if (a->len == a->cap) {
+		a->cap   = a->cap ? a->cap * 2 : 16;
+		a->dsts  = delta_realloc(a->dsts,  a->cap * sizeof(*a->dsts));
+		a->datas = delta_realloc(a->datas, a->cap * sizeof(*a->datas));
+		a->lens  = delta_realloc(a->lens,  a->cap * sizeof(*a->lens));
+	}
+	a->dsts [a->len] = dst;
+	a->datas[a->len] = data;
+	a->lens [a->len] = len;
+	a->len++;
+}
+
+/* ── scc_result_t (raw Tarjan output) ───────────────────────────────── */
 
 typedef struct {
 	size_t *data;    /* concatenated SCC vertices (sinks first) */
@@ -82,50 +154,89 @@ typedef struct {
 } scc_result_t;
 
 static void scc_result_init(scc_result_t *s)
-{
-	s->data = NULL;
-	s->offsets = NULL;
-	s->n_sccs = 0;
-}
-
+	{ s->data = NULL; s->offsets = NULL; s->n_sccs = 0; }
 static void scc_result_free(scc_result_t *s)
+	{ free(s->data); free(s->offsets); s->data = NULL; s->offsets = NULL; s->n_sccs = 0; }
+
+/* ── scc_list_t (non-trivial SCCs, source-first, with active counts) ── */
+
+typedef struct {
+	size_t *verts;   /* concatenated SCC vertices */
+	size_t *offs;    /* offs[i]..offs[i+1) = SCC i */
+	size_t *active;  /* number of unremoved vertices in SCC i */
+	size_t *id;      /* id[v] = SCC index; SIZE_MAX = trivial (no cycle) */
+	size_t  len;     /* number of non-trivial SCCs */
+} scc_list_t;
+
+static void scc_list_free(scc_list_t *sl)
+	{ free(sl->verts); free(sl->offs); free(sl->active); free(sl->id); }
+
+/* ── minheap_t (min-heap keyed by (copy length, index)) ─────────────── */
+/* Secondary key on index makes tie-breaking deterministic across runs. */
+
+typedef struct { size_t len; size_t idx; } heap_entry_t;
+typedef struct { heap_entry_t *data; size_t len; size_t cap; } minheap_t;
+
+static bool heap_lt(heap_entry_t a, heap_entry_t b)
+	{ return a.len < b.len || (a.len == b.len && a.idx < b.idx); }
+
+static void minheap_init(minheap_t *h, size_t cap)
+	{ h->data = delta_malloc(cap * sizeof(*h->data)); h->len = 0; h->cap = cap; }
+
+static void minheap_free(minheap_t *h) { free(h->data); }
+
+static void minheap_push(minheap_t *h, heap_entry_t e)
 {
-	free(s->data);
-	free(s->offsets);
-	s->data    = NULL;
-	s->offsets = NULL;
-	s->n_sccs  = 0;
+	if (h->len == h->cap) {
+		h->cap *= 2;
+		h->data = delta_realloc(h->data, h->cap * sizeof(*h->data));
+	}
+	size_t k = h->len++;
+	while (k > 0) {
+		size_t p = (k - 1) / 2;
+		if (!heap_lt(e, h->data[p])) break;
+		h->data[k] = h->data[p]; k = p;
+	}
+	h->data[k] = e;
 }
 
-/* ── Tarjan SCC (iterative) ─────────────────────────────────────────── */
+static heap_entry_t minheap_pop(minheap_t *h)
+{
+	heap_entry_t out  = h->data[0];
+	heap_entry_t last = h->data[--h->len];
+	size_t k = 0;
+	for (;;) {
+		size_t s = k, l = 2*k+1, r = 2*k+2;
+		if (l < h->len && heap_lt(h->data[l], h->data[s])) s = l;
+		if (r < h->len && heap_lt(h->data[r], h->data[s])) s = r;
+		if (s == k) break;
+		h->data[k] = h->data[s]; k = s;
+	}
+	h->data[k] = last;
+	return out;
+}
+
+/* ── tarjan_scc ─────────────────────────────────────────────────────── */
 /*
  * Iterative Tarjan's algorithm.  Returns SCCs in reverse topological
- * order (sinks first); caller iterates in reverse for source-first order.
- * R.E. Tarjan, SIAM J. Comput., 1(2):146-160, June 1972.
+ * order (sinks first); build_scc_list() reverses to source-first.
  */
 static scc_result_t
-tarjan_scc(size_t **adj, size_t *adj_len, size_t n)
+tarjan_scc(const adj_list_t *adj)
 {
-	scc_result_t res;
-	scc_result_init(&res);
-	size_t *idx_arr;    /* index_arr[v] = discovery index, SIZE_MAX = unvisited */
-	size_t *lowlink;
-	bool   *on_stk;
-	size_buf_t tarjan_stack;
-	stk_buf_t  call_stack;
-	size_t *scc_data    = NULL;
-	size_t  scc_data_len = 0, scc_data_cap = 0;
-	size_t *scc_offsets  = NULL;
-	size_t  n_sccs = 0, sccs_cap = 0;
-	size_t  counter = 0;
-	size_t  start;
+	size_t       n = adj->n;
+	scc_result_t res; scc_result_init(&res);
 
-	idx_arr = delta_malloc(n * sizeof(*idx_arr));
-	memset(idx_arr, 0xFF, n * sizeof(*idx_arr)); /* SIZE_MAX */
-	lowlink = delta_malloc(n * sizeof(*lowlink));
-	on_stk  = delta_calloc(n, sizeof(*on_stk));
-	size_buf_init(&tarjan_stack);
-	stk_buf_init(&call_stack);
+	size_t *idx_arr = delta_malloc(n * sizeof(*idx_arr));
+	memset(idx_arr, 0xFF, n * sizeof(*idx_arr));  /* SIZE_MAX = unvisited */
+	size_t *lowlink = delta_malloc(n * sizeof(*lowlink));
+	bool   *on_stk  = delta_calloc(n, sizeof(*on_stk));
+
+	size_buf_t tarjan_stack; size_buf_init(&tarjan_stack);
+	stk_buf_t  call_stack;   stk_buf_init(&call_stack);
+	size_buf_t scc_data;     size_buf_init(&scc_data);
+	size_buf_t scc_offs;     size_buf_init(&scc_offs);
+	size_t counter = 0, n_sccs = 0, start;
 
 	for (start = 0; start < n; start++) {
 		if (idx_arr[start] != SIZE_MAX) { continue; }
@@ -139,10 +250,9 @@ tarjan_scc(size_t **adj, size_t *adj_len, size_t n)
 			size_t v  = call_stack.data[call_stack.len - 1].v;
 			size_t ni = call_stack.data[call_stack.len - 1].ni;
 
-			if (ni < adj_len[v]) {
-				size_t w = adj[v][ni];
+			if (ni < adj->nbr_len[v]) {
+				size_t w = adj->nbrs[v][ni];
 				call_stack.data[call_stack.len - 1].ni++;
-
 				if (idx_arr[w] == SIZE_MAX) {
 					/* Tree edge: descend into w */
 					idx_arr[w] = lowlink[w] = counter++;
@@ -151,91 +261,65 @@ tarjan_scc(size_t **adj, size_t *adj_len, size_t n)
 					stk_buf_push(&call_stack, w, 0);
 				} else if (on_stk[w]) {
 					/* Back-edge into current SCC */
-					if (idx_arr[w] < lowlink[v]) {
-						lowlink[v] = idx_arr[w];
-					}
+					if (idx_arr[w] < lowlink[v]) { lowlink[v] = idx_arr[w]; }
 				}
 			} else {
 				/* Done with v — backtrack */
 				call_stack.len--;
 				if (call_stack.len > 0) {
 					size_t parent = call_stack.data[call_stack.len - 1].v;
-					if (lowlink[v] < lowlink[parent]) {
-						lowlink[parent] = lowlink[v];
-					}
+					if (lowlink[v] < lowlink[parent]) { lowlink[parent] = lowlink[v]; }
 				}
-				/* Root of an SCC? */
+				/* Root of an SCC: pop its members */
 				if (lowlink[v] == idx_arr[v]) {
 					size_t w;
-					/* Record SCC offset */
-					if (n_sccs + 1 >= sccs_cap) {
-						sccs_cap = sccs_cap ? sccs_cap * 2 : 16;
-						scc_offsets = delta_realloc(scc_offsets,
-						    (sccs_cap + 1) * sizeof(*scc_offsets));
-					}
-					scc_offsets[n_sccs] = scc_data_len;
-					/* Pop SCC members from Tarjan stack */
+					size_buf_push(&scc_offs, scc_data.len);
 					do {
 						w = tarjan_stack.data[--tarjan_stack.len];
 						on_stk[w] = false;
-						if (scc_data_len == scc_data_cap) {
-							scc_data_cap = scc_data_cap ? scc_data_cap * 2 : 16;
-							scc_data = delta_realloc(scc_data,
-							    scc_data_cap * sizeof(*scc_data));
-						}
-						scc_data[scc_data_len++] = w;
+						size_buf_push(&scc_data, w);
 					} while (w != v);
 					n_sccs++;
 				}
 			}
 		}
 	}
-	/* Sentinel offset */
-	if (n_sccs + 1 > sccs_cap) {
-		scc_offsets = delta_realloc(scc_offsets,
-		    (n_sccs + 1) * sizeof(*scc_offsets));
-	}
-	scc_offsets[n_sccs] = scc_data_len;
+	size_buf_push(&scc_offs, scc_data.len);  /* sentinel */
 
 	free(idx_arr); free(lowlink); free(on_stk);
 	size_buf_free(&tarjan_stack);
 	stk_buf_free(&call_stack);
 
-	res.data    = scc_data;
-	res.offsets = scc_offsets;
-	res.n_sccs  = n_sccs;
+	/* Transfer ownership of scc_data/scc_offs buffers to result */
+	res.data = scc_data.data; res.offsets = scc_offs.data; res.n_sccs = n_sccs;
 	return res;
 }
 
-/* ── Find cycle in SCC (amortized) ─────────────────────────────────── */
+/* ── find_cycle_in_scc ──────────────────────────────────────────────── */
 /*
  * Find a cycle in the active subgraph of one SCC.
  *
  * Three amortizations give O(|SCC| + E_SCC) total work per SCC:
- *   1. scc_id filter: O(1) per neighbor check, no O(|SCC|) set/clear.
+ *   1. scc_id filter: O(1) per neighbor, no O(|SCC|) set/clear.
  *   2. color persistence: color=2 (fully explored) persists across calls;
- *      vertex removal can only reduce edges, so color=2 is monotone-correct.
- *   3. *scan_start: outer loop resumes where it left off, O(|SCC|) total.
+ *      vertex removal can only reduce edges, so it is monotone-correct.
+ *   3. *scan_start: outer loop resumes where it left off — O(|SCC|) total.
  *
- * Returns 1 if a cycle was found (*cycle_out and *cycle_len populated, caller
- * must free *cycle_out).  Returns 0 if no cycle (SCC is acyclic).
- * color[] entries for path vertices are reset to 0 on cycle found.
- * color=2 entries persist in both cases (monotone-correct).
+ * Returns 1 with *cycle_out / *cycle_len_out populated (caller frees).
+ * Returns 0 if the active subgraph of this SCC is acyclic.
+ * color[] path entries are reset to 0 on cycle found; color=2 persists.
  */
 static int
-find_cycle_in_scc(size_t **adj, size_t *adj_len,
-                  size_t *scc_verts, size_t scc_sz,
-                  size_t sid, size_t *scc_id,
-                  bool *done, uint8_t *color,
+find_cycle_in_scc(const adj_list_t *adj,
+                  const size_t *scc_verts, size_t scc_sz,
+                  size_t sid, const size_t *scc_id,
+                  const bool *done, uint8_t *color,
                   size_t *scan_start,
                   size_t **cycle_out, size_t *cycle_len_out)
 {
-	size_buf_t path;
-	stk_buf_t  stk;
-	size_t     scan = *scan_start;
-
-	size_buf_init(&path);
-	stk_buf_init(&stk);
+	size_buf_t path; size_buf_init(&path);
+	stk_buf_t  stk;  stk_buf_init(&stk);
+	size_t scan = *scan_start;
 
 	while (scan < scc_sz) {
 		size_t start = scc_verts[scan];
@@ -248,14 +332,16 @@ find_cycle_in_scc(size_t **adj, size_t *adj_len,
 		while (stk.len > 0) {
 			size_t v  = stk.data[stk.len - 1].v;
 			size_t ni = stk.data[stk.len - 1].ni;
-			bool advanced = false;
+			bool   advanced = false;
 			size_t k;
 
-			while (ni < adj_len[v]) {
-				size_t w = adj[v][ni++];
+			while (ni < adj->nbr_len[v]) {
+				size_t w = adj->nbrs[v][ni++];
 				if (scc_id[w] != sid || done[w]) { continue; }
 				if (color[w] == 1) {
-					/* Back-edge: cycle found */
+					/* Back-edge: cycle found.  w is on the current path
+					 * (color[w]==1 was just confirmed), so the scan below
+					 * is guaranteed to terminate before path.len. */
 					size_t pos = 0;
 					while (path.data[pos] != w) { pos++; }
 					*cycle_len_out = path.len - pos;
@@ -263,12 +349,9 @@ find_cycle_in_scc(size_t **adj, size_t *adj_len,
 					    *cycle_len_out * sizeof(**cycle_out));
 					memcpy(*cycle_out, path.data + pos,
 					    *cycle_len_out * sizeof(**cycle_out));
-					for (k = 0; k < path.len; k++) {
-						color[path.data[k]] = 0;
-					}
+					for (k = 0; k < path.len; k++) { color[path.data[k]] = 0; }
 					*scan_start = scan;
-					size_buf_free(&path);
-					stk_buf_free(&stk);
+					size_buf_free(&path); stk_buf_free(&stk);
 					return 1;
 				}
 				if (color[w] == 0) {
@@ -282,21 +365,271 @@ find_cycle_in_scc(size_t **adj, size_t *adj_len,
 			}
 			if (!advanced) {
 				stk.len--;
-				color[v] = 2; /* Fully explored — persists across calls */
+				color[v] = 2;  /* Fully explored — persists across calls */
 				path.len--;
 			}
 		}
-		/* start's reachable SCC-subgraph explored; no cycle */
 		scan++;
 	}
 
 	*scan_start = scan;
-	size_buf_free(&path);
-	stk_buf_free(&stk);
+	size_buf_free(&path); stk_buf_free(&stk);
 	return 0;
 }
 
-/* ── Make in-place ─────────────────────────────────────────────────── */
+/* ── build_crwi_digraph ─────────────────────────────────────────────── */
+/*
+ * Build the CRWI digraph over n copy commands.
+ *
+ * O(n log n + E) sweep-line: sort writes by dst, then for each read
+ * interval use two binary searches to find all overlapping writes.
+ * Write destinations are non-overlapping (each output byte written once),
+ * so the overlapping writes form a contiguous range [lo, hi) in sorted
+ * order, plus at most one write at lo-1 that starts before si but
+ * extends into it.
+ */
+static adj_list_t
+build_crwi_digraph(const copy_info_t *copies, size_t n)
+{
+	adj_list_t    adj          = adj_list_alloc(n);
+	write_pair_t *pairs        = delta_malloc(n * sizeof(*pairs));
+	size_t       *write_sorted = delta_malloc(n * sizeof(*write_sorted));
+	size_t       *write_starts = delta_malloc(n * sizeof(*write_starts));
+	size_t i, j, k;
+
+	for (i = 0; i < n; i++) { pairs[i].dst = copies[i].dst; pairs[i].idx = i; }
+	qsort(pairs, n, sizeof(*pairs), cmp_write_pair);
+	for (i = 0; i < n; i++) {
+		write_sorted[i] = pairs[i].idx;
+		write_starts[i] = pairs[i].dst;
+	}
+	free(pairs);
+
+	for (i = 0; i < n; i++) {
+		size_t si       = copies[i].src;
+		size_t read_end = si + copies[i].length;
+
+		/* lo = first k with write_starts[k] >= si */
+		size_t lo;
+		{ size_t a = 0, b = n;
+		  while (a < b) { size_t m = a + (b-a)/2;
+		                  if (write_starts[m] < si) a = m+1; else b = m; }
+		  lo = a; }
+
+		/* hi = first k with write_starts[k] >= read_end */
+		size_t hi;
+		{ size_t a = lo, b = n;
+		  while (a < b) { size_t m = a + (b-a)/2;
+		                  if (write_starts[m] < read_end) a = m+1; else b = m; }
+		  hi = a; }
+
+		/* Write at lo-1 starts before si; overlaps iff its end > si */
+		if (lo > 0) {
+			j = write_sorted[lo - 1];
+			if (j != i && copies[j].dst + copies[j].length > si) {
+				adj_list_push(&adj, i, j);
+			}
+		}
+		/* All writes in [lo, hi) start within [si, read_end) */
+		for (k = lo; k < hi; k++) {
+			j = write_sorted[k];
+			if (j != i) { adj_list_push(&adj, i, j); }
+		}
+	}
+
+	free(write_sorted); free(write_starts);
+	return adj;
+}
+
+/* ── build_scc_list ─────────────────────────────────────────────────── */
+/*
+ * Build a working SCC list from raw Tarjan output.
+ * Filters to non-trivial SCCs (length > 1) and reverses to source-first
+ * order (Tarjan emits sinks first).  Initialises active[] to SCC sizes
+ * for tracking how many vertices remain unprocessed per SCC.
+ */
+static scc_list_t
+build_scc_list(const scc_result_t *sccs, size_t n)
+{
+	scc_list_t sl;
+	size_t i, j, k, vpos;
+
+	sl.id = delta_malloc(n * sizeof(*sl.id));
+	memset(sl.id, 0xFF, n * sizeof(*sl.id));  /* SIZE_MAX = trivial */
+
+	sl.len = 0;
+	for (i = 0; i < sccs->n_sccs; i++) {
+		if (sccs->offsets[i+1] - sccs->offsets[i] > 1) { sl.len++; }
+	}
+
+	sl.verts  = delta_malloc(n * sizeof(*sl.verts));
+	sl.offs   = delta_malloc((sl.len + 1) * sizeof(*sl.offs));
+	sl.active = delta_calloc(sl.len > 0 ? sl.len : 1, sizeof(*sl.active));
+
+	/* Source-first = reverse of Tarjan's sinks-first emission */
+	k = 0; vpos = 0;
+	for (i = sccs->n_sccs; i-- > 0; ) {
+		size_t scc_sz = sccs->offsets[i+1] - sccs->offsets[i];
+		if (scc_sz <= 1) { continue; }
+		size_t *sv = sccs->data + sccs->offsets[i];
+		sl.offs[k] = vpos;
+		for (j = 0; j < scc_sz; j++) {
+			sl.id[sv[j]] = k;
+			sl.verts[vpos++] = sv[j];
+		}
+		sl.active[k] = scc_sz;
+		k++;
+	}
+	sl.offs[k] = vpos;  /* sentinel */
+	return sl;
+}
+
+/* ── pick_victim ────────────────────────────────────────────────────── */
+/*
+ * Select a copy to materialise as a literal add in order to break a
+ * CRWI cycle.  scc_cursor and scan_pos are in/out: they track position
+ * within the SCC list across successive calls so per-SCC DFS work is
+ * amortised over the full Kahn run.
+ *
+ * Returns the index into copies[] of the chosen victim.
+ */
+static size_t
+pick_victim(const adj_list_t *adj,
+            const copy_info_t *copies, size_t n,
+            delta_cycle_policy_t policy,
+            const scc_list_t *sl,
+            const bool *done, uint8_t *color,
+            size_t *scc_cursor, size_t *scan_pos)
+{
+	size_t victim = n;  /* n = invalid sentinel */
+	size_t i;
+
+	if (policy == POLICY_CONSTANT) {
+		for (i = 0; i < n && victim == n; i++) {
+			if (!done[i]) { victim = i; }
+		}
+		return victim;
+	}
+
+	/* POLICY_LOCALMIN: find the shortest copy in an active cycle */
+	while (victim == n) {
+		while (*scc_cursor < sl->len && sl->active[*scc_cursor] == 0) {
+			(*scc_cursor)++; *scan_pos = 0;
+		}
+		if (*scc_cursor >= sl->len) {
+			/* Safety fallback: pick any remaining vertex */
+			for (i = 0; i < n && victim == n; i++) {
+				if (!done[i]) { victim = i; }
+			}
+			break;
+		}
+		size_t *sv      = sl->verts + sl->offs[*scc_cursor];
+		size_t  sv_len  = sl->offs[*scc_cursor + 1] - sl->offs[*scc_cursor];
+		size_t *cycle   = NULL;
+		size_t  cyc_len = 0;
+		if (find_cycle_in_scc(adj, sv, sv_len, *scc_cursor, sl->id,
+		                       done, color, scan_pos, &cycle, &cyc_len)) {
+			size_t ci;
+			victim = cycle[0];
+			for (ci = 1; ci < cyc_len; ci++) {
+				size_t v = cycle[ci];
+				if (copies[v].length < copies[victim].length ||
+				    (copies[v].length == copies[victim].length && v < victim)) {
+					victim = v;
+				}
+			}
+			free(cycle);
+		} else {
+			(*scc_cursor)++; *scan_pos = 0;
+		}
+	}
+	return victim;
+}
+
+/* ── run_kahn ───────────────────────────────────────────────────────── */
+/*
+ * Global Kahn topological sort with SCC-scoped cycle breaking.
+ * Fills topo_order[0..return-value) with copy indices in topological
+ * order.  Materialised victims are appended to *adds.
+ */
+static size_t
+run_kahn(const adj_list_t *adj,
+          const copy_info_t *copies, size_t n,
+          const uint8_t *r,
+          delta_cycle_policy_t policy,
+          adds_t *adds,
+          size_t *topo_order)
+{
+	scc_result_t raw  = tarjan_scc(adj);
+	scc_list_t   sl   = build_scc_list(&raw, n);
+	scc_result_free(&raw);
+
+	size_t   *in_deg    = delta_calloc(n, sizeof(*in_deg));
+	bool     *done      = delta_calloc(n, sizeof(*done));
+	uint8_t  *color     = delta_calloc(n, sizeof(*color));
+	size_t    scc_cursor = 0, scan_pos = 0;
+	size_t    topo_len = 0, processed = 0;
+	size_t    i, k;
+
+	for (i = 0; i < n; i++) {
+		for (k = 0; k < adj->nbr_len[i]; k++) { in_deg[adj->nbrs[i][k]]++; }
+	}
+
+	minheap_t heap; minheap_init(&heap, n + 1);
+	for (i = 0; i < n; i++) {
+		if (in_deg[i] == 0) {
+			heap_entry_t e = { copies[i].length, i };
+			minheap_push(&heap, e);
+		}
+	}
+
+	while (processed < n) {
+		/* Drain all zero-in-degree vertices */
+		while (heap.len > 0) {
+			heap_entry_t top = minheap_pop(&heap);
+			size_t v = top.idx;
+			if (done[v]) { continue; }
+			done[v] = true;
+			topo_order[topo_len++] = v;
+			processed++;
+			if (sl.id[v] != SIZE_MAX) { sl.active[sl.id[v]]--; }
+			for (k = 0; k < adj->nbr_len[v]; k++) {
+				size_t w = adj->nbrs[v][k];
+				if (!done[w] && --in_deg[w] == 0) {
+					heap_entry_t e = { copies[w].length, w };
+					minheap_push(&heap, e);
+				}
+			}
+		}
+
+		if (processed >= n) { break; }
+
+		/* Heap stalled — materialise the cycle victim */
+		size_t victim = pick_victim(adj, copies, n, policy, &sl,
+		                             done, color, &scc_cursor, &scan_pos);
+		{
+			uint8_t *mat = delta_malloc(copies[victim].length);
+			memcpy(mat, r + copies[victim].src, copies[victim].length);
+			adds_push(adds, copies[victim].dst, mat, copies[victim].length);
+		}
+		done[victim] = true;
+		processed++;
+		if (sl.id[victim] != SIZE_MAX) { sl.active[sl.id[victim]]--; }
+		for (k = 0; k < adj->nbr_len[victim]; k++) {
+			size_t w = adj->nbrs[victim][k];
+			if (!done[w] && --in_deg[w] == 0) {
+				heap_entry_t e = { copies[w].length, w };
+				minheap_push(&heap, e);
+			}
+		}
+	}
+
+	scc_list_free(&sl);
+	free(in_deg); free(done); free(color); minheap_free(&heap);
+	return topo_len;
+}
+
+/* ── delta_make_inplace ─────────────────────────────────────────────── */
 
 delta_placed_commands_t
 delta_make_inplace(const uint8_t *r, size_t r_len,
@@ -304,433 +637,80 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
                    delta_cycle_policy_t policy)
 {
 	delta_placed_commands_t result;
-	copy_info_t *copies = NULL;
-	size_t n_copies = 0, n_copies_cap = 0;
-	size_t *add_dsts = NULL;
-	uint8_t **add_datas = NULL;
-	size_t *add_lens = NULL;
-	size_t n_adds = 0, n_adds_cap = 0;
-	size_t write_pos = 0;
-	size_t i, j, n;
-	size_t **adj;
-	size_t *adj_len, *adj_cap;
-	size_t *topo_order;
-	size_t topo_len = 0;
-
 	delta_placed_commands_init(&result);
-
 	if (cmds->len == 0) { return result; }
-
 	(void)r_len;
 
-	/* Step 1: separate copies and adds, compute write offsets */
+	/* Step 1: separate copies and adds, assign sequential write offsets */
+	copy_info_t *copies = NULL;
+	size_t n_copies = 0, n_copies_cap = 0;
+	adds_t adds; adds_init(&adds);
+	size_t write_pos = 0;
+	size_t i;
+
 	for (i = 0; i < cmds->len; i++) {
 		const delta_command_t *cmd = &cmds->data[i];
 		if (cmd->tag == CMD_COPY) {
 			if (n_copies == n_copies_cap) {
 				n_copies_cap = n_copies_cap ? n_copies_cap * 2 : 16;
-				copies = delta_realloc(copies,
-				                 n_copies_cap * sizeof(*copies));
+				copies = delta_realloc(copies, n_copies_cap * sizeof(*copies));
 			}
-			copies[n_copies].idx = n_copies;
-			copies[n_copies].src = cmd->copy.offset;
-			copies[n_copies].dst = write_pos;
+			copies[n_copies].idx    = n_copies;
+			copies[n_copies].src    = cmd->copy.offset;
+			copies[n_copies].dst    = write_pos;
 			copies[n_copies].length = cmd->copy.length;
 			n_copies++;
 			write_pos += cmd->copy.length;
 		} else {
-			if (n_adds == n_adds_cap) {
-				n_adds_cap = n_adds_cap ? n_adds_cap * 2 : 16;
-				add_dsts = delta_realloc(add_dsts,
-				                   n_adds_cap * sizeof(*add_dsts));
-				add_datas = delta_realloc(add_datas,
-				                    n_adds_cap * sizeof(*add_datas));
-				add_lens = delta_realloc(add_lens,
-				                   n_adds_cap * sizeof(*add_lens));
-			}
-			add_dsts[n_adds] = write_pos;
-			add_datas[n_adds] = delta_malloc(cmd->add.length);
-			memcpy(add_datas[n_adds], cmd->add.data, cmd->add.length);
-			add_lens[n_adds] = cmd->add.length;
-			n_adds++;
+			uint8_t *data = delta_malloc(cmd->add.length);
+			memcpy(data, cmd->add.data, cmd->add.length);
+			adds_push(&adds, write_pos, data, cmd->add.length);
 			write_pos += cmd->add.length;
 		}
 	}
 
-	n = n_copies;
+	size_t n = n_copies;
 	if (n == 0) {
-		for (i = 0; i < n_adds; i++) {
+		for (i = 0; i < adds.len; i++) {
 			delta_placed_command_t pc;
-			pc.tag = PCMD_ADD;
-			pc.add.dst = add_dsts[i];
-			pc.add.data = add_datas[i];
-			pc.add.length = add_lens[i];
+			pc.tag        = PCMD_ADD;
+			pc.add.dst    = adds.dsts[i];
+			pc.add.data   = adds.datas[i];
+			pc.add.length = adds.lens[i];
 			delta_placed_commands_push(&result, pc);
 		}
-		free(copies); free(add_dsts); free(add_datas); free(add_lens);
+		free(copies); free(adds.dsts); free(adds.datas); free(adds.lens);
 		return result;
 	}
 
 	/* Step 2: build CRWI digraph */
-	adj = delta_calloc(n, sizeof(*adj));
-	adj_len = delta_calloc(n, sizeof(*adj_len));
-	adj_cap = delta_calloc(n, sizeof(*adj_cap));
+	adj_list_t adj = build_crwi_digraph(copies, n);
 
-	/* O(n log n + E) sweep-line: sort writes by dst, then for each read
-	 * interval use two binary searches to find all overlapping writes.
-	 * dst intervals are non-overlapping (each output byte written once),
-	 * so the overlapping writes form a contiguous range in sorted order:
-	 *   [lo, hi)  — writes whose dst start falls within [si, read_end)
-	 * plus at most one write at lo-1 that starts before si but extends
-	 * past it. */
-	{
-		write_pair_t *pairs   = delta_malloc(n * sizeof(*pairs));
-		size_t       *write_sorted = delta_malloc(n * sizeof(*write_sorted));
-		size_t       *write_starts = delta_malloc(n * sizeof(*write_starts));
+	/* Step 3: Kahn topological sort with cycle breaking */
+	size_t *topo_order = delta_malloc(n * sizeof(*topo_order));
+	size_t  topo_len   = run_kahn(&adj, copies, n, r, policy, &adds, topo_order);
 
-		for (i = 0; i < n; i++) {
-			pairs[i].dst = copies[i].dst;
-			pairs[i].idx = i;
-		}
-		qsort(pairs, n, sizeof(*pairs), cmp_write_pair);
-		for (i = 0; i < n; i++) {
-			write_sorted[i] = pairs[i].idx;
-			write_starts[i] = pairs[i].dst;
-		}
-		free(pairs);
-
-		for (i = 0; i < n; i++) {
-			size_t si       = copies[i].src;
-			size_t read_end = si + copies[i].length;
-
-			/* lo = first k with write_starts[k] >= si */
-			size_t lo_lo = 0, lo_hi = n;
-			while (lo_lo < lo_hi) {
-				size_t mid = lo_lo + (lo_hi - lo_lo) / 2;
-				if (write_starts[mid] < si) lo_lo = mid + 1;
-				else lo_hi = mid;
-			}
-			size_t lo = lo_lo;
-
-			/* hi = first k with write_starts[k] >= read_end */
-			size_t hi_lo = lo, hi_hi = n;
-			while (hi_lo < hi_hi) {
-				size_t mid = hi_lo + (hi_hi - hi_lo) / 2;
-				if (write_starts[mid] < read_end) hi_lo = mid + 1;
-				else hi_hi = mid;
-			}
-			size_t hi = hi_lo;
-
-#define ADD_EDGE(jj) \
-			do { \
-				if (adj_len[i] == adj_cap[i]) { \
-					adj_cap[i] = adj_cap[i] ? adj_cap[i] * 2 : 4; \
-					adj[i] = delta_realloc(adj[i], \
-					    adj_cap[i] * sizeof(*adj[i])); \
-				} \
-				adj[i][adj_len[i]++] = (jj); \
-			} while (0)
-
-			/* Write at lo-1 starts before si; overlaps iff end > si */
-			if (lo > 0) {
-				size_t jj = write_sorted[lo - 1];
-				if (jj != i &&
-				    copies[jj].dst + copies[jj].length > si) {
-					ADD_EDGE(jj);
-				}
-			}
-			/* All writes in [lo, hi) start within [si, read_end) */
-			for (j = lo; j < hi; j++) {
-				size_t jj = write_sorted[j];
-				if (jj != i) { ADD_EDGE(jj); }
-			}
-#undef ADD_EDGE
-		}
-		free(write_sorted);
-		free(write_starts);
-	}
-
-	/* Step 3: Kahn topological sort with Tarjan-scoped cycle breaking.
-	 * Global Kahn preserves the cascade effect (victim conversion decrements
-	 * in_deg globally, potentially freeing vertices across SCC boundaries).
-	 * find_cycle_in_scc restricts DFS to one SCC via three amortizations:
-	 * scc_id filter, color=2 persistence, scan_start resumption.
-	 * Total cycle-breaking work: O(n+E).
-	 * R.E. Tarjan, SIAM J. Comput., 1(2):146-160, June 1972. */
-	{
-		scc_result_t sccs = tarjan_scc(adj, adj_len, n);
-
-		/* Build global in_deg */
-		size_t *in_deg = delta_calloc(n, sizeof(*in_deg));
-		{
-			size_t ii;
-			for (ii = 0; ii < n; ii++) {
-				for (j = 0; j < adj_len[ii]; j++) {
-					in_deg[adj[ii][j]]++;
-				}
-			}
-		}
-
-		/* Build scc_id and scc_list (non-trivial SCCs in source-first order).
-		 * scc_list_verts / scc_list_offs mirror the scc_result layout but
-		 * only include non-trivial SCCs, ordered sources-first. */
-		size_t *scc_id = delta_malloc(n * sizeof(*scc_id));
-		memset(scc_id, 0xFF, n * sizeof(*scc_id)); /* SIZE_MAX = trivial */
-
-		size_t scc_list_len = 0;
-		{
-			size_t si;
-			for (si = 0; si < sccs.n_sccs; si++) {
-				if (sccs.offsets[si + 1] - sccs.offsets[si] > 1) {
-					scc_list_len++;
-				}
-			}
-		}
-
-		/* scc_list_verts / scc_list_offs: non-trivial SCCs, sources first */
-		size_t *scc_list_verts = delta_malloc(
-		    (n + 1)          * sizeof(*scc_list_verts));
-		size_t *scc_list_offs  = delta_malloc(
-		    (scc_list_len + 1) * sizeof(*scc_list_offs));
-		size_t *scc_active     = delta_calloc(
-		    (scc_list_len > 0 ? scc_list_len : 1), sizeof(*scc_active));
-		{
-			size_t si, k = 0, vpos = 0;
-			/* source-first = reverse of Tarjan sinks-first emission */
-			for (si = sccs.n_sccs; si-- > 0; ) {
-				size_t scc_sz = sccs.offsets[si + 1] - sccs.offsets[si];
-				if (scc_sz <= 1) { continue; }
-				size_t *sv = sccs.data + sccs.offsets[si];
-				size_t vi;
-				scc_list_offs[k] = vpos;
-				for (vi = 0; vi < scc_sz; vi++) {
-					scc_id[sv[vi]] = k;
-					scc_list_verts[vpos++] = sv[vi];
-				}
-				scc_active[k] = scc_sz;
-				k++;
-			}
-			scc_list_offs[k] = vpos;
-		}
-
-		bool    *done     = delta_calloc(n, sizeof(*done));
-		uint8_t *color    = delta_calloc(n, sizeof(*color));
-		size_t   scc_ptr  = 0;
-		size_t   scan_pos = 0;
-
-		topo_order = delta_malloc(n * sizeof(*topo_order));
-
-		/* Min-heap entries: (copy_length, vertex_index) */
-		typedef struct { size_t len; size_t idx; } heap_entry_t;
-		size_t heap_len = 0, heap_cap = n + 1;
-		heap_entry_t *heap = delta_malloc(heap_cap * sizeof(*heap));
-
-		#define HEAP_PARENT(k) (((k) - 1) / 2)
-		#define HEAP_LEFT(k)   (2 * (k) + 1)
-		#define HEAP_RIGHT(k)  (2 * (k) + 2)
-		#define HEAP_LT(a, b)  ((a).len < (b).len || \
-		                         ((a).len == (b).len && (a).idx < (b).idx))
-
-		#define HEAP_PUSH(e) do {                              \
-			if (heap_len == heap_cap) {                    \
-				heap_cap *= 2;                         \
-				heap = delta_realloc(heap,             \
-				    heap_cap * sizeof(*heap));         \
-			}                                              \
-			heap[heap_len] = (e);                          \
-			size_t _k = heap_len++;                        \
-			while (_k > 0 && HEAP_LT(heap[_k],            \
-			                  heap[HEAP_PARENT(_k)])) {    \
-				heap_entry_t _tmp = heap[_k];          \
-				heap[_k] = heap[HEAP_PARENT(_k)];      \
-				heap[HEAP_PARENT(_k)] = _tmp;          \
-				_k = HEAP_PARENT(_k);                  \
-			}                                              \
-		} while (0)
-
-		#define HEAP_POP(out) do {                             \
-			(out) = heap[0];                               \
-			heap[0] = heap[--heap_len];                    \
-			size_t _k = 0;                                 \
-			for (;;) {                                     \
-				size_t _s = _k;                        \
-				size_t _l = HEAP_LEFT(_k);             \
-				size_t _r = HEAP_RIGHT(_k);            \
-				if (_l < heap_len &&                   \
-				    HEAP_LT(heap[_l], heap[_s]))       \
-					_s = _l;                       \
-				if (_r < heap_len &&                   \
-				    HEAP_LT(heap[_r], heap[_s]))       \
-					_s = _r;                       \
-				if (_s == _k) break;                   \
-				heap_entry_t _tmp = heap[_k];          \
-				heap[_k] = heap[_s];                   \
-				heap[_s] = _tmp;                       \
-				_k = _s;                               \
-			}                                              \
-		} while (0)
-
-		/* Seed heap with zero in-degree vertices */
-		{
-			size_t ii;
-			for (ii = 0; ii < n; ii++) {
-				if (in_deg[ii] == 0) {
-					heap_entry_t e = { copies[ii].length, ii };
-					HEAP_PUSH(e);
-				}
-			}
-		}
-
-		size_t processed = 0;
-
-		while (processed < n) {
-			/* Drain all ready vertices */
-			while (heap_len > 0) {
-				heap_entry_t top;
-				HEAP_POP(top);
-				size_t v = top.idx;
-				if (done[v]) { continue; }
-				done[v] = true;
-				topo_order[topo_len++] = v;
-				processed++;
-				if (scc_id[v] != SIZE_MAX) { scc_active[scc_id[v]]--; }
-				for (j = 0; j < adj_len[v]; j++) {
-					size_t w = adj[v][j];
-					if (!done[w]) {
-						in_deg[w]--;
-						if (in_deg[w] == 0) {
-							heap_entry_t e = {
-							    copies[w].length, w
-							};
-							HEAP_PUSH(e);
-						}
-					}
-				}
-			}
-
-			if (processed >= n) { break; }
-
-			/* Kahn stalled: choose victim */
-			size_t victim = n; /* invalid sentinel */
-
-			if (policy == POLICY_CONSTANT) {
-				size_t ii;
-				for (ii = 0; ii < n && victim == n; ii++) {
-					if (!done[ii]) { victim = ii; }
-				}
-			} else { /* POLICY_LOCALMIN */
-				while (victim == n) {
-					while (scc_ptr < scc_list_len &&
-					       scc_active[scc_ptr] == 0) {
-						scc_ptr++;
-						scan_pos = 0;
-					}
-					if (scc_ptr >= scc_list_len) {
-						/* Safety fallback */
-						size_t ii;
-						for (ii = 0; ii < n && victim == n; ii++) {
-							if (!done[ii]) { victim = ii; }
-						}
-						break;
-					}
-					size_t *sv     = scc_list_verts +
-					                  scc_list_offs[scc_ptr];
-					size_t  sv_len = scc_list_offs[scc_ptr + 1] -
-					                  scc_list_offs[scc_ptr];
-					size_t *cyc     = NULL;
-					size_t  cyc_len = 0;
-					int found = find_cycle_in_scc(
-					    adj, adj_len, sv, sv_len,
-					    scc_ptr, scc_id, done, color,
-					    &scan_pos, &cyc, &cyc_len);
-					if (found) {
-						size_t ci;
-						victim = cyc[0];
-						for (ci = 1; ci < cyc_len; ci++) {
-							size_t v = cyc[ci];
-							if (copies[v].length < copies[victim].length ||
-							    (copies[v].length == copies[victim].length
-							     && v < victim)) {
-								victim = v;
-							}
-						}
-						free(cyc);
-					} else {
-						/* SCC's remaining subgraph is acyclic; advance */
-						scc_ptr++;
-						scan_pos = 0;
-					}
-				}
-			}
-
-			/* Convert victim: copy -> add (materialize) */
-			if (n_adds == n_adds_cap) {
-				n_adds_cap = n_adds_cap ? n_adds_cap * 2 : 16;
-				add_dsts  = delta_realloc(add_dsts,
-				                 n_adds_cap * sizeof(*add_dsts));
-				add_datas = delta_realloc(add_datas,
-				                 n_adds_cap * sizeof(*add_datas));
-				add_lens  = delta_realloc(add_lens,
-				                 n_adds_cap * sizeof(*add_lens));
-			}
-			add_dsts[n_adds]  = copies[victim].dst;
-			add_datas[n_adds] = delta_malloc(copies[victim].length);
-			memcpy(add_datas[n_adds], &r[copies[victim].src],
-			       copies[victim].length);
-			add_lens[n_adds] = copies[victim].length;
-			n_adds++;
-
-			done[victim] = true;
-			processed++;
-			if (scc_id[victim] != SIZE_MAX) { scc_active[scc_id[victim]]--; }
-			for (j = 0; j < adj_len[victim]; j++) {
-				size_t w = adj[victim][j];
-				if (!done[w]) {
-					in_deg[w]--;
-					if (in_deg[w] == 0) {
-						heap_entry_t e = { copies[w].length, w };
-						HEAP_PUSH(e);
-					}
-				}
-			}
-		}
-
-		#undef HEAP_PARENT
-		#undef HEAP_LEFT
-		#undef HEAP_RIGHT
-		#undef HEAP_LT
-		#undef HEAP_PUSH
-		#undef HEAP_POP
-
-		scc_result_free(&sccs);
-		free(in_deg); free(scc_id);
-		free(scc_list_verts); free(scc_list_offs); free(scc_active);
-		free(done); free(color); free(heap);
-	}
-
-	/* Step 4: assemble result — copies in topo order, then adds */
+	/* Step 4: assemble result — copies in topo order, then all adds */
 	for (i = 0; i < topo_len; i++) {
+		size_t ci = topo_order[i];
 		delta_placed_command_t pc;
-		pc.tag = PCMD_COPY;
-		pc.copy.src = copies[topo_order[i]].src;
-		pc.copy.dst = copies[topo_order[i]].dst;
-		pc.copy.length = copies[topo_order[i]].length;
+		pc.tag         = PCMD_COPY;
+		pc.copy.src    = copies[ci].src;
+		pc.copy.dst    = copies[ci].dst;
+		pc.copy.length = copies[ci].length;
 		delta_placed_commands_push(&result, pc);
 	}
-	for (i = 0; i < n_adds; i++) {
+	for (i = 0; i < adds.len; i++) {
 		delta_placed_command_t pc;
-		pc.tag = PCMD_ADD;
-		pc.add.dst = add_dsts[i];
-		pc.add.data = add_datas[i]; /* ownership transferred */
-		pc.add.length = add_lens[i];
+		pc.tag        = PCMD_ADD;
+		pc.add.dst    = adds.dsts[i];
+		pc.add.data   = adds.datas[i];  /* ownership transferred */
+		pc.add.length = adds.lens[i];
 		delta_placed_commands_push(&result, pc);
 	}
 
-	/* Cleanup */
-	for (i = 0; i < n; i++) { free(adj[i]); }
-	free(adj); free(adj_len); free(adj_cap);
+	adj_list_free(&adj);
 	free(topo_order);
-	free(copies); free(add_dsts); free(add_datas); free(add_lens);
-
+	free(copies); free(adds.dsts); free(adds.datas); free(adds.lens);
 	return result;
 }
