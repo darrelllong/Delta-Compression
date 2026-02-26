@@ -156,7 +156,7 @@ public final class Delta {
 
         Encoding.DecodeResult result = Encoding.decodeDelta(deltaBytes);
 
-        /* Pre-check: verify reference matches embedded src_crc. */
+        // Pre-check: verify reference matches embedded src_crc.
         byte[] rCrc = Hash.Crc64.hash8(r);
         if (!Arrays.equals(rCrc, result.srcCrc())) {
             if (!ignoreHash) {
@@ -177,11 +177,11 @@ public final class Delta {
         }
         long elapsed = System.nanoTime() - t0;
 
-        /* Write output and compute CRC. */
+        // Write output and compute CRC.
         writeFile(outPath, out);
         byte[] outCrc = Hash.Crc64.hash8(out);
 
-        /* Post-check: verify output matches embedded dst_crc. */
+        // Post-check: verify output matches embedded dst_crc.
         if (!Arrays.equals(outCrc, result.dstCrc())) {
             if (!ignoreHash) {
                 System.err.println("output integrity check failed");

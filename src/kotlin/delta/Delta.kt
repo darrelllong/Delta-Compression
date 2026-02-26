@@ -143,7 +143,7 @@ private fun decode(args: Array<String>) {
     val deltaBytes = readFile(deltaPath)
     val result     = decodeDelta(deltaBytes)
 
-    /* Pre-check: verify reference matches embedded src_crc. */
+    // Pre-check: verify reference matches embedded src_crc.
     val rCrc = Crc64.hash8(r)
     if (!rCrc.contentEquals(result.srcCrc)) {
         if (!ignoreHash) {
@@ -165,7 +165,7 @@ private fun decode(args: Array<String>) {
     writeFile(outPath, out)
     val outCrc = Crc64.hash8(out)
 
-    /* Post-check: verify output matches embedded dst_crc. */
+    // Post-check: verify output matches embedded dst_crc.
     if (!outCrc.contentEquals(result.dstCrc)) {
         if (!ignoreHash) {
             System.err.println("output integrity check failed")
