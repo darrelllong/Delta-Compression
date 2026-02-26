@@ -239,7 +239,7 @@ private def runKahn(
 
   val removed   = new Array[Boolean](n)
   val topoOrder = mutable.ListBuffer[Int]()
-  val color  = new Array[Int](n)   // 0=unvisited, 1=on-path, 2=done
+  val color  = new Array[Int](n)   // ColorUnvisited initially
   val cursor = new ScanCursor()
 
   given Ordering[Array[Int]] = Ordering.by((a: Array[Int]) => (a(0), a(1))).reverse

@@ -2,16 +2,34 @@ package delta
 
 import scala.collection.mutable
 
-/**
- * Correcting 1.5-Pass algorithm (Section 7, Figure 8) with
- * fingerprint-based checkpointing (Section 8).
- *
- * |C| = q (hash table capacity, auto-sized from input).
- * |F| = next_prime(2 * num_R_seeds) (footprint universe, Section 8.1).
- * m  = ceil(|F| / |C|) (checkpoint spacing, p. 348).
- * k  = checkpoint class (Eq. 3, p. 348).
- */
+// ── Correcting 1.5-Pass algorithm (Section 7, Figure 8) ─────────────────────
+//
+// Scans V once with a fingerprint-keyed hash table built from R.  A checkpoint
+// test (Section 8) limits which R seeds are stored, keeping the table sparse:
+//
+//   |C| = q  (hash table capacity, auto-sized from input length)
+//   |F| = next_prime(2 * num_R_seeds)  (footprint universe, Section 8.1)
+//   m   = ceil(|F| / |C|)              (checkpoint spacing, p. 348)
+//   k   = (fp(V[|V|/2]) % |F|) % m    (checkpoint class, Eq. 3, p. 348)
+//
+// A seed at R[a] is stored only when (fp(R[a]) % |F|) % m == k.
+// A position in V triggers a lookup only when its fingerprint passes the same test.
+// This keeps expected table occupancy ≈ 50 % regardless of input size.
 
+/**
+ * One entry in the correction lookback buffer (Section 5.2).
+ *
+ * The correcting algorithm may discover that a newly found match overlaps
+ * commands it already emitted.  The buffer holds the most recent bufCap
+ * tentative commands so they can be trimmed or cancelled (tail correction)
+ * when a better match is found.  Commands are flushed to the output list
+ * as they age out of the buffer.
+ *
+ * @param vStart First V byte covered by this entry.
+ * @param vEnd   One past the last V byte covered.
+ * @param cmd    The tentative command (Add or Copy).
+ * @param dummy  Reserved; always false in the current implementation.
+ */
 private class BufEntry(val vStart: Int, var vEnd: Int, var cmd: Command, val dummy: Boolean)
 
 def diffCorrecting(r: Array[Byte], v: Array[Byte], opts: DiffOptions): List[Command] = {
@@ -178,17 +196,17 @@ def diffCorrecting(r: Array[Byte], v: Array[Byte], opts: DiffOptions): List[Comm
                       buf.removeLast()
                     } else if tail.vEnd > vM && tail.vStart < vM then {
                       tail.cmd match {
-                      case _: Command.Add =>
-                        val keep = vM - tail.vStart
-                        if keep > 0 then {
-                          tail.cmd  = Command.Add(v.slice(tail.vStart, vM))
-                          tail.vEnd = vM
-                        } else {
-                          buf.removeLast()
-                        }
-                        effectiveStart = math.min(effectiveStart, vM)
-                      case _ =>
-                    }
+                        case _: Command.Add =>
+                          val keep = vM - tail.vStart
+                          if keep > 0 then {
+                            tail.cmd  = Command.Add(v.slice(tail.vStart, vM))
+                            tail.vEnd = vM
+                          } else {
+                            buf.removeLast()
+                          }
+                          effectiveStart = math.min(effectiveStart, vM)
+                        case _ =>
+                      }
                       correcting = false
                     } else correcting = false
                   }

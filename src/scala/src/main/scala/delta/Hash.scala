@@ -76,12 +76,20 @@ class RollingHash(data: Array[Byte], offset: Int, p: Int) {
 // ── Primality testing ──────────────────────────────────────────────────────
 
 /**
- * Fixed witnesses for deterministic Miller-Rabin.
- * Sufficient for all n < 3,317,044,064,679,887,385,961,981 (> 2^81).
- * Jaeschke, Math. Comp. 61(204), 1993.
+ * Fixed witnesses for deterministic Miller-Rabin primality testing.
+ * These 12 bases are sufficient for all n < 3.3×10^24 (well above 2^30 table limit).
+ * G. Jaeschke, "On strong pseudoprimes to several bases," Math. Comp. 61(204), 1993.
  */
 private val mrWitnesses = Array[Long](2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37)
 
+/**
+ * Deterministic Miller-Rabin primality test.
+ *
+ * Writes n-1 = 2^r * d, then for each witness a checks whether
+ * a^d ≡ 1 (mod n) or a^{2^j d} ≡ -1 (mod n) for some j < r.
+ * If neither holds, n is composite.  With the fixed witnesses above,
+ * the test is deterministic for all n relevant to hash table sizing.
+ */
 def isPrime(n: Long): Boolean = {
   if n < 2L then return false
   if n < 4L then return true

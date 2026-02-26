@@ -22,6 +22,7 @@ import java.nio.file.{Files, Path}
     case e: java.io.IOException      => System.err.println(e.getMessage); sys.exit(1)
   }
 
+/** Dispatch to the appropriate subcommand based on the first argument. */
 private def run(args: Array[String]): Unit = {
   if args.isEmpty then usage()
   args(0) match {
@@ -56,6 +57,7 @@ private def usage(): Nothing = throw new IllegalArgumentException(
   "         --inplace, --policy P, --verbose, --splay"
 )
 
+/** encode: diff R→V with the chosen algorithm, write a binary delta file, and print statistics. */
 private def cmdEncode(args: Array[String]): Unit = {
   if args.length < 5 then usage()
 
@@ -118,6 +120,7 @@ private def cmdEncode(args: Array[String]): Unit = {
   System.out.printf("Time:         %.3fs%n", elapsed / 1e9)
 }
 
+/** decode: apply a binary delta file to R and write the reconstructed version. */
 private def cmdDecode(args: Array[String]): Unit = {
   if args.length < 4 then usage()
 
@@ -171,6 +174,7 @@ private def cmdDecode(args: Array[String]): Unit = {
   System.out.printf("Time:         %.3fs%n", elapsed / 1e9)
 }
 
+/** info: print the header fields and command summary of a binary delta file. */
 private def cmdInfo(args: Array[String]): Unit = {
   if args.length < 2 then usage()
 
@@ -191,6 +195,7 @@ private def cmdInfo(args: Array[String]): Unit = {
   System.out.printf("Output size:  %d bytes%n", stats.totalOutputBytes)
 }
 
+/** inplace: convert a standard delta file to in-place format using the CRWI algorithm. */
 private def cmdInplace(args: Array[String]): Unit = {
   if args.length < 4 then usage()
 

@@ -1,8 +1,6 @@
 package delta
 
-/**
- * Shared utilities and algorithm dispatcher (Section 2.1.1).
- */
+// ── Shared utilities and algorithm dispatcher (Section 2.1.1) ─────────────
 
 /** Compare byte subarrays for equality. */
 extension (a: Array[Byte])
@@ -42,6 +40,7 @@ def printStats(commands: List[Command]): Unit = {
   }
 }
 
+/** Run the selected algorithm to produce a command list for R→V. */
 def diff(algo: Algorithm, r: Array[Byte], v: Array[Byte], opts: DiffOptions): List[Command] =
   algo match {
     case Algorithm.Greedy     => diffGreedy(r, v, opts)
@@ -49,5 +48,6 @@ def diff(algo: Algorithm, r: Array[Byte], v: Array[Byte], opts: DiffOptions): Li
     case Algorithm.Correcting => diffCorrecting(r, v, opts)
   }
 
+/** Run the selected algorithm with default tuning options. */
 def diffDefault(algo: Algorithm, r: Array[Byte], v: Array[Byte]): List[Command] =
   diff(algo, r, v, DiffOptions())

@@ -153,6 +153,10 @@ def diffOnepass(r: Array[Byte], v: Array[Byte], opts: DiffOptions): List[Command
   commands.toList
 }
 
+/**
+ * Store (fp, off) at slot fp%q, unless the slot already holds a value from
+ * the current scan version (retain-existing policy: first entry wins).
+ */
 private def htPut(fps: Array[Long], offs: Array[Int], vers: Array[Long],
                   fp: Long, off: Int, q: Int, ver: Long): Unit = {
   val idx = (fp % q).toInt
@@ -162,6 +166,10 @@ private def htPut(fps: Array[Long], offs: Array[Int], vers: Array[Long],
   vers(idx) = ver
 }
 
+/**
+ * Return the offset stored for fp at slot fp%q if it belongs to the current
+ * scan version, or -1 on a miss or stale entry.
+ */
 private def htGet(fps: Array[Long], offs: Array[Int], vers: Array[Long],
                   fp: Long, q: Int, ver: Long): Int = {
   val idx = (fp % q).toInt
