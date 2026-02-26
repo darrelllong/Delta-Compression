@@ -124,7 +124,15 @@ DELTA_BUF_CAP = 256       # lookback buffer capacity for correcting algorithm
 
 @dataclass
 class DiffOptions:
-    """Options for differencing algorithms."""
+    """Options for differencing algorithms.
+
+    Attributes:
+        p:         Seed length: minimum match length and fingerprint window (Section 2.1.3).
+        q:         Hash table capacity floor; algorithms auto-size upward from input length.
+        buf_cap:   Lookback buffer depth for the correcting algorithm (Section 5.2).
+        verbose:   Print per-run statistics to stderr when True.
+        max_table: Auto-sizing ceiling; prevents unbounded memory use on very large inputs.
+    """
     p: int = SEED_LEN
     q: int = TABLE_SIZE
     buf_cap: int = DELTA_BUF_CAP
@@ -407,6 +415,7 @@ def diff_onepass(R: bytes, V: bytes,
     ver = 0
 
     def hv_get(fp):
+        """Look up fp in H_V; return offset if present in current version, else None."""
         idx = fp % q
         e = H_V[idx]
         if e is not None and e[2] == ver and e[0] == fp:
@@ -414,6 +423,7 @@ def diff_onepass(R: bytes, V: bytes,
         return None
 
     def hr_get(fp):
+        """Look up fp in H_R; return offset if present in current version, else None."""
         idx = fp % q
         e = H_R[idx]
         if e is not None and e[2] == ver and e[0] == fp:
@@ -421,12 +431,14 @@ def diff_onepass(R: bytes, V: bytes,
         return None
 
     def hv_put(fp, off):
+        """Store fp→off in H_V using retain-existing policy (first entry per version wins)."""
         idx = fp % q
         e = H_V[idx]
         if e is None or e[2] != ver:
             H_V[idx] = (fp, off, ver)
 
     def hr_put(fp, off):
+        """Store fp→off in H_R using retain-existing policy (first entry per version wins)."""
         idx = fp % q
         e = H_R[idx]
         if e is None or e[2] != ver:
@@ -568,7 +580,19 @@ def diff_onepass(R: bytes, V: bytes,
 
 @dataclass
 class _BufEntry:
-    """Internal buffer entry tracking which region of V a command encodes."""
+    """One entry in the correction lookback buffer (Section 5.2).
+
+    The correcting algorithm may discover that a newly found match overlaps
+    commands already emitted. The buffer holds the most recent buf_cap tentative
+    commands so they can be trimmed or cancelled (tail correction) when a better
+    match is found. Commands are flushed to the output list as they age out.
+
+    Attributes:
+        v_start: First V byte covered by this entry.
+        v_end:   One past the last V byte covered.
+        cmd:     The tentative command (CopyCmd or AddCmd).
+        dummy:   Reserved; always False in the current implementation.
+    """
     v_start: int
     v_end: int
     cmd: Command
@@ -1623,6 +1647,7 @@ def _parse_size_suffix(s: str) -> int:
 # ============================================================================
 
 def cmd_encode(args):
+    """Encode R→V with the chosen algorithm, write a binary delta file, and print statistics."""
     if args.seed_len < 1:
         raise SystemExit("error: --seed-len must be >= 1")
     algo = ALGORITHMS[args.algorithm]
@@ -1676,6 +1701,7 @@ def cmd_encode(args):
 
 
 def cmd_decode(args):
+    """Apply a binary delta file to R and write the reconstructed version."""
     # Read reference and compute its CRC in one sequential pass.
     R, r_crc_actual = _read_with_crc(args.reference)
 
@@ -1724,6 +1750,7 @@ def cmd_decode(args):
 
 
 def cmd_info(args):
+    """Print the header fields and command summary of a binary delta file."""
     with open(args.delta, 'rb') as f:
         delta_bytes = f.read()
 
@@ -1743,6 +1770,7 @@ def cmd_info(args):
 
 
 def cmd_inplace(args):
+    """Convert a standard delta file to in-place format using the CRWI algorithm."""
     # Read reference and compute CRC in one sequential pass.
     R, _r_crc = _read_with_crc(args.reference)
 
