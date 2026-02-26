@@ -264,8 +264,8 @@ time dominates regardless.
 | Rust | 4s |
 | C++ | 4s |
 | Go | 5s |
+| Kotlin | 5s |
 | Java | 6s |
-| Kotlin | 6s |
 | Scala | 6s |
 | Python | 247s |
 
@@ -273,13 +273,13 @@ time dominates regardless.
 
 | Implementation | Time |
 |----------------|-----:|
-| Rust | 9s |
+| Rust | 10s |
 | Java | 11s |
 | Kotlin | 11s |
-| Scala | 11s |
+| Scala | 12s |
 | Go | 13s |
-| C | 17s |
-| C++ | 18s |
+| C++ | 17s |
+| C | 18s |
 | Python | 583s |
 
 C leads onepass by a narrow margin; Rust, C, and C++ are within a
@@ -296,7 +296,7 @@ both algorithms.
 |-----------|-------|-----:|------:|-------:|------------:|
 | onepass | (default) | 4s | 4.8 MB | 205,030 | 89 B |
 | onepass | `--splay` | 4s | 4.8 MB | 205,030 | 89 B |
-| correcting | (default) | 9s | 6.6 MB | 243,756 | 91 B |
+| correcting | (default) | 10s | 6.6 MB | 243,756 | 91 B |
 | correcting | `--splay` | 47s | 6.6 MB | 243,756 | 91 B |
 
 The copy-length distribution is heavy-tailed: median is 89–91 bytes
@@ -341,13 +341,13 @@ flags).  All tarballs are ~831 MB post-gunzip.
 
 | Version | onepass ratio | onepass time | correcting ratio | correcting time |
 |---------|-------------:|------------:|-----------------:|----------------:|
-| 5.1.1 | 0.58% | 4s | 0.79% | 9s |
+| 5.1.1 | 0.58% | 4s | 0.79% | 10s |
 | 5.1.2 | 0.65% | 4s | 1.00% | 9s |
 | 5.1.3 | 0.66% | 4s | 1.02% | 9s |
-| 5.1.4 | 0.69% | 4s | 1.04% | 9s |
-| 5.1.5 | 0.70% | 4s | 0.85% | 9s |
-| 5.1.6 | 0.73% | 4s | 0.99% | 9s |
-| 5.1.7 | 0.73% | 4s | 0.87% | 9s |
+| 5.1.4 | 0.69% | 4s | 1.04% | 10s |
+| 5.1.5 | 0.70% | 4s | 0.85% | 10s |
+| 5.1.6 | 0.73% | 4s | 0.99% | 10s |
+| 5.1.7 | 0.73% | 4s | 0.87% | 10s |
 
 Onepass ratios climb steadily as versions accumulate changes from the fixed
 5.1.0 base.  Correcting ratios fluctuate: each version's checkpoint bias k
@@ -358,10 +358,10 @@ seeds survive the checkpoint filter and hence how many matches are found.
 
 | Transition | onepass ratio | onepass time | correcting ratio | correcting time |
 |------------|-------------:|------------:|-----------------:|----------------:|
-| 5.1.0→5.1.1 | 0.58% | 4s | 0.79% | 9s |
+| 5.1.0→5.1.1 | 0.58% | 4s | 0.79% | 10s |
 | 5.1.1→5.1.2 | 0.53% | 4s | 0.84% | 9s |
 | 5.1.2→5.1.3 | 0.47% | 4s | 0.99% | 9s |
-| 5.1.3→5.1.4 | 0.50% | 4s | 0.81% | 9s |
+| 5.1.3→5.1.4 | 0.50% | 4s | 0.81% | 10s |
 | 5.1.4→5.1.5 | 0.48% | 4s | 0.78% | 9s |
 | 5.1.5→5.1.6 | 0.49% | 4s | 0.77% | 9s |
 | 5.1.6→5.1.7 | 0.47% | 4s | 0.84% | 9s |
@@ -381,7 +381,7 @@ reference size.
 | 5.1.3 | 0.54% | 4s | 0.80% | 9s |
 | 5.1.4 | 0.58% | 4s | 0.95% | 9s |
 | 5.1.5 | 0.58% | 4s | 0.81% | 9s |
-| 5.1.6 | 0.62% | 4s | 0.85% | 9s |
+| 5.1.6 | 0.62% | 4s | 0.85% | 10s |
 | 5.1.7 | 0.62% | 4s | 0.81% | 9s |
 
 Using 5.1.1 as reference, onepass ratios grow gradually from 0.53% to 0.62%
@@ -510,53 +510,59 @@ done once.  Apply is essentially free.
 
 | Algorithm | Perm% | Apply-N | Apply-IP |
 |-----------|------:|--------:|---------:|
-| correcting | 0% | 0.006s | 0.006s |
-| correcting | 25% | 0.007s | 0.007s |
-| correcting | 50% | 0.007s | 0.008s |
-| correcting | 75% | 0.008s | 0.008s |
-| correcting | 100% | 0.008s | 0.008s |
+| onepass | 0% | 0.006s | 0.006s |
+| onepass | 25% | 0.007s | 0.008s |
+| onepass | 50% | 0.007s | 0.008s |
+| onepass | 75% | 0.009s | 0.008s |
+| onepass | 100% | 0.007s | 0.008s |
+| correcting | 0% | 0.007s | 0.007s |
+| correcting | 25% | 0.009s | 0.010s |
+| correcting | 50% | 0.008s | 0.010s |
+| correcting | 75% | 0.009s | 0.009s |
+| correcting | 100% | 0.010s | 0.009s |
 
-onepass apply times are similar for small deltas (low permutation) but
-grow with delta size at high permutation: at 100% perm the onepass
-standard delta is ~15.9 MB of literal data (ratio 0.9921), requiring
-proportionally more I/O.  onepass apply-N and apply-IP remain within
-2 ms of each other at every level.
+Both algorithms apply in under 10 ms at all permutation levels: all the
+cost lives in CRWI construction and cycle-breaking at encode time.
+onepass apply-N and apply-IP remain within 2 ms of each other at every
+level.  At 100% permutation the onepass standard delta is ~15.9 MB of
+literal data (ratio 0.9921), yet apply completes in under 10 ms because
+the data is streamed sequentially.
 
 **Inplace scaling — correcting, 16 → 256 MB (512 B mean blocks)**
 
 | Size | Perm% | Ratio-N | Ratio-IP | Adds-IP | Time-N | Time-IP |
 |-----:|------:|--------:|---------:|--------:|-------:|--------:|
-| 16 MB | 0% | 0.0000 | 0.0000 | 0 | 0.109s | 0.114s |
-| 16 MB | 25% | 0.0112 | 0.1520 | 4,847 | 0.117s | 0.131s |
-| 16 MB | 50% | 0.0191 | 0.2409 | 8,569 | 0.117s | 0.152s |
-| 16 MB | 75% | 0.0238 | 0.2529 | 9,841 | 0.127s | 0.176s |
-| 16 MB | 100% | 0.0254 | 0.2569 | 10,265 | 0.121s | 0.192s |
-| 32 MB | 0% | 0.0000 | 0.0000 | 0 | 0.242s | 0.245s |
-| 32 MB | 25% | 0.0111 | 0.1584 | 10,138 | 0.251s | 0.307s |
-| 32 MB | 50% | 0.0191 | 0.2413 | 17,238 | 0.269s | 0.364s |
-| 32 MB | 75% | 0.0238 | 0.2491 | 19,411 | 0.265s | 0.431s |
-| 32 MB | 100% | 0.0254 | 0.2573 | 20,585 | 0.266s | 0.516s |
-| 64 MB | 0% | 0.0000 | 0.0000 | 0 | 0.514s | 0.512s |
-| 64 MB | 25% | 0.0111 | 0.1531 | 19,274 | 0.530s | 0.706s |
-| 64 MB | 50% | 0.0190 | 0.2368 | 34,053 | 0.546s | 0.869s |
-| 64 MB | 75% | 0.0238 | 0.2542 | 39,652 | 0.556s | 1.175s |
-| 64 MB | 100% | 0.0254 | 0.2576 | 41,191 | 0.560s | 1.263s |
-| 128 MB | 0% | 0.0000 | 0.0000 | 0 | 1.062s | 1.055s |
-| 128 MB | 25% | 0.0111 | 0.1576 | 39,388 | 1.097s | 1.897s |
-| 128 MB | 50% | 0.0190 | 0.2421 | 69,158 | 1.130s | 2.173s |
-| 128 MB | 75% | 0.0238 | 0.2555 | 79,538 | 1.145s | 2.866s |
-| 128 MB | 100% | 0.0254 | 0.2582 | 82,561 | 1.155s | 3.309s |
-| 256 MB | 0% | 0.0000 | 0.0000 | 0 | 2.167s | 2.150s |
-| 256 MB | 25% | 0.0111 | 0.1594 | 79,232 | 2.242s | 4.248s |
-| 256 MB | 50% | 0.0190 | 0.2430 | 138,716 | 2.282s | 5.093s |
-| 256 MB | 75% | 0.0238 | 0.2544 | 158,392 | 2.331s | 7.380s |
-| 256 MB | 100% | 0.0254 | 0.2579 | 164,877 | 2.361s | 9.040s |
+| 16 MB | 0% | 0.0000 | 0.0000 | 0 | 0.113s | 0.111s |
+| 16 MB | 25% | 0.0112 | 0.1520 | 4,847 | 0.118s | 0.136s |
+| 16 MB | 50% | 0.0191 | 0.2409 | 8,569 | 0.123s | 0.160s |
+| 16 MB | 75% | 0.0238 | 0.2529 | 9,841 | 0.126s | 0.209s |
+| 16 MB | 100% | 0.0254 | 0.2569 | 10,265 | 0.127s | 0.207s |
+| 32 MB | 0% | 0.0000 | 0.0000 | 0 | 0.257s | 0.250s |
+| 32 MB | 25% | 0.0111 | 0.1584 | 10,138 | 0.281s | 0.338s |
+| 32 MB | 50% | 0.0191 | 0.2413 | 17,238 | 0.271s | 0.378s |
+| 32 MB | 75% | 0.0238 | 0.2491 | 19,411 | 0.272s | 0.496s |
+| 32 MB | 100% | 0.0254 | 0.2573 | 20,585 | 0.275s | 0.540s |
+| 64 MB | 0% | 0.0000 | 0.0000 | 0 | 0.554s | 0.521s |
+| 64 MB | 25% | 0.0111 | 0.1531 | 19,274 | 0.540s | 0.745s |
+| 64 MB | 50% | 0.0190 | 0.2368 | 34,053 | 0.558s | 0.923s |
+| 64 MB | 75% | 0.0238 | 0.2542 | 39,652 | 0.565s | 1.225s |
+| 64 MB | 100% | 0.0254 | 0.2576 | 41,191 | 0.584s | 1.372s |
+| 128 MB | 0% | 0.0000 | 0.0000 | 0 | 1.066s | 1.168s |
+| 128 MB | 25% | 0.0111 | 0.1576 | 39,388 | 1.180s | 2.202s |
+| 128 MB | 50% | 0.0190 | 0.2421 | 69,158 | 1.167s | 2.437s |
+| 128 MB | 75% | 0.0238 | 0.2555 | 79,538 | 1.234s | 3.141s |
+| 128 MB | 100% | 0.0254 | 0.2582 | 82,561 | 1.203s | 3.537s |
+| 256 MB | 0% | 0.0000 | 0.0000 | 0 | 2.188s | 2.257s |
+| 256 MB | 25% | 0.0111 | 0.1594 | 79,232 | 2.376s | 4.483s |
+| 256 MB | 50% | 0.0190 | 0.2430 | 138,716 | 2.467s | 5.395s |
+| 256 MB | 75% | 0.0238 | 0.2544 | 158,392 | 2.372s | 7.821s |
+| 256 MB | 100% | 0.0254 | 0.2579 | 164,877 | 2.375s | 9.603s |
 
 The CRWI graph build is O(n log n + E): the binary-search sweep exploits
 non-overlapping write intervals for exact overlap detection.
 Standard-mode correcting time scales ~2× per doubling (linear in n).
 Inplace time at 100% permutation scales ~2.6× per doubling
-(0.192 → 0.516 → 1.263 → 3.309 → 9.040 s across 16 → 32 → 64 → 128 → 256 MB),
+(0.207 → 0.540 → 1.372 → 3.537 → 9.603 s across 16 → 32 → 64 → 128 → 256 MB),
 reflecting the O(n log n + E) total complexity of the Tarjan + global
 Kahn + amortized DFS cycle-breaking algorithm.  At 256 MB with 512K
 blocks and 164K conversions, the total encode time is under 10 seconds.
