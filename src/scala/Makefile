@@ -2,7 +2,7 @@ SCALAC    = scalac
 JAVA      = /opt/homebrew/opt/openjdk@17/bin/java
 JAR       = delta.jar
 SCALA_LIB = /opt/homebrew/Cellar/scala/3.8.1/libexec/lib/scala.jar
-SRCS      = $(wildcard src/main/scala/delta/*.scala)
+SRCS      = $(wildcard delta/*.scala)
 
 .PHONY: all test clean
 
