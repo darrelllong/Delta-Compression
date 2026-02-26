@@ -206,7 +206,7 @@ checkpointing correctness, and cross-language compatibility.
 A kernel tarball benchmark (`tests/kernel-delta-test.sh`) exercises
 onepass and correcting on ~871 MB inputs.  On linux-5.1 → 5.1.1, all
 eight implementations produce identical deltas; C and Rust lead onepass
-(4s), Rust leads correcting (10s), Python slowest (247s / 583s); see
+(4s), Rust leads correcting (9s), Python slowest (247s / 583s); see
 `ANALYSIS.md` for the full table.
 
 ## Project layout
