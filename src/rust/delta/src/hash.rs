@@ -196,6 +196,12 @@ fn witness(a: u64, n: u64) -> bool {
 /// Jaeschke, Math. Comp. 61(204), 1993.
 const WITNESSES: &[u64] = &[2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37];
 
+/// Deterministic Miller-Rabin primality test.
+///
+/// Writes n-1 = 2^r * d, then for each witness a checks whether
+/// a^d ≡ 1 (mod n) or a^{2^j d} ≡ -1 (mod n) for some j < r.
+/// If neither holds, n is composite.  With the fixed witnesses above,
+/// the test is deterministic for all n relevant to hash table sizing.
 pub fn is_prime(n: usize) -> bool {
     let n = n as u64;
     if n < 2 || (n != 2 && n % 2 == 0) {

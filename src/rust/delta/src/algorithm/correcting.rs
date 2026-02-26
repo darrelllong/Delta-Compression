@@ -4,11 +4,20 @@ use crate::hash::{fingerprint, next_prime, RollingHash};
 use crate::splay::SplayTree;
 use crate::types::{Command, DiffOptions};
 
-/// Internal buffer entry tracking which region of V a command encodes.
+/// One entry in the correction lookback buffer (Section 5.2).
+///
+/// The correcting algorithm may discover that a newly found match overlaps
+/// commands already emitted.  The buffer holds the most recent buf_cap tentative
+/// commands so they can be trimmed or cancelled (tail correction) when a better
+/// match is found.  Commands are flushed to the output list as they age out.
 struct BufEntry {
+    /// First V byte covered by this entry.
     v_start: usize,
+    /// One past the last V byte covered.
     v_end: usize,
+    /// The tentative command (Add or Copy).
     cmd: Command,
+    /// Reserved; always false in the current implementation.
     dummy: bool,
 }
 

@@ -92,28 +92,40 @@ impl fmt::Display for PlacedCommand {
 // Algorithm and Policy enums
 // ============================================================================
 
+/// Differencing algorithm selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Algorithm {
+    /// Optimal under simple cost; O(|V|·|R|) time, O(|R|) space (Section 3).
     Greedy,
+    /// Linear time and near-constant space; concurrent scan of R and V (Section 4).
     Onepass,
+    /// Near-optimal, 1.5-pass; hash table with fingerprint checkpointing (Sections 7–8).
     Correcting,
 }
 
+/// Cycle-breaking policy for in-place reordering (Section 4.3 of Burns et al. 2003).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CyclePolicy {
+    /// Break each cycle at the copy with the shortest length, minimising literal bytes added.
     Localmin,
+    /// Break each cycle at the first remaining vertex; simpler but ignores copy lengths.
     Constant,
 }
 
-/// Options for differencing algorithms.
+/// Tuning parameters for differencing algorithms.
 #[derive(Clone, Debug)]
 pub struct DiffOptions {
+    /// Seed length: minimum match length and fingerprint window (Section 2.1.3).
     pub p: usize,
+    /// Hash table capacity floor; algorithms auto-size upward from input length.
     pub q: usize,
+    /// Lookback buffer depth for the correcting algorithm (Section 5.2).
     pub buf_cap: usize,
+    /// Print per-run statistics to stderr when true.
     pub verbose: bool,
+    /// Use a Sleator-Tarjan splay tree instead of a hash table for R lookups.
     pub use_splay: bool,
-    /// Maximum hash table entries; auto-sizing never exceeds this.
+    /// Auto-sizing ceiling; prevents unbounded memory use on very large inputs.
     pub max_table: usize,
 }
 
@@ -134,10 +146,14 @@ impl Default for DiffOptions {
 // Error type
 // ============================================================================
 
+/// Errors produced by delta encoding, decoding, and I/O.
 #[derive(Debug)]
 pub enum DeltaError {
+    /// The binary data does not match the expected delta format.
     InvalidFormat(String),
+    /// The delta data ended before all commands were read.
     UnexpectedEof,
+    /// An I/O error occurred while reading or writing a file.
     IoError(std::io::Error),
 }
 
@@ -163,6 +179,7 @@ impl From<std::io::Error> for DeltaError {
 // Summary statistics
 // ============================================================================
 
+/// Summary statistics for a set of commands.
 #[derive(Debug)]
 pub struct DeltaSummary {
     pub num_commands: usize,
@@ -173,6 +190,7 @@ pub struct DeltaSummary {
     pub total_output_bytes: usize,
 }
 
+/// Compute summary statistics from algorithm-level commands.
 pub fn delta_summary(commands: &[Command]) -> DeltaSummary {
     let mut num_copies = 0;
     let mut num_adds = 0;
@@ -200,6 +218,7 @@ pub fn delta_summary(commands: &[Command]) -> DeltaSummary {
     }
 }
 
+/// Compute summary statistics from placed commands.
 pub fn placed_summary(commands: &[PlacedCommand]) -> DeltaSummary {
     let mut num_copies = 0;
     let mut num_adds = 0;
