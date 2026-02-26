@@ -44,14 +44,16 @@ inline constexpr size_t  DELTA_BUF_CAP = 256;
 // Delta Commands (Section 2.1.1)
 // ============================================================================
 
+/// Copy @p length bytes starting at @p offset in the reference R.
 struct CopyCmd {
-    size_t offset;
-    size_t length;
+    size_t offset; ///< Byte offset of the match in R.
+    size_t length; ///< Number of bytes to copy.
     bool operator==(const CopyCmd&) const = default;
 };
 
+/// Append literal bytes from V that could not be matched in R.
 struct AddCmd {
-    std::vector<uint8_t> data;
+    std::vector<uint8_t> data; ///< The literal bytes to append.
     bool operator==(const AddCmd&) const = default;
 };
 
@@ -62,16 +64,18 @@ using Command = std::variant<CopyCmd, AddCmd>;
 // Placed Commands — ready for encoding and application
 // ============================================================================
 
+/// Copy @p length bytes from @p src in R (or the working buffer) to @p dst in the output.
 struct PlacedCopy {
-    size_t src;
-    size_t dst;
-    size_t length;
+    size_t src;    ///< Source byte offset in the reference (or working buffer for in-place).
+    size_t dst;    ///< Destination byte offset in the output.
+    size_t length; ///< Number of bytes to copy.
     bool operator==(const PlacedCopy&) const = default;
 };
 
+/// Write literal bytes to @p dst in the output.
 struct PlacedAdd {
-    size_t dst;
-    std::vector<uint8_t> data;
+    size_t dst;               ///< Destination byte offset in the output.
+    std::vector<uint8_t> data; ///< The literal bytes to write.
     bool operator==(const PlacedAdd&) const = default;
 };
 
@@ -82,14 +86,24 @@ using PlacedCommand = std::variant<PlacedCopy, PlacedAdd>;
 // Algorithm and Policy enums
 // ============================================================================
 
-enum class Algorithm { Greedy, Onepass, Correcting };
+/// Differencing algorithm selection.
+enum class Algorithm {
+    Greedy,     ///< Optimal under simple cost; O(|V|·|R|) time, O(|R|) space (Section 3).
+    Onepass,    ///< Linear time and near-constant space; concurrent scan of R and V (Section 4).
+    Correcting, ///< Near-optimal, 1.5-pass; hash table with fingerprint checkpointing (Sections 7–8).
+};
 
-enum class CyclePolicy { Localmin, Constant };
+/// Cycle-breaking policy for in-place reordering (Section 4.3 of Burns et al. 2003).
+enum class CyclePolicy {
+    Localmin, ///< Break each cycle at the copy with the shortest length, minimising literal bytes added.
+    Constant, ///< Break each cycle at the first remaining vertex; simpler but ignores copy lengths.
+};
 
 // ============================================================================
 // Error type
 // ============================================================================
 
+/// Exception thrown for invalid delta format or I/O errors.
 class DeltaError : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
@@ -99,29 +113,33 @@ public:
 // Summary statistics
 // ============================================================================
 
+/// Summary statistics for a set of commands.
 struct DeltaSummary {
-    size_t num_commands;
-    size_t num_copies;
-    size_t num_adds;
-    size_t copy_bytes;
-    size_t add_bytes;
-    size_t total_output_bytes;
+    size_t num_commands;       ///< Total number of commands (copies + adds).
+    size_t num_copies;         ///< Number of COPY commands.
+    size_t num_adds;           ///< Number of ADD commands.
+    size_t copy_bytes;         ///< Total bytes reproduced by COPY commands.
+    size_t add_bytes;          ///< Total literal bytes in ADD commands.
+    size_t total_output_bytes; ///< Reconstructed output size (= copy_bytes + add_bytes).
 };
 
+/// Compute summary statistics from algorithm-level commands.
 DeltaSummary delta_summary(const std::vector<Command>& commands);
+/// Compute summary statistics from placed commands.
 DeltaSummary placed_summary(const std::vector<PlacedCommand>& commands);
 
 // ============================================================================
 // Diff options — replaces positional parameter lists
 // ============================================================================
 
+/// Tuning parameters for differencing algorithms.
 struct DiffOptions {
-    size_t p = SEED_LEN;
-    size_t q = TABLE_SIZE;
-    size_t buf_cap = DELTA_BUF_CAP;
-    bool verbose = false;
-    bool use_splay = false;
-    size_t max_table = MAX_TABLE_SIZE;
+    size_t p = SEED_LEN;             ///< Seed length: minimum match length and fingerprint window (Section 2.1.3).
+    size_t q = TABLE_SIZE;           ///< Hash table capacity floor; algorithms auto-size upward from input length.
+    size_t buf_cap = DELTA_BUF_CAP;  ///< Lookback buffer depth for the correcting algorithm (Section 5.2).
+    bool verbose = false;            ///< Print per-run statistics to stderr when true.
+    bool use_splay = false;          ///< Use a Sleator-Tarjan splay tree instead of a hash table for R lookups.
+    size_t max_table = MAX_TABLE_SIZE; ///< Auto-sizing ceiling; prevents unbounded memory use on very large inputs.
 };
 
 } // namespace delta

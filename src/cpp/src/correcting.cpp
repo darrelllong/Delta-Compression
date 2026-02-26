@@ -10,12 +10,17 @@
 
 namespace delta {
 
-/// Internal buffer entry tracking which region of V a command encodes.
+/// One entry in the correction lookback buffer (Section 5.2).
+///
+/// The correcting algorithm may discover that a newly found match overlaps
+/// commands already emitted. The buffer holds the most recent buf_cap tentative
+/// commands so they can be trimmed or cancelled (tail correction) when a better
+/// match is found. Commands are flushed to the output list as they age out.
 struct BufEntry {
-    size_t v_start;
-    size_t v_end;
-    Command cmd;
-    bool dummy;
+    size_t v_start; ///< First V byte covered by this entry.
+    size_t v_end;   ///< One past the last V byte covered.
+    Command cmd;    ///< The tentative command (CopyCmd or AddCmd).
+    bool dummy;     ///< Reserved; always false in the current implementation.
 };
 
 /// Correcting 1.5-Pass algorithm (Section 7, Figure 8) with

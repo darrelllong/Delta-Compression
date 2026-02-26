@@ -51,6 +51,10 @@ private:
 
 // ── Primality testing (for hash table auto-sizing) ───────────────────────
 
+/// Deterministic Miller-Rabin primality test.
+///
+/// Uses 12 fixed witnesses [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37],
+/// sufficient for all n < 3.3×10^24 (Jaeschke, Math. Comp. 61(204), 1993).
 bool is_prime(size_t n);
 
 /// Smallest prime >= n.
