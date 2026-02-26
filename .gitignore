@@ -9,10 +9,11 @@ build/
 src/c/*.o
 src/c/delta
 
-# Java compiled classes
+# JVM build artifacts
 src/java/out/
 src/java/**/*.class
 *.class
+*.jar
 
 # C++ alternate builds
 src/cpp/build-release/
