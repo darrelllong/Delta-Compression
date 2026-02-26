@@ -1,7 +1,5 @@
-/*
- * correcting.c — Correcting 1.5-Pass algorithm (Section 7, Figure 8)
- *                with fingerprint-based checkpointing (Section 8)
- */
+// correcting.c — Correcting 1.5-Pass algorithm (Section 7, Figure 8)
+//                with fingerprint-based checkpointing (Section 8)
 
 #include "delta.h"
 
@@ -9,24 +7,22 @@
 #include <stdlib.h>
 #include <string.h>
 
-/*
- * One entry in the correction lookback buffer (Section 5.2).
- *
- * The correcting algorithm may discover that a newly found match overlaps
- * commands already emitted.  The buffer holds the most recent buf_cap tentative
- * commands so they can be trimmed or cancelled (tail correction) when a better
- * match is found.  Commands are flushed to the output list as they age out.
- */
+// One entry in the correction lookback buffer (Section 5.2).
+//
+// The correcting algorithm may discover that a newly found match overlaps
+// commands already emitted.  The buffer holds the most recent buf_cap tentative
+// commands so they can be trimmed or cancelled (tail correction) when a better
+// match is found.  Commands are flushed to the output list as they age out.
 typedef struct buf_entry {
-	size_t v_start;          /* First V byte covered by this entry. */
-	size_t v_end;            /* One past the last V byte covered. */
-	delta_command_t cmd;     /* The tentative command (CMD_COPY or CMD_ADD). */
-	bool dummy;              /* Reserved; always false in the current implementation. */
+	size_t v_start;          // First V byte covered by this entry.
+	size_t v_end;            // One past the last V byte covered.
+	delta_command_t cmd;     // The tentative command (CMD_COPY or CMD_ADD).
+	bool dummy;              // Reserved; always false in the current implementation.
 	struct buf_entry *next;
 	struct buf_entry *prev;
 } buf_entry_t;
 
-/* Simple deque via doubly-linked list */
+// Simple deque via doubly-linked list
 typedef struct {
 	buf_entry_t *head;
 	buf_entry_t *tail;
@@ -67,7 +63,7 @@ deque_pop_back(buf_deque_t *d)
 	return e;
 }
 
-/* ── Hash table slot for correcting: (full_fp, offset) ─────────────── */
+// ── Hash table slot for correcting: (full_fp, offset) ────────────────
 
 typedef struct {
 	uint64_t fp;
@@ -76,14 +72,14 @@ typedef struct {
 
 #define CORR_EMPTY_FP UINT64_MAX
 
-/* ── Splay value for correcting ────────────────────────────────────── */
+// ── Splay value for correcting ────────────────────────────────────────
 
 typedef struct {
 	uint64_t fp;
 	size_t offset;
 } corr_splay_val_t;
 
-/* ── Correcting algorithm ──────────────────────────────────────────── */
+// ── Correcting algorithm ──────────────────────────────────────────────
 
 delta_commands_t
 delta_diff_correcting(const uint8_t *r, size_t r_len,
@@ -100,7 +96,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 	size_t rh_v_pos = 0;
 	buf_deque_t buf;
 	size_t dbg_build_passed = 0, dbg_build_stored = 0;
-	size_t dbg_build_probes = 0; /* extra slots scanned past the first */
+	size_t dbg_build_probes = 0; // extra slots scanned past the first
 	size_t dbg_scan_checkpoints = 0, dbg_scan_match = 0;
 	size_t dbg_scan_fp_mismatch = 0, dbg_scan_byte_mismatch = 0;
 
@@ -110,16 +106,16 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 	bool verbose = delta_flag_get(opts->flags, DELTA_OPT_VERBOSE);
 	bool use_splay = delta_flag_get(opts->flags, DELTA_OPT_SPLAY);
 
-	/* Hash table path */
+	// Hash table path
 	corr_slot_t *h_r_ht = NULL;
 
-	/* Splay tree path */
+	// Splay tree path
 	delta_splay_t h_r_sp;
 
 	delta_commands_init(&commands);
 	if (v_len == 0) { return commands; }
 
-	/* Checkpointing parameters (Section 8.1, pp. 347-348) */
+	// Checkpointing parameters (Section 8.1, pp. 347-348)
 	num_seeds = (r_len >= p) ? (r_len - p + 1) : 0;
 	{
 		size_t max_table = opts->max_table > 0
@@ -135,7 +131,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 	    : 1;
 	m = (f_size <= (uint64_t)cap) ? 1 : (f_size + (uint64_t)cap - 1) / (uint64_t)cap;
 
-	/* Biased k (p. 348) */
+	// Biased k (p. 348)
 	k = 0;
 	if (v_len >= p) {
 		uint64_t fp_k = delta_fingerprint(v,
@@ -159,7 +155,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 		        cap * sizeof(*h_r_ht) / 1048576);
 	}
 
-	/* Step (1): Build lookup structure for R (first-found policy) */
+	// Step (1): Build lookup structure for R (first-found policy)
 	if (use_splay) {
 		delta_splay_init(&h_r_sp, sizeof(corr_splay_val_t));
 	} else {
@@ -196,11 +192,11 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 				size_t i = (size_t)(f / m);
 				size_t i0 = i;
 				for (;;) {
-					if (h_r_ht[i].fp == CORR_EMPTY_FP) { break; }  /* empty — store here */
-					if (h_r_ht[i].fp == fp) { i = (size_t)-1; break; } /* dup fp — skip */
+					if (h_r_ht[i].fp == CORR_EMPTY_FP) { break; }  // empty — store here
+					if (h_r_ht[i].fp == fp) { i = (size_t)-1; break; } // dup fp — skip
 					if (++i == cap) { i = 0; }
 					dbg_build_probes++;
-					if (i == i0) { i = (size_t)-1; break; }  /* table full */
+					if (i == i0) { i = (size_t)-1; break; }  // table full
 				}
 				if (i != (size_t)-1) {
 					h_r_ht[i].fp = fp;
@@ -226,10 +222,10 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 		        stored_count, cap, occ_pct);
 	}
 
-	/* Lookback buffer (Section 5.2) */
+	// Lookback buffer (Section 5.2)
 	deque_init(&buf);
 
-	/* Step (2): initialize scan pointers */
+	// Step (2): initialize scan pointers
 	v_c = 0;
 	v_s = 0;
 
@@ -245,10 +241,10 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 		size_t fwd, bwd, v_m_val, r_m, ml, match_end;
 		bool found;
 
-		/* Step (3): check for end of V */
+		// Step (3): check for end of V
 		if (v_c + p > v_len) { break; }
 
-		/* Step (4): generate fingerprint, apply checkpoint test */
+		// Step (4): generate fingerprint, apply checkpoint test
 		fp_v = delta_rh_advance(&rh_v, &rh_v_valid, &rh_v_pos,
 		                        v, v_c, p);
 
@@ -258,7 +254,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 			continue;
 		}
 
-		/* Checkpoint passed — look up R */
+		// Checkpoint passed — look up R
 		dbg_scan_checkpoints++;
 		found = false;
 
@@ -282,7 +278,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 			size_t i = (size_t)(f_v / m);
 			size_t i0 = i;
 			for (;;) {
-				if (h_r_ht[i].fp == CORR_EMPTY_FP) { break; }  /* empty — chain ends */
+				if (h_r_ht[i].fp == CORR_EMPTY_FP) { break; }  // empty — chain ends
 				if (h_r_ht[i].fp == fp_v) {
 					if (memcmp(&r[h_r_ht[i].offset],
 					           &v[v_c], p) != 0) {
@@ -292,10 +288,10 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 						r_offset = h_r_ht[i].offset;
 						found = true;
 					}
-					break;  /* byte mismatch or match — stop probing */
+					break;  // byte mismatch or match — stop probing
 				}
 				if (++i == cap) { i = 0; }
-				if (i == i0) { break; }                   /* full table — not found */
+				if (i == i0) { break; }                   // full table — not found
 			}
 		}
 
@@ -304,7 +300,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 			continue;
 		}
 
-		/* Step (5): extend match forwards and backwards */
+		// Step (5): extend match forwards and backwards
 		fwd = p;
 		while (v_c + fwd < v_len && r_offset + fwd < r_len &&
 		       v[v_c + fwd] == r[r_offset + fwd]) {
@@ -327,9 +323,9 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 			continue;
 		}
 
-		/* Step (6): encode with correction */
+		// Step (6): encode with correction
 		if (v_s <= v_m_val) {
-			/* (6a) match in unencoded suffix */
+			// (6a) match in unencoded suffix
 			if (v_s < v_m_val) {
 				if (buf.len >= buf_cap) {
 					buf_entry_t *oldest = deque_pop_front(&buf);
@@ -377,7 +373,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 			}
 			v_s = match_end;
 		} else {
-			/* (6b) tail correction (Section 5.1, p. 339) */
+			// (6b) tail correction (Section 5.1, p. 339)
 			size_t effective_start = v_s;
 
 			while (buf.tail) {
@@ -459,11 +455,11 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 			v_s = match_end;
 		}
 
-		/* Step (7): advance past matched region */
+		// Step (7): advance past matched region
 		v_c = match_end;
 	}
 
-	/* Step (8): flush buffer and trailing add */
+	// Step (8): flush buffer and trailing add
 	while (buf.head) {
 		buf_entry_t *e = deque_pop_front(&buf);
 		if (!e->dummy) {
@@ -499,7 +495,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 		delta_print_command_stats(&commands);
 	}
 
-	/* Cleanup */
+	// Cleanup
 	if (use_splay) {
 		delta_splay_free(&h_r_sp);
 	} else {
@@ -509,7 +505,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 	return commands;
 }
 
-/* ── Dispatcher ────────────────────────────────────────────────────── */
+// ── Dispatcher ────────────────────────────────────────────────────────
 
 delta_commands_t
 delta_diff(delta_algorithm_t algo,
@@ -525,7 +521,7 @@ delta_diff(delta_algorithm_t algo,
 	case ALGO_CORRECTING:
 		return delta_diff_correcting(r, r_len, v, v_len, opts);
 	}
-	/* unreachable */
+	// unreachable
 	{
 		delta_commands_t empty;
 		delta_commands_init(&empty);
@@ -533,7 +529,7 @@ delta_diff(delta_algorithm_t algo,
 	}
 }
 
-/* ── Shared verbose stats ──────────────────────────────────────────── */
+// ── Shared verbose stats ──────────────────────────────────────────────
 
 void
 delta_print_command_stats(const delta_commands_t *cmds)

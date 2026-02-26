@@ -1,9 +1,7 @@
-/*
- * onepass.c — One-Pass differencing algorithm (Section 4.1, Figure 3)
- *
- * Interleaved scan of R and V with dual hash tables (or splay trees)
- * and version-based logical flushing.
- */
+// onepass.c — One-Pass differencing algorithm (Section 4.1, Figure 3)
+//
+// Interleaved scan of R and V with dual hash tables (or splay trees)
+// and version-based logical flushing.
 
 #include "delta.h"
 
@@ -11,14 +9,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ── Splay tree value type for onepass: (offset, version) ──────────── */
+// ── Splay tree value type for onepass: (offset, version) ─────────────
 
 typedef struct {
 	size_t offset;
 	uint64_t version;
 } op_splay_val_t;
 
-/* ── Hash table slot: (fingerprint, offset, version) ───────────────── */
+// ── Hash table slot: (fingerprint, offset, version) ──────────────────
 
 typedef struct {
 	uint64_t fp;
@@ -27,7 +25,7 @@ typedef struct {
 	bool     occupied;
 } op_slot_t;
 
-/* ── One-pass algorithm ────────────────────────────────────────────── */
+// ── One-pass algorithm ────────────────────────────────────────────────
 
 delta_commands_t
 delta_diff_onepass(const uint8_t *r, size_t r_len,
@@ -48,16 +46,16 @@ delta_diff_onepass(const uint8_t *r, size_t r_len,
 	bool verbose = delta_flag_get(opts->flags, DELTA_OPT_VERBOSE);
 	bool use_splay = delta_flag_get(opts->flags, DELTA_OPT_SPLAY);
 
-	/* Hash table path */
+	// Hash table path
 	op_slot_t *h_v_ht = NULL, *h_r_ht = NULL;
 
-	/* Splay tree path */
+	// Splay tree path
 	delta_splay_t h_v_sp, h_r_sp;
 
 	delta_commands_init(&commands);
 	if (v_len == 0) { return commands; }
 
-	/* Auto-size hash table: one slot per p-byte chunk of R */
+	// Auto-size hash table: one slot per p-byte chunk of R
 	num_seeds = (r_len >= p) ? (r_len - p + 1) : 0;
 	q = delta_next_prime(q > num_seeds / p ? q : num_seeds / p);
 
@@ -68,7 +66,7 @@ delta_diff_onepass(const uint8_t *r, size_t r_len,
 		        q, r_len, v_len, p);
 	}
 
-	/* Step (1): initialize lookup structures */
+	// Step (1): initialize lookup structures
 	if (use_splay) {
 		delta_splay_init(&h_v_sp, sizeof(op_splay_val_t));
 		delta_splay_init(&h_r_sp, sizeof(op_splay_val_t));
@@ -77,7 +75,7 @@ delta_diff_onepass(const uint8_t *r, size_t r_len,
 		h_r_ht = delta_calloc(q, sizeof(*h_r_ht));
 	}
 
-	/* Step (2): initialize scan pointers */
+	// Step (2): initialize scan pointers
 	r_c = 0;
 	v_c = 0;
 	v_s = 0;
@@ -98,13 +96,13 @@ delta_diff_onepass(const uint8_t *r, size_t r_len,
 		bool match_found = false;
 		size_t r_m = 0, v_m = 0;
 
-		/* Step (3): check for end of V and R */
+		// Step (3): check for end of V and R
 		can_v = (v_c + p <= v_len);
 		can_r = (r_c + p <= r_len);
 		if (!can_v && !can_r) { break; }
 		dbg_positions++;
 
-		/* Compute fingerprints */
+		// Compute fingerprints
 		if (can_v) {
 			fp_v = delta_rh_advance(&rh_v, &rh_v_valid, &rh_v_pos,
 			                        v, v_c, p);
@@ -116,7 +114,7 @@ delta_diff_onepass(const uint8_t *r, size_t r_len,
 			have_fp_r = 1;
 		}
 
-		/* Step (4a): store fingerprints (retain-existing policy) */
+		// Step (4a): store fingerprints (retain-existing policy)
 		if (use_splay) {
 			if (have_fp_v) {
 				op_splay_val_t sv;
@@ -142,7 +140,7 @@ delta_diff_onepass(const uint8_t *r, size_t r_len,
 			if (have_fp_v) {
 				size_t idx = (size_t)(fp_v % (uint64_t)q);
 				if (!h_v_ht[idx].occupied || h_v_ht[idx].version != ver) {
-					/* retain-existing only within current version */
+					// retain-existing only within current version
 				} else {
 					goto skip_v_store;
 				}
@@ -165,7 +163,7 @@ skip_r_store:;
 			}
 		}
 
-		/* Step (4b): cross-lookup for matching seed */
+		// Step (4b): cross-lookup for matching seed
 		if (have_fp_r) {
 			if (use_splay) {
 				op_splay_val_t *sv = delta_splay_find(&h_v_sp, fp_r);
@@ -225,7 +223,7 @@ skip_r_store:;
 		}
 		dbg_matches++;
 
-		/* Step (5): extend match forward */
+		// Step (5): extend match forward
 		{
 			size_t ml = 0;
 			while (v_m + ml < v_len && r_m + ml < r_len &&
@@ -239,7 +237,7 @@ skip_r_store:;
 				continue;
 			}
 
-			/* Step (6): encode */
+			// Step (6): encode
 			if (v_s < v_m) {
 				delta_command_t cmd;
 				cmd.tag = CMD_ADD;
@@ -257,14 +255,14 @@ skip_r_store:;
 			}
 			v_s = v_m + ml;
 
-			/* Step (7): advance past matched region, flush tables */
+			// Step (7): advance past matched region, flush tables
 			v_c = v_m + ml;
 			r_c = r_m + ml;
 			ver++;
 		}
 	}
 
-	/* Step (8): trailing add */
+	// Step (8): trailing add
 	if (v_s < v_len) {
 		delta_command_t cmd;
 		cmd.tag = CMD_ADD;
@@ -284,7 +282,7 @@ skip_r_store:;
 		delta_print_command_stats(&commands);
 	}
 
-	/* Cleanup */
+	// Cleanup
 	if (use_splay) {
 		delta_splay_free(&h_v_sp);
 		delta_splay_free(&h_r_sp);

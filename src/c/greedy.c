@@ -1,9 +1,7 @@
-/*
- * greedy.c — Greedy differencing algorithm (Section 3.1, Figure 2)
- *
- * Optimal O(n^2) algorithm: fingerprint every position in R, then scan V
- * and find the longest match at each position.
- */
+// greedy.c — Greedy differencing algorithm (Section 3.1, Figure 2)
+//
+// Optimal O(n^2) algorithm: fingerprint every position in R, then scan V
+// and find the longest match at each position.
 
 #include "delta.h"
 
@@ -11,7 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ── Chained hash table for greedy: maps fingerprint -> list of offsets ── */
+// ── Chained hash table for greedy: maps fingerprint -> list of offsets ──
 
 typedef struct greedy_entry {
 	uint64_t fp;
@@ -57,7 +55,7 @@ ght_free(greedy_htable_t *ht)
 	free(ht->buckets);
 }
 
-/* ── Splay tree value for greedy: dynamic array of offsets ─────────── */
+// ── Splay tree value for greedy: dynamic array of offsets ────────────
 
 typedef struct {
 	size_t *offsets;
@@ -82,7 +80,7 @@ ov_push(offset_vec_t *ov, size_t offset)
 	ov->offsets[ov->len++] = offset;
 }
 
-/* ── Greedy algorithm ──────────────────────────────────────────────── */
+// ── Greedy algorithm ──────────────────────────────────────────────────
 
 delta_commands_t
 delta_diff_greedy(const uint8_t *r, size_t r_len,
@@ -107,7 +105,7 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 
 	num_seeds = (r_len >= p) ? (r_len - p + 1) : 0;
 
-	/* Step (1): Build lookup structure for R */
+	// Step (1): Build lookup structure for R
 	if (use_splay) {
 		delta_splay_init(&splay, sizeof(offset_vec_t));
 		splay.value_free = ov_free;
@@ -149,7 +147,7 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 		        r_len, v_len, p);
 	}
 
-	/* Step (2): initialize scan pointers */
+	// Step (2): initialize scan pointers
 	v_c = 0;
 	v_s = 0;
 
@@ -163,14 +161,14 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 		uint64_t fp_v;
 		size_t best_len = 0, best_rm = 0;
 
-		/* Step (3): check for end of V */
+		// Step (3): check for end of V
 		if (v_c + p > v_len) { break; }
 
-		/* Compute V fingerprint at v_c */
+		// Compute V fingerprint at v_c
 		fp_v = delta_rh_advance(&rh_v, &rh_v_valid, &rh_v_pos,
 		                        v, v_c, p);
 
-		/* Steps (4)+(5): find longest match */
+		// Steps (4)+(5): find longest match
 		if (use_splay) {
 			offset_vec_t *val = delta_splay_find(&splay, fp_v);
 			if (val) {
@@ -220,7 +218,7 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 			continue;
 		}
 
-		/* Step (6): encode */
+		// Step (6): encode
 		if (v_s < v_c) {
 			delta_command_t cmd;
 			cmd.tag = CMD_ADD;
@@ -238,11 +236,11 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 		}
 		v_s = v_c + best_len;
 
-		/* Step (7): advance past matched region */
+		// Step (7): advance past matched region
 		v_c += best_len;
 	}
 
-	/* Step (8): trailing add */
+	// Step (8): trailing add
 	if (v_s < v_len) {
 		delta_command_t cmd;
 		cmd.tag = CMD_ADD;
@@ -256,7 +254,7 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 		delta_print_command_stats(&commands);
 	}
 
-	/* Cleanup */
+	// Cleanup
 	if (use_splay) {
 		delta_splay_free(&splay);
 	} else {

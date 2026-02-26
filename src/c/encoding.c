@@ -1,13 +1,11 @@
-/*
- * encoding.c — Unified binary delta format encode/decode
- *
- * Format:
- *   Header: magic (4 bytes) + flags (1 byte) + version_size (u32 BE)
- *   Commands:
- *     END:  type=0
- *     COPY: type=1, src:u32be, dst:u32be, len:u32be
- *     ADD:  type=2, dst:u32be, len:u32be, data
- */
+// encoding.c — Unified binary delta format encode/decode
+//
+// Format:
+//   Header: magic (4 bytes) + flags (1 byte) + version_size (u32 BE)
+//   Commands:
+//     END:  type=0
+//     COPY: type=1, src:u32be, dst:u32be, len:u32be
+//     ADD:  type=2, dst:u32be, len:u32be, data
 
 #include "delta.h"
 
@@ -15,7 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ── Big-endian u32 helpers ────────────────────────────────────────── */
+// ── Big-endian u32 helpers ────────────────────────────────────────────
 
 static void
 write_u32_be(uint8_t **p, uint32_t val)
@@ -34,7 +32,7 @@ read_u32_be(const uint8_t *p)
 	       ((uint32_t)p[2] << 8)  | (uint32_t)p[3];
 }
 
-/* ── Encode ────────────────────────────────────────────────────────── */
+// ── Encode ────────────────────────────────────────────────────────────
 
 delta_buffer_t
 delta_encode(const delta_placed_commands_t *cmds, bool inplace,
@@ -42,7 +40,7 @@ delta_encode(const delta_placed_commands_t *cmds, bool inplace,
              const uint8_t src_crc[DELTA_CRC_SIZE],
              const uint8_t dst_crc[DELTA_CRC_SIZE])
 {
-	/* Estimate size: header + per-cmd overhead */
+	// Estimate size: header + per-cmd overhead
 	size_t est = DELTA_HEADER_SIZE + cmds->len * 14 + 1;
 	size_t i;
 	uint8_t *buf, *p;
@@ -56,7 +54,7 @@ delta_encode(const delta_placed_commands_t *cmds, bool inplace,
 	buf = delta_malloc(est);
 	p = buf;
 
-	/* Header */
+	// Header
 	memcpy(p, DELTA_MAGIC, sizeof(DELTA_MAGIC));
 	p += sizeof(DELTA_MAGIC);
 	*p++ = inplace ? DELTA_FLAG_INPLACE : 0;
@@ -64,7 +62,7 @@ delta_encode(const delta_placed_commands_t *cmds, bool inplace,
 	memcpy(p, src_crc, DELTA_CRC_SIZE); p += DELTA_CRC_SIZE;
 	memcpy(p, dst_crc, DELTA_CRC_SIZE); p += DELTA_CRC_SIZE;
 
-	/* Commands */
+	// Commands
 	for (i = 0; i < cmds->len; i++) {
 		const delta_placed_command_t *cmd = &cmds->data[i];
 		if (cmd->tag == PCMD_COPY) {
@@ -89,7 +87,7 @@ delta_encode(const delta_placed_commands_t *cmds, bool inplace,
 	return result;
 }
 
-/* ── delta_buffer_t constructor / destructor ───────────────────────── */
+// ── delta_buffer_t constructor / destructor ───────────────────────────
 
 void
 delta_buffer_init(delta_buffer_t *buf)
@@ -106,7 +104,7 @@ delta_buffer_free(delta_buffer_t *buf)
 	buf->len = 0;
 }
 
-/* ── Decode ────────────────────────────────────────────────────────── */
+// ── Decode ────────────────────────────────────────────────────────────
 
 delta_decode_result_t
 delta_decode(const uint8_t *data, size_t len)
@@ -177,7 +175,7 @@ delta_decode(const uint8_t *data, size_t len)
 	return result;
 }
 
-/* ── delta_decode_result_t constructor / destructor ────────────────── */
+// ── delta_decode_result_t constructor / destructor ────────────────────
 
 void
 delta_decode_result_init(delta_decode_result_t *dr)

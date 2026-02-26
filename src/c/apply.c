@@ -1,13 +1,11 @@
-/*
- * apply.c — Command placement, application, and summary statistics
- */
+// apply.c — Command placement, application, and summary statistics
 
 #include "delta.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-/* ── Dynamic array helpers ─────────────────────────────────────────── */
+// ── Dynamic array helpers ─────────────────────────────────────────────
 
 void
 delta_commands_init(delta_commands_t *c)
@@ -74,7 +72,7 @@ delta_placed_commands_free(delta_placed_commands_t *c)
 	c->len = c->cap = 0;
 }
 
-/* ── Summary statistics ────────────────────────────────────────────── */
+// ── Summary statistics ─────────────────────────────────────────────────
 
 delta_summary_t
 delta_summary(const delta_commands_t *cmds)
@@ -114,7 +112,7 @@ delta_placed_summary(const delta_placed_commands_t *cmds)
 	return s;
 }
 
-/* ── Output size ───────────────────────────────────────────────────── */
+// ── Output size ────────────────────────────────────────────────────────
 
 size_t
 delta_output_size(const delta_commands_t *cmds)
@@ -131,7 +129,7 @@ delta_output_size(const delta_commands_t *cmds)
 	return total;
 }
 
-/* ── Place commands with sequential destinations ───────────────────── */
+// ── Place commands with sequential destinations ────────────────────────
 
 delta_placed_commands_t
 delta_place_commands(const delta_commands_t *cmds)
@@ -163,7 +161,7 @@ delta_place_commands(const delta_commands_t *cmds)
 	return placed;
 }
 
-/* ── Unplace: convert placed commands back to algorithm commands ────── */
+// ── Unplace: convert placed commands back to algorithm commands ─────────
 
 static size_t
 pcmd_dst(const delta_placed_command_t *cmd)
@@ -176,7 +174,7 @@ qsort_indices(size_t *idx, size_t n, const delta_placed_command_t *data)
 {
 	size_t i, j, tmp, pivot;
 	if (n < 2) { return; }
-	/* Move middle element to last as pivot — avoids O(n²) on sorted input. */
+	// Move middle element to last as pivot — avoids O(n²) on sorted input.
 	tmp = idx[n / 2]; idx[n / 2] = idx[n - 1]; idx[n - 1] = tmp;
 	pivot = pcmd_dst(&data[idx[n - 1]]);
 	i = 0;
@@ -225,7 +223,7 @@ delta_unplace_commands(const delta_placed_commands_t *placed)
 	return cmds;
 }
 
-/* ── Apply placed commands (standard mode) ─────────────────────────── */
+// ── Apply placed commands (standard mode) ─────────────────────────────
 
 delta_buffer_t
 delta_apply_placed(const uint8_t *r, const delta_placed_commands_t *cmds,
@@ -249,7 +247,7 @@ delta_apply_placed(const uint8_t *r, const delta_placed_commands_t *cmds,
 	return result;
 }
 
-/* ── Apply placed commands in-place (memmove-safe) ─────────────────── */
+// ── Apply placed commands in-place (memmove-safe) ─────────────────────
 
 void
 delta_apply_placed_inplace(const delta_placed_commands_t *cmds, uint8_t *buf)
@@ -267,7 +265,7 @@ delta_apply_placed_inplace(const delta_placed_commands_t *cmds, uint8_t *buf)
 	}
 }
 
-/* ── Reconstruct version from R + in-place commands ────────────────── */
+// ── Reconstruct version from R + in-place commands ────────────────────
 
 delta_buffer_t
 delta_apply_delta_inplace(const uint8_t *r, size_t r_len,

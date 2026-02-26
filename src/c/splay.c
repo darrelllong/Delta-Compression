@@ -1,22 +1,20 @@
-/*
- * splay.c — Tarjan-Sleator splay tree keyed on uint64_t fingerprints
- *
- * Self-adjusting binary search tree: every access splays the accessed
- * node to the root via zig/zig-zig/zig-zag rotations.  Amortized
- * O(log n) per operation.
- *
- * Reference: Sleator & Tarjan, "Self-Adjusting Binary Search Trees",
- * JACM 32(3), 1985.
- *
- * Values are fixed-size, stored inline via flexible array member.
- */
+// splay.c — Tarjan-Sleator splay tree keyed on uint64_t fingerprints
+//
+// Self-adjusting binary search tree: every access splays the accessed
+// node to the root via zig/zig-zig/zig-zag rotations.  Amortized
+// O(log n) per operation.
+//
+// Reference: Sleator & Tarjan, "Self-Adjusting Binary Search Trees",
+// JACM 32(3), 1985.
+//
+// Values are fixed-size, stored inline via flexible array member.
 
 #include "delta.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-/* ── Node allocation ───────────────────────────────────────────────── */
+// ── Node allocation ───────────────────────────────────────────────────
 
 static delta_splay_node_t *
 node_alloc(uint64_t key, const void *value, size_t value_size)
@@ -29,7 +27,7 @@ node_alloc(uint64_t key, const void *value, size_t value_size)
 	return n;
 }
 
-/* ── Top-down splay (Sleator & Tarjan 1985) ────────────────────────── */
+// ── Top-down splay (Sleator & Tarjan 1985) ────────────────────────────
 
 static void
 splay(delta_splay_t *t, uint64_t key)
@@ -46,28 +44,28 @@ splay(delta_splay_t *t, uint64_t key)
 		if (key < tp->key) {
 			if (!tp->left) { break; }
 			if (key < tp->left->key) {
-				/* Zig-zig: rotate right */
+				// Zig-zig: rotate right
 				y = tp->left;
 				tp->left = y->right;
 				y->right = tp;
 				tp = y;
 				if (!tp->left) { break; }
 			}
-			/* Link right */
+			// Link right
 			r->left = tp;
 			r = tp;
 			tp = tp->left;
 		} else if (key > tp->key) {
 			if (!tp->right) { break; }
 			if (key > tp->right->key) {
-				/* Zig-zig: rotate left */
+				// Zig-zig: rotate left
 				y = tp->right;
 				tp->right = y->left;
 				y->left = tp;
 				tp = y;
 				if (!tp->right) { break; }
 			}
-			/* Link left */
+			// Link left
 			l->right = tp;
 			l = tp;
 			tp = tp->right;
@@ -76,7 +74,7 @@ splay(delta_splay_t *t, uint64_t key)
 		}
 	}
 
-	/* Assemble */
+	// Assemble
 	l->right = tp->left;
 	r->left = tp->right;
 	tp->left = header.right;
@@ -84,7 +82,7 @@ splay(delta_splay_t *t, uint64_t key)
 	t->root = tp;
 }
 
-/* ── Public API ────────────────────────────────────────────────────── */
+// ── Public API ────────────────────────────────────────────────────────
 
 void
 delta_splay_init(delta_splay_t *t, size_t value_size)
@@ -116,7 +114,7 @@ delta_splay_insert_or_get(delta_splay_t *t, uint64_t key, const void *value)
 
 	splay(t, key);
 	if (t->root->key == key) {
-		return t->root->value;  /* retain existing */
+		return t->root->value;  // retain existing
 	}
 
 	n = node_alloc(key, value, t->value_size);

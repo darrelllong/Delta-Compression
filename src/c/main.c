@@ -1,11 +1,9 @@
-/*
- * main.c — CLI for differential compression (Ajtai et al. 2002)
- *
- * Usage:
- *   delta encode <algorithm> <reference> <version> <delta_file> [options]
- *   delta decode <reference> <delta_file> <output>
- *   delta info <delta_file>
- */
+// main.c — CLI for differential compression (Ajtai et al. 2002)
+//
+// Usage:
+//   delta encode <algorithm> <reference> <version> <delta_file> [options]
+//   delta decode <reference> <delta_file> <output>
+//   delta info <delta_file>
 
 #include "delta.h"
 
@@ -16,13 +14,13 @@
 #include <string.h>
 #include <time.h>
 
-/* POSIX mmap */
+// POSIX mmap
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-/* ── mmap wrapper ──────────────────────────────────────────────────── */
+// ── mmap wrapper ──────────────────────────────────────────────────────
 
 typedef struct {
 	uint8_t *data;
@@ -71,7 +69,7 @@ unmap_file(mapped_file_t *mf)
 	mf->fd = -1;
 }
 
-/* ── File read into malloc'd buffer ────────────────────────────────── */
+// ── File read into malloc'd buffer ────────────────────────────────────
 
 static uint8_t *
 read_file(const char *path, size_t *out_len)
@@ -111,7 +109,7 @@ write_file(const char *path, const uint8_t *data, size_t len)
 	fclose(f);
 }
 
-/* Write a file while computing its CRC-64/XZ in the same pass. */
+// Write a file while computing its CRC-64/XZ in the same pass.
 static void
 write_file_hashed(const char *path, const uint8_t *data, size_t len,
                   uint8_t out_crc[DELTA_CRC_SIZE])
@@ -120,7 +118,7 @@ write_file_hashed(const char *path, const uint8_t *data, size_t len,
 	delta_crc64_xz(data, len, out_crc);
 }
 
-/* ── Elapsed time helper ───────────────────────────────────────────── */
+// ── Elapsed time helper ────────────────────────────────────────────────
 
 static double
 elapsed_sec(struct timespec *t0, struct timespec *t1)
@@ -129,7 +127,7 @@ elapsed_sec(struct timespec *t0, struct timespec *t1)
 	     + (double)(t1->tv_nsec - t0->tv_nsec) / 1e9;
 }
 
-/* ── Hex formatting ────────────────────────────────────────────────── */
+// ── Hex formatting ────────────────────────────────────────────────────
 
 static void
 fprint_hex(FILE *f, const uint8_t *bytes, size_t len)
@@ -140,7 +138,7 @@ fprint_hex(FILE *f, const uint8_t *bytes, size_t len)
 	}
 }
 
-/* ── Parse a size string with optional k/M/B suffix ────────────────── */
+// ── Parse a size string with optional k/M/B suffix ────────────────────
 
 static size_t
 parse_size_suffix(const char *s)
@@ -153,7 +151,7 @@ parse_size_suffix(const char *s)
 	return (size_t)n;
 }
 
-/* ── Usage ─────────────────────────────────────────────────────────── */
+// ── Usage ─────────────────────────────────────────────────────────────
 
 static void
 usage(void)
@@ -179,7 +177,7 @@ usage(void)
 	exit(1);
 }
 
-/* ── Main ──────────────────────────────────────────────────────────── */
+// ── Main ──────────────────────────────────────────────────────────────
 
 int
 main(int argc, char **argv)
@@ -187,7 +185,7 @@ main(int argc, char **argv)
 	if (argc < 2) { usage(); }
 
 	if (strcmp(argv[1], "encode") == 0) {
-		/* encode <algo> <ref> <ver> <delta> [options] */
+		// encode <algo> <ref> <ver> <delta> [options]
 		if (argc < 6) { usage(); }
 
 		const char *algo_str = argv[2];
@@ -214,7 +212,7 @@ main(int argc, char **argv)
 		delta_cycle_policy_t policy = POLICY_LOCALMIN;
 		const char *policy_str = "localmin";
 
-		/* Parse options from argv[6..] */
+		// Parse options from argv[6..]
 		static struct option long_opts[] = {
 			{"seed-len",   required_argument, NULL, 's'},
 			{"table-size", required_argument, NULL, 't'},
@@ -226,7 +224,7 @@ main(int argc, char **argv)
 			{NULL, 0, NULL, 0}
 		};
 
-		optind = 6;  /* start parsing after positional args */
+		optind = 6;  // start parsing after positional args
 		int opt;
 		while ((opt = getopt_long(argc, argv, "", long_opts, NULL)) != -1) {
 			switch (opt) {
@@ -338,7 +336,7 @@ main(int argc, char **argv)
 
 		delta_decode_result_t dr = delta_decode(delta_data, delta_len);
 
-		/* Pre-check: verify reference matches embedded src_crc. */
+		// Pre-check: verify reference matches embedded src_crc.
 		{
 			uint8_t r_crc[DELTA_CRC_SIZE];
 			delta_crc64_xz(r_file.data, r_file.size, r_crc);
@@ -371,11 +369,11 @@ main(int argc, char **argv)
 		clock_gettime(CLOCK_MONOTONIC, &t1);
 		double elapsed = elapsed_sec(&t0, &t1);
 
-		/* Write output and compute CRC in a single pass. */
+		// Write output and compute CRC in a single pass.
 		uint8_t out_crc[DELTA_CRC_SIZE];
 		write_file_hashed(out_path, out_buf.data, out_buf.len, out_crc);
 
-		/* Post-check: verify output matches embedded dst_crc. */
+		// Post-check: verify output matches embedded dst_crc.
 		if (memcmp(out_crc, dr.dst_crc, DELTA_CRC_SIZE) != 0) {
 			if (!ignore_hash) {
 				fprintf(stderr, "output integrity check failed\n");
@@ -434,7 +432,7 @@ main(int argc, char **argv)
 		delta_cycle_policy_t policy = POLICY_LOCALMIN;
 		const char *policy_str = "localmin";
 
-		/* Parse optional --policy */
+		// Parse optional --policy
 		{
 			int a;
 			for (a = 5; a < argc; a++) {

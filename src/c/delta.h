@@ -1,11 +1,9 @@
-/*
- * delta.h — Differential compression (Ajtai, Burns, Fagin, Long — JACM 2002)
- *
- * Single-header API for the delta compression library.  Implements three
- * differencing algorithms (greedy, onepass, correcting), a unified binary
- * delta format, in-place reconstruction (Burns et al. — IEEE TKDE 2003),
- * and optional Tarjan-Sleator splay tree lookup.
- */
+// delta.h — Differential compression (Ajtai, Burns, Fagin, Long — JACM 2002)
+//
+// Single-header API for the delta compression library.  Implements three
+// differencing algorithms (greedy, onepass, correcting), a unified binary
+// delta format, in-place reconstruction (Burns et al. — IEEE TKDE 2003),
+// and optional Tarjan-Sleator splay tree lookup.
 
 #ifndef DELTA_H
 #define DELTA_H
@@ -14,29 +12,27 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* ====================================================================
- * Constants (Section 2.1.3)
- * ==================================================================== */
+// ── Constants (Section 2.1.3) ─────────────────────────────────────────
 
 #define DELTA_SEED_LEN       16
-#define DELTA_TABLE_SIZE     1048573UL    /* largest prime < 2^20 */
-#define DELTA_MAX_TABLE_SIZE 1073741827UL /* prime near 2^30; default ceiling for auto-sizing */
+#define DELTA_TABLE_SIZE     1048573UL    // largest prime < 2^20
+#define DELTA_MAX_TABLE_SIZE 1073741827UL // prime near 2^30; default ceiling for auto-sizing
 #define DELTA_HASH_BASE   263ULL
-#define DELTA_HASH_MOD    ((1ULL << 61) - 1)  /* Mersenne prime 2^61-1 */
+#define DELTA_HASH_MOD    ((1ULL << 61) - 1)  // Mersenne prime 2^61-1
 #define DELTA_FLAG_INPLACE 0x01
 #define DELTA_CMD_END      0
 #define DELTA_CMD_COPY     1
 #define DELTA_CMD_ADD      2
-#define DELTA_CRC_SIZE     8    /* CRC-64/XZ digest bytes */
-#define DELTA_HEADER_SIZE  25   /* magic(4) + flags(1) + version_size(4) + src_crc(8) + dst_crc(8) */
+#define DELTA_CRC_SIZE     8    // CRC-64/XZ digest bytes
+#define DELTA_HEADER_SIZE  25   // magic(4) + flags(1) + version_size(4) + src_crc(8) + dst_crc(8)
 #define DELTA_U32_SIZE     4
-#define DELTA_COPY_PAYLOAD 12   /* src(4) + dst(4) + len(4) */
-#define DELTA_ADD_HEADER   8    /* dst(4) + len(4) */
+#define DELTA_COPY_PAYLOAD 12   // src(4) + dst(4) + len(4)
+#define DELTA_ADD_HEADER   8    // dst(4) + len(4)
 #define DELTA_BUF_CAP      256
 
 static const uint8_t DELTA_MAGIC[4] = {'D', 'L', 'T', 0x03};
 
-/* ── Checked allocation helpers ───────────────────────────────────── */
+// ── Checked allocation helpers ────────────────────────────────────────
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,47 +74,43 @@ delta_calloc(size_t count, size_t size)
 	return p;
 }
 
-/* ====================================================================
- * Enums
- * ==================================================================== */
+// ── Enums ─────────────────────────────────────────────────────────────
 
-/* Differencing algorithm selection. */
+// Differencing algorithm selection.
 typedef enum {
-	ALGO_GREEDY,     /* Optimal under simple cost; O(|V|·|R|) time, O(|R|) space (Section 3). */
-	ALGO_ONEPASS,    /* Linear time and near-constant space; concurrent scan of R and V (Section 4). */
-	ALGO_CORRECTING  /* Near-optimal, 1.5-pass; hash table with fingerprint checkpointing (Sections 7-8). */
+	ALGO_GREEDY,     // Optimal under simple cost; O(|V|·|R|) time, O(|R|) space (Section 3).
+	ALGO_ONEPASS,    // Linear time and near-constant space; concurrent scan of R and V (Section 4).
+	ALGO_CORRECTING  // Near-optimal, 1.5-pass; hash table with fingerprint checkpointing (Sections 7-8).
 } delta_algorithm_t;
 
-/* Cycle-breaking policy for in-place reordering (Section 4.3 of Burns et al. 2003). */
+// Cycle-breaking policy for in-place reordering (Section 4.3 of Burns et al. 2003).
 typedef enum {
-	POLICY_LOCALMIN, /* Break each cycle at the copy with the shortest length, minimising literal bytes added. */
-	POLICY_CONSTANT  /* Break each cycle at the first remaining vertex; simpler but ignores copy lengths. */
+	POLICY_LOCALMIN, // Break each cycle at the copy with the shortest length, minimising literal bytes added.
+	POLICY_CONSTANT  // Break each cycle at the first remaining vertex; simpler but ignores copy lengths.
 } delta_cycle_policy_t;
 
-/* ====================================================================
- * Delta commands (Section 2.1.1)
- *
- * Algorithm output: copy from R or add literal bytes.
- * ==================================================================== */
+// ── Delta commands (Section 2.1.1) ────────────────────────────────────
+//
+// Algorithm output: copy from R or add literal bytes.
 
 typedef enum { CMD_COPY, CMD_ADD } delta_cmd_tag_t;
 
-/* Algorithm-level command: copy from R or add literal bytes from V. */
+// Algorithm-level command: copy from R or add literal bytes from V.
 typedef struct {
-	delta_cmd_tag_t tag;    /* CMD_COPY or CMD_ADD */
+	delta_cmd_tag_t tag;    // CMD_COPY or CMD_ADD
 	union {
 		struct {
-			size_t offset; /* Byte offset of the match in R. */
-			size_t length; /* Number of bytes to copy. */
+			size_t offset; // Byte offset of the match in R.
+			size_t length; // Number of bytes to copy.
 		} copy;
 		struct {
-			uint8_t *data;  /* Heap-allocated literal bytes (caller frees via delta_commands_free). */
-			size_t   length; /* Number of literal bytes. */
+			uint8_t *data;  // Heap-allocated literal bytes (caller frees via delta_commands_free).
+			size_t   length; // Number of literal bytes.
 		} add;
 	};
 } delta_command_t;
 
-/* Dynamic array of commands. */
+// Dynamic array of commands.
 typedef struct {
 	delta_command_t *data;
 	size_t len;
@@ -129,9 +121,7 @@ void   delta_commands_init(delta_commands_t *c);
 void   delta_commands_push(delta_commands_t *c, delta_command_t cmd);
 void   delta_commands_free(delta_commands_t *c);
 
-/* ====================================================================
- * Placed commands — with explicit src/dst, ready for encoding
- * ==================================================================== */
+// ── Placed commands — with explicit src/dst, ready for encoding ────────
 
 typedef enum { PCMD_COPY, PCMD_ADD } delta_pcmd_tag_t;
 
@@ -153,26 +143,22 @@ void   delta_placed_commands_init(delta_placed_commands_t *c);
 void   delta_placed_commands_push(delta_placed_commands_t *c, delta_placed_command_t cmd);
 void   delta_placed_commands_free(delta_placed_commands_t *c);
 
-/* ====================================================================
- * Summary statistics
- * ==================================================================== */
+// ── Summary statistics ─────────────────────────────────────────────────
 
-/* Summary statistics for a set of commands. */
+// Summary statistics for a set of commands.
 typedef struct {
-	size_t num_commands;       /* Total number of commands (copies + adds). */
-	size_t num_copies;         /* Number of COPY commands. */
-	size_t num_adds;           /* Number of ADD commands. */
-	size_t copy_bytes;         /* Total bytes reproduced by COPY commands. */
-	size_t add_bytes;          /* Total literal bytes in ADD commands. */
-	size_t total_output_bytes; /* Reconstructed output size (= copy_bytes + add_bytes). */
+	size_t num_commands;       // Total number of commands (copies + adds).
+	size_t num_copies;         // Number of COPY commands.
+	size_t num_adds;           // Number of ADD commands.
+	size_t copy_bytes;         // Total bytes reproduced by COPY commands.
+	size_t add_bytes;          // Total literal bytes in ADD commands.
+	size_t total_output_bytes; // Reconstructed output size (= copy_bytes + add_bytes).
 } delta_summary_t;
 
 delta_summary_t delta_summary(const delta_commands_t *cmds);
 delta_summary_t delta_placed_summary(const delta_placed_commands_t *cmds);
 
-/* ====================================================================
- * Karp-Rabin rolling hash (Section 2.1.3)
- * ==================================================================== */
+// ── Karp-Rabin rolling hash (Section 2.1.3) ───────────────────────────
 
 uint64_t delta_mod_mersenne(__uint128_t x);
 uint64_t delta_fingerprint(const uint8_t *data, size_t offset, size_t p);
@@ -180,7 +166,7 @@ uint64_t delta_precompute_bp(size_t p);
 
 typedef struct {
 	uint64_t value;
-	uint64_t bp;    /* HASH_BASE^{p-1} mod HASH_MOD */
+	uint64_t bp;    // HASH_BASE^{p-1} mod HASH_MOD
 	size_t   p;
 } delta_rolling_hash_t;
 
@@ -192,31 +178,25 @@ uint64_t delta_rh_advance(delta_rolling_hash_t *rh, int *valid,
                           size_t *rh_pos, const uint8_t *data,
                           size_t target, size_t p);
 
-/* ====================================================================
- * Primality (for hash table auto-sizing)
- * ==================================================================== */
+// ── Primality (for hash table auto-sizing) ────────────────────────────
 
-/*
- * Deterministic Miller-Rabin primality test.
- *
- * Uses 12 fixed witnesses [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37],
- * sufficient for all n < 3.3e24 (Jaeschke, Math. Comp. 61(204), 1993).
- */
+// Deterministic Miller-Rabin primality test.
+//
+// Uses 12 fixed witnesses [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37],
+// sufficient for all n < 3.3e24 (Jaeschke, Math. Comp. 61(204), 1993).
 bool     delta_is_prime(size_t n);
-/* Smallest prime >= n. */
+// Smallest prime >= n.
 size_t   delta_next_prime(size_t n);
 
-/* ====================================================================
- * Splay tree (Sleator & Tarjan, JACM 1985)
- *
- * Keyed on uint64_t, with fixed-size values stored inline via memcpy.
- * ==================================================================== */
+// ── Splay tree (Sleator & Tarjan, JACM 1985) ──────────────────────────
+//
+// Keyed on uint64_t, with fixed-size values stored inline via memcpy.
 
 typedef struct delta_splay_node {
 	uint64_t key;
 	struct delta_splay_node *left;
 	struct delta_splay_node *right;
-	/* value follows in flexible array member */
+	// value follows in flexible array member
 	char value[];
 } delta_splay_node_t;
 
@@ -224,7 +204,7 @@ typedef struct {
 	delta_splay_node_t *root;
 	size_t size;
 	size_t value_size;
-	void (*value_free)(void *value);  /* optional destructor for values */
+	void (*value_free)(void *value);  // optional destructor for values
 } delta_splay_t;
 
 void     delta_splay_init(delta_splay_t *t, size_t value_size);
@@ -236,9 +216,7 @@ void     delta_splay_insert(delta_splay_t *t, uint64_t key,
 void     delta_splay_clear(delta_splay_t *t);
 void     delta_splay_free(delta_splay_t *t);
 
-/* ====================================================================
- * Option flags — bitset for on/off options (cf. Sleator & Tarjan set.h)
- * ==================================================================== */
+// ── Option flags — bitset for on/off options (cf. Sleator & Tarjan set.h)
 
 typedef uint64_t delta_flags_t;
 
@@ -266,25 +244,21 @@ delta_flag_clear(delta_flags_t s, delta_opt_flag_t f)
 	return s & ~(1ULL << f);
 }
 
-/* ====================================================================
- * Diff options — replaces positional parameter lists
- * ==================================================================== */
+// ── Diff options — replaces positional parameter lists ─────────────────
 
-/* Tuning parameters for differencing algorithms. */
+// Tuning parameters for differencing algorithms.
 typedef struct {
-	size_t        p;         /* Seed length: minimum match length and fingerprint window (Section 2.1.3). */
-	size_t        q;         /* Hash table capacity floor; algorithms auto-size upward from input length. */
-	size_t        buf_cap;   /* Lookback buffer depth for the correcting algorithm (Section 5.2). */
-	size_t        max_table; /* Auto-sizing ceiling; prevents unbounded memory use on very large inputs. */
-	delta_flags_t flags;     /* Bitset of DELTA_OPT_* flags (verbose, splay, inplace). */
+	size_t        p;         // Seed length: minimum match length and fingerprint window (Section 2.1.3).
+	size_t        q;         // Hash table capacity floor; algorithms auto-size upward from input length.
+	size_t        buf_cap;   // Lookback buffer depth for the correcting algorithm (Section 5.2).
+	size_t        max_table; // Auto-sizing ceiling; prevents unbounded memory use on very large inputs.
+	delta_flags_t flags;     // Bitset of DELTA_OPT_* flags (verbose, splay, inplace).
 } delta_diff_options_t;
 
 #define DELTA_DIFF_OPTIONS_DEFAULT \
 	{ DELTA_SEED_LEN, DELTA_TABLE_SIZE, DELTA_BUF_CAP, DELTA_MAX_TABLE_SIZE, 0 }
 
-/* ====================================================================
- * Differencing algorithms
- * ==================================================================== */
+// ── Differencing algorithms ────────────────────────────────────────────
 
 void delta_print_command_stats(const delta_commands_t *cmds);
 
@@ -309,13 +283,11 @@ delta_commands_t delta_diff(
 	const uint8_t *v, size_t v_len,
 	const delta_diff_options_t *opts);
 
-/* ====================================================================
- * CRC-64/XZ (ECMA-182 reflected) — 8-byte output
- *
- * Poly (reflected): 0xC96C5795D7870F42, Init = XorOut = 0xFFFFFFFFFFFFFFFF.
- * Check value: delta_crc64_xz(b"123456789", 9, out) → 0x995DC9BBDF1939FA BE.
- * Output stored big-endian (consistent with u32 fields in the format).
- * ==================================================================== */
+// ── CRC-64/XZ (ECMA-182 reflected) — 8-byte output ───────────────────
+//
+// Poly (reflected): 0xC96C5795D7870F42, Init = XorOut = 0xFFFFFFFFFFFFFFFF.
+// Check value: delta_crc64_xz(b"123456789", 9, out) → 0x995DC9BBDF1939FA BE.
+// Output stored big-endian (consistent with u32 fields in the format).
 
 static inline void
 delta_crc64_xz(const uint8_t *data, size_t len, uint8_t out[DELTA_CRC_SIZE])
@@ -342,17 +314,15 @@ delta_crc64_xz(const uint8_t *data, size_t len, uint8_t out[DELTA_CRC_SIZE])
 		crc = table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
 	crc ^= 0xFFFFFFFFFFFFFFFFULL;
 
-	/* Store big-endian. */
+	// Store big-endian.
 	for (i = 0; i < DELTA_CRC_SIZE; i++)
 		out[i] = (uint8_t)(crc >> (56 - 8 * i));
 }
 
-/* ====================================================================
- * Binary delta format encode/decode
- *
- * Format: DLT\x03 + flags:u8 + version_size:u32be
- *         + src_crc(8) + dst_crc(8) + commands + END(0)
- * ==================================================================== */
+// ── Binary delta format encode/decode ─────────────────────────────────
+//
+// Format: DLT\x03 + flags:u8 + version_size:u32be
+//         + src_crc(8) + dst_crc(8) + commands + END(0)
 
 typedef struct {
 	uint8_t *data;
@@ -366,22 +336,20 @@ delta_buffer_t delta_encode(const delta_placed_commands_t *cmds,
 void           delta_buffer_init(delta_buffer_t *buf);
 void           delta_buffer_free(delta_buffer_t *buf);
 
-/* Decoded delta file content. */
+// Decoded delta file content.
 typedef struct {
-	delta_placed_commands_t commands;        /* Placed commands to execute during apply. */
-	bool    inplace;                         /* True if the delta uses the in-place format. */
-	size_t  version_size;                    /* Byte length of the reconstructed version. */
-	uint8_t src_crc[DELTA_CRC_SIZE];         /* CRC-64/XZ of the reference (8 bytes big-endian). */
-	uint8_t dst_crc[DELTA_CRC_SIZE];         /* CRC-64/XZ of the version (8 bytes big-endian). */
+	delta_placed_commands_t commands;        // Placed commands to execute during apply.
+	bool    inplace;                         // True if the delta uses the in-place format.
+	size_t  version_size;                    // Byte length of the reconstructed version.
+	uint8_t src_crc[DELTA_CRC_SIZE];         // CRC-64/XZ of the reference (8 bytes big-endian).
+	uint8_t dst_crc[DELTA_CRC_SIZE];         // CRC-64/XZ of the version (8 bytes big-endian).
 } delta_decode_result_t;
 
 delta_decode_result_t delta_decode(const uint8_t *data, size_t len);
 void                  delta_decode_result_init(delta_decode_result_t *dr);
 void                  delta_decode_result_free(delta_decode_result_t *dr);
 
-/* ====================================================================
- * Command placement and application
- * ==================================================================== */
+// ── Command placement and application ─────────────────────────────────
 
 size_t delta_output_size(const delta_commands_t *cmds);
 
@@ -400,13 +368,11 @@ delta_buffer_t delta_apply_delta_inplace(const uint8_t *r, size_t r_len,
                                           const delta_placed_commands_t *cmds,
                                           size_t version_size);
 
-/* ====================================================================
- * In-place conversion (Burns, Long, Stockmeyer — IEEE TKDE 2003)
- * ==================================================================== */
+// ── In-place conversion (Burns, Long, Stockmeyer — IEEE TKDE 2003) ────
 
 delta_placed_commands_t delta_make_inplace(
 	const uint8_t *r, size_t r_len,
 	const delta_commands_t *cmds,
 	delta_cycle_policy_t policy);
 
-#endif /* DELTA_H */
+#endif // DELTA_H
