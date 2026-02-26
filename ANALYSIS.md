@@ -42,8 +42,8 @@ Section 8) to select which seeds enter the hash table.
 Two parameters govern the hash table:
 
 - **|C|** = auto-sized table capacity (`next_prime(max(table_size, 2 *
-  num_seeds / p))`).  Each entry is ~24 bytes.  `--table-size` sets
-  the floor.
+  num_seeds / p))`).  Each entry is ~16 bytes (fingerprint + position,
+  8 bytes each).  `--table-size` sets the floor.
 - **|F|** ≈ 2|R| (auto-computed): the footprint modulus.  Set to
   `next_prime(2 * num_seeds)` for good distribution.
 
@@ -87,7 +87,7 @@ after when it scans the corresponding V region.  The splay tree exploits
 this temporal locality in principle, but O(log n) rotations per access
 outweigh the locality benefit in practice: on 871 MB kernel tarballs the
 splay tree is ~55% slower than the hash table in algorithm time (0.78s
-vs 0.50s).  Total wall time is dominated by I/O (~3.5s reading two 831 MB
+vs 0.50s).  Total wall time is dominated by I/O (~3.5s reading two 871 MB
 files), so the algorithm-time difference is masked.
 
 **Why it hurts for correcting:** correcting's R pass inserts millions
@@ -103,8 +103,8 @@ collide and only the first is retained.  The splay tree keys on the full
 64-bit fingerprint, making collisions negligible: every checkpoint-passing
 R seed gets its own node.  Splay stores more fingerprints and finds more
 matches, yielding slightly better compression at the cost of O(log n)
-lookups.  On the 22 MB literary corpus, correcting+hash gives 22.94%
-and correcting+splay gives 22.39%.
+lookups.  On the cross-version kernel pairs below, splay consistently
+beats hash by 0.01–0.02 percentage points on correcting ratio.
 
 **Practical access cost:** the O(log n) characterization is a worst-case
 amortized bound.  A fingerprint appearing k times in R is splayed to the
@@ -132,7 +132,7 @@ reconstructed version).  Decode performs two checks:
 CRC-64/XZ (ECMA-182 reflected, polynomial `0x42F0E1EBA9EA3693`)
 was chosen for speed: software implementations run at ~12 GB/s, making
 the overhead negligible even on multi-gigabyte kernel tarballs.  The
-8-byte output gives a 2^{-32} probability of an undetected random error,
+8-byte output gives a 2^{-64} probability of an undetected random error,
 sufficient for accidental-error detection in delta workflows.  All eight
 implementations use the same table-driven algorithm (reflected polynomial
 `0xC96C5795D7870F42`, init = xorout = `0xFFFFFFFFFFFFFFFF`), verified
@@ -238,8 +238,9 @@ Total: O(n log n + E).
 | Script | Purpose |
 |--------|---------|
 | `tests/correctness.sh` | Builds all eight implementations and runs unit tests + cross-language compatibility (208/56/64/45/52/52/52/52 tests) |
-| `tests/kernel-delta-test.sh` | Performance benchmark on Linux 5.1.0–5.1.7 kernel tarballs (~831 MB each) |
+| `tests/kernel-delta-test.sh` | Performance benchmark on Linux 5.1.0–5.1.7 kernel tarballs (~871 MB each) |
 | `tests/transposition-benchmark.sh` | Performance benchmark on synthetic block permutations (16 MB–1 GB) |
+| `tests/per-language-benchmark.sh` | Per-language speed comparison (all 8 implementations, linux-5.1.0→5.1.1) |
 
 `tests/correctness.sh` is the primary correctness gate: it verifies that
 all eight implementations agree on every encode/decode round-trip and that
@@ -282,7 +283,7 @@ time dominates regardless.
 | C++ | 18s |
 | Python | 583s |
 
-C leads onepass by a narrow margin; Rust, C, and C++ are within a
+Rust leads onepass by a narrow margin; Rust, C, and C++ are within a
 second of each other.  Go sits between the JVM group and C/Rust/C++ for
 onepass, and just above the JVM group for correcting.  Java, Kotlin, and
 Scala cluster together — all three compile to JVM bytecode and run on
@@ -314,7 +315,7 @@ total overhead per encode or decode, negligible at any algorithm speed.
 
 ### Cross-version kernel benchmark (linux-5.1.x, C++)
 
-All six ordered pairs of linux-5.1.1, 5.1.2, and 5.1.3 (~831 MB each),
+All six ordered pairs of linux-5.1.1, 5.1.2, and 5.1.3 (~871 MB each),
 encoded with the C++ implementation (default flags):
 
 | Ref → Ver | onepass Ratio | onepass Time | correcting Ratio | correcting Time |
@@ -327,15 +328,13 @@ encoded with the C++ implementation (default flags):
 | 5.1.3 → 5.1.2 | 0.47% | 4s | 0.85% | 18s |
 
 Onepass is 4–5× faster than correcting and achieves better ratios on
-every pair.  The 5.1.1 → 5.1.2 onepass time (5s) is slightly elevated
-by a cold mmap cache on the first run; subsequent pairs drop to 4s.
-Correcting times are nearly uniform (~18s) because encoding is dominated
-by the build phase over the 831 MB reference.
+every pair.  Correcting times are nearly uniform (~18s) because encoding
+is dominated by the build phase over the 871 MB reference.
 
 ### Extended kernel benchmark (linux-5.1.0–5.1.7, Rust)
 
 Three reference modes run with `tests/kernel-delta-test.sh` (Rust, default
-flags).  All tarballs are ~831 MB post-gunzip.
+flags).  All tarballs are ~871 MB post-gunzip.
 
 **From base: 5.1.0 → 5.1.{1..7}** — fixed reference, cumulative divergence
 
@@ -392,7 +391,7 @@ the from-5.1.1 ratios grow while successive ratios stay flat (0.47–0.50%).
 
 ### Splay tree: correcting compression ratio
 
-The correcting+splay cross-version kernel results (same six pairs, ~831 MB,
+The correcting+splay cross-version kernel results (same six pairs, ~871 MB,
 Rust):
 
 | Ref → Ver | Ratio (hash) | Ratio (splay) | Time (hash) | Time (splay) |
@@ -595,7 +594,7 @@ At 1M entries the algorithm operates in the same regime as small-table
 configurations in the original paper (Ajtai et al. 2002, Section 8):
 checkpointing is so coarse that most blocks are missed and the ratio
 approaches 1 for highly-permuted inputs.  A 128M-entry table uses
-roughly 3 GB of RAM (~24 bytes per entry).
+roughly 2 GB of RAM (~16 bytes per entry).
 
 ---
 
