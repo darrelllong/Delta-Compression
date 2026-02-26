@@ -17,3 +17,7 @@ src/java/**/*.class
 
 # C++ alternate builds
 src/cpp/build-release/
+
+# Go binaries
+src/go/delta/delta
+src/go/delta_bin
