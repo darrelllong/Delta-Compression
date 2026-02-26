@@ -12,11 +12,11 @@ import "fmt"
 
 // DecodeResult holds the parsed contents of a delta file.
 type DecodeResult struct {
-	Commands    []PlacedCommand
-	Inplace     bool
-	VersionSize int
-	SrcCrc      [8]byte
-	DstCrc      [8]byte
+	Commands    []PlacedCommand // Placed commands to execute during apply.
+	Inplace     bool            // True if the delta uses the in-place format.
+	VersionSize int             // Byte length of the reconstructed version.
+	SrcCrc      [8]byte         // CRC-64/XZ of the reference (8 bytes big-endian).
+	DstCrc      [8]byte         // CRC-64/XZ of the version (8 bytes big-endian).
 }
 
 // EncodeDelta serializes placed commands to the unified binary delta format.
@@ -159,6 +159,7 @@ func IsInplaceDelta(data []byte) bool {
 	return (data[4] & DeltaFlagInplace) != 0
 }
 
+// putU32BE writes value as a 32-bit unsigned integer in big-endian byte order.
 func putU32BE(buf []byte, off, value int) {
 	buf[off] = byte(value >> 24)
 	buf[off+1] = byte(value >> 16)
@@ -166,6 +167,7 @@ func putU32BE(buf []byte, off, value int) {
 	buf[off+3] = byte(value)
 }
 
+// getU32BE reads a 32-bit unsigned integer in big-endian byte order.
 func getU32BE(buf []byte, off int) int {
 	return int(buf[off])<<24 | int(buf[off+1])<<16 | int(buf[off+2])<<8 | int(buf[off+3])
 }

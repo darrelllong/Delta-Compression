@@ -145,10 +145,16 @@ func diffCorrecting(r, v []byte, opts DiffOptions) []Command {
 	}
 
 	// Lookback buffer (Section 5.2).
+	//
+	// The correcting algorithm may discover that a newly found match overlaps
+	// commands already emitted. The buffer holds the most recent bufCap tentative
+	// commands so they can be trimmed or cancelled (tail correction) when a better
+	// match is found. Commands are flushed to the output list as they age out.
 	type bufEntry struct {
-		vStart, vEnd int
-		cmd          Command
-		dummy        bool
+		vStart int     // First V byte covered by this entry.
+		vEnd   int     // One past the last V byte covered.
+		cmd    Command // The tentative command (CopyCmd or AddCmd).
+		dummy  bool    // Reserved; always false in the current implementation.
 	}
 	buf := make([]bufEntry, 0, bufCap)
 

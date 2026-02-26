@@ -27,8 +27,11 @@ const (
 type Algorithm int
 
 const (
-	AlgorithmGreedy     Algorithm = iota
+	// AlgorithmGreedy is optimal under simple cost; O(|V|·|R|) time, O(|R|) space (Section 3).
+	AlgorithmGreedy Algorithm = iota
+	// AlgorithmOnepass uses linear time and near-constant space; concurrent scan of R and V (Section 4).
 	AlgorithmOnepass
+	// AlgorithmCorrecting is near-optimal, 1.5-pass; hash table with fingerprint checkpointing (Sections 7–8).
 	AlgorithmCorrecting
 )
 
@@ -49,7 +52,9 @@ func (a Algorithm) String() string {
 type CyclePolicy int
 
 const (
+	// CyclePolicyLocalmin breaks each cycle at the copy with the shortest length, minimising literal bytes added.
 	CyclePolicyLocalmin CyclePolicy = iota
+	// CyclePolicyConstant breaks each cycle at the first remaining vertex; simpler but ignores copy lengths.
 	CyclePolicyConstant
 )
 
@@ -72,17 +77,17 @@ type Command interface {
 	isCommand()
 }
 
-// CopyCmd instructs the decoder to copy length bytes from R starting at offset.
+// CopyCmd instructs the decoder to copy Length bytes from R starting at Offset.
 type CopyCmd struct {
-	Offset int
-	Length int
+	Offset int // Byte offset of the match in R.
+	Length int // Number of bytes to copy.
 }
 
 func (CopyCmd) isCommand() {}
 
 // AddCmd instructs the decoder to emit literal bytes.
 type AddCmd struct {
-	Data []byte
+	Data []byte // The literal bytes to append.
 }
 
 func (AddCmd) isCommand() {}
@@ -96,20 +101,20 @@ type PlacedCommand interface {
 	Dst() int
 }
 
-// PlacedCopy copies length bytes from Src to Dst in the output buffer.
+// PlacedCopy copies Length bytes from Src in R (or the working buffer) to DstOff in the output.
 type PlacedCopy struct {
-	Src    int
-	DstOff int
-	Length int
+	Src    int // Source byte offset in the reference (or working buffer for in-place).
+	DstOff int // Destination byte offset in the output.
+	Length int // Number of bytes to copy.
 }
 
 func (PlacedCopy) isPlacedCommand() {}
 func (c PlacedCopy) Dst() int       { return c.DstOff }
 
-// PlacedAdd emits literal Data at DstOff in the output buffer.
+// PlacedAdd writes literal Data to DstOff in the output buffer.
 type PlacedAdd struct {
-	DstOff int
-	Data   []byte
+	DstOff int    // Destination byte offset in the output.
+	Data   []byte // The literal bytes to write.
 }
 
 func (PlacedAdd) isPlacedCommand() {}
@@ -119,12 +124,12 @@ func (a PlacedAdd) Dst() int       { return a.DstOff }
 
 // DiffOptions holds tunable parameters for diff algorithms.
 type DiffOptions struct {
-	P        int  // seed length
-	Q        int  // hash table floor size
-	BufCap   int  // correcting lookback buffer capacity
-	Verbose  bool
-	UseSplay bool
-	MaxTable int  // auto-size ceiling
+	P        int  // Seed length: minimum match length and fingerprint window (Section 2.1.3).
+	Q        int  // Hash table capacity floor; algorithms auto-size upward from input length.
+	BufCap   int  // Lookback buffer depth for the correcting algorithm (Section 5.2).
+	Verbose  bool // Print per-run statistics to stderr when true.
+	UseSplay bool // Use a Sleator-Tarjan splay tree instead of a hash table for R lookups.
+	MaxTable int  // Auto-sizing ceiling; prevents unbounded memory use on very large inputs.
 }
 
 // DefaultDiffOptions returns options with library defaults.
@@ -141,10 +146,10 @@ func DefaultDiffOptions() DiffOptions {
 
 // PlacedSummary holds statistics for a list of placed commands.
 type PlacedSummary struct {
-	NumCommands    int
-	NumCopies      int
-	NumAdds        int
-	CopyBytes      int64
-	AddBytes       int64
-	TotalOutputBytes int64
+	NumCommands      int   // Total number of commands (copies + adds).
+	NumCopies        int   // Number of COPY commands.
+	NumAdds          int   // Number of ADD commands.
+	CopyBytes        int64 // Total bytes reproduced by COPY commands.
+	AddBytes         int64 // Total literal bytes in ADD commands.
+	TotalOutputBytes int64 // Reconstructed output size (= CopyBytes + AddBytes).
 }
