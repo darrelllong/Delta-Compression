@@ -122,6 +122,195 @@ public final class Apply {
 
     // ── In-place reordering (Burns, Long, Stockmeyer, IEEE TKDE 2003) ──
 
+    /** Source offset, destination offset, and length of one copy command. */
+    private record CopyInfo(int src, int dst, int length) {}
+
+    /** Non-trivial SCCs with per-SCC active counts and vertex-to-SCC mapping. */
+    private record SccData(List<List<Integer>> sccs, int[] active, int[] id) {}
+
+    /** Mutable cursor tracking which SCC and scan position pickVictim is examining. */
+    private static class ScanCursor { int sccPtr = 0; int scanPos = 0; }
+
+    /** Result of findCycleInScc: the cycle (or null) plus the updated scan position. */
+    private record CycleResult(List<Integer> cycle, int newScan) {}
+
+    // DFS color states for findCycleInScc
+    private static final int COLOR_UNVISITED = 0;
+    private static final int COLOR_ON_PATH   = 1;
+    private static final int COLOR_DONE      = 2;
+
+    /** Sentinel: vertex is in no non-trivial SCC. */
+    private static final int NO_SCC = -1;
+
+    /** One frame on the iterative DFS call stack: vertex and next-neighbor index. */
+    private static final class DfsFrame {
+        final int v; int ni;
+        DfsFrame(int v) { this.v = v; this.ni = 0; }
+    }
+
+    /**
+     * Build CRWI digraph on copy commands.
+     *
+     * Edge i→j means copy i reads from a region that copy j will overwrite,
+     * so i must execute before j.  O(n log n + E) sweep-line construction.
+     */
+    private static List<List<Integer>> buildCrwiDigraph(List<CopyInfo> copies, int n) {
+        List<List<Integer>> adj = new ArrayList<>();
+        for (int i = 0; i < n; i++) adj.add(new ArrayList<>());
+
+        // Sort copy write-intervals by start; binary-search for each read interval.
+        Integer[] writeSorted = new Integer[n];
+        for (int i = 0; i < n; i++) writeSorted[i] = i;
+        Arrays.sort(writeSorted, Comparator.comparingInt(a -> copies.get(a).dst()));
+        int[] writeStarts = new int[n];
+        for (int k = 0; k < n; k++) writeStarts[k] = copies.get(writeSorted[k]).dst();
+
+        for (int i = 0; i < n; i++) {
+            int src = copies.get(i).src(), len = copies.get(i).length();
+            int readEnd = src + len;
+            // lo = first write with dst >= src; hi = first write with dst >= readEnd.
+            // Writes in [lo, hi) start inside [src, readEnd) — they always overlap.
+            // The write at lo-1 starts before src; overlaps iff its end exceeds src.
+            int lo = 0; { int a = 0, b = n;
+                while (a < b) { int m = a + (b - a) / 2;
+                    if (writeStarts[m] < src) a = m + 1; else b = m; }
+                lo = a; }
+            int hi = 0; { int a = lo, b = n;
+                while (a < b) { int m = a + (b - a) / 2;
+                    if (writeStarts[m] < readEnd) a = m + 1; else b = m; }
+                hi = a; }
+            if (lo > 0) {
+                int j = writeSorted[lo - 1];
+                if (j != i) {
+                    int dj = copies.get(j).dst(), lj = copies.get(j).length();
+                    if (dj + lj > src) adj.get(i).add(j);
+                }
+            }
+            for (int k = lo; k < hi; k++) {
+                int j = writeSorted[k];
+                if (j != i) adj.get(i).add(j);
+            }
+        }
+        return adj;
+    }
+
+    /** Wrap tarjanScc output into an SccData containing only non-trivial SCCs. */
+    private static SccData buildSccList(List<List<Integer>> adj, int n) {
+        List<List<Integer>> allSccs = tarjanScc(adj, n);
+        int[] id = new int[n];
+        Arrays.fill(id, NO_SCC);
+        List<List<Integer>> sccs = new ArrayList<>();
+
+        for (List<Integer> scc : allSccs) {
+            if (scc.size() > 1) {
+                int sid = sccs.size();
+                for (int v : scc) id[v] = sid;
+                sccs.add(scc);
+            }
+        }
+        int[] active = new int[sccs.size()];
+        for (int k = 0; k < sccs.size(); k++) active[k] = sccs.get(k).size();
+        return new SccData(sccs, active, id);
+    }
+
+    /**
+     * Select a victim copy to break a cycle when Kahn's algorithm stalls.
+     *
+     * Constant: first remaining vertex.  Localmin: minimum-length copy in a cycle.
+     * cur.sccPtr and cur.scanPos are advanced in place across repeated calls.
+     */
+    private static int pickVictim(List<CopyInfo> copies, List<List<Integer>> adj,
+            SccData scc, boolean[] removed, int[] color, ScanCursor cur,
+            CyclePolicy policy, int n) {
+        if (policy == CyclePolicy.CONSTANT) {
+            for (int i = 0; i < n; i++) { if (!removed[i]) return i; }
+            return -1; // unreachable: called only when processed < n
+        }
+        int victim = -1;
+        while (victim == -1) {
+            while (cur.sccPtr < scc.sccs().size() && scc.active()[cur.sccPtr] == 0) {
+                cur.sccPtr++; cur.scanPos = 0;
+            }
+            if (cur.sccPtr >= scc.sccs().size()) {
+                for (int i = 0; i < n; i++) { if (!removed[i]) { victim = i; break; } }
+            } else {
+                CycleResult cr = findCycleInScc(
+                    adj, scc.sccs().get(cur.sccPtr), cur.sccPtr, scc.id(), removed, color, cur.scanPos);
+                cur.scanPos = cr.newScan();
+                if (cr.cycle() != null) {
+                    victim = cr.cycle().get(0);
+                    for (int v : cr.cycle()) {
+                        if (copies.get(v).length() < copies.get(victim).length() ||
+                            (copies.get(v).length() == copies.get(victim).length() && v < victim)) {
+                            victim = v;
+                        }
+                    }
+                } else {
+                    cur.sccPtr++; cur.scanPos = 0;
+                }
+            }
+        }
+        return victim;
+    }
+
+    /**
+     * Run Kahn topological sort; when the heap stalls, call pickVictim to break
+     * the cycle by materialising one copy as a literal add.
+     */
+    private static List<Integer> runKahn(List<CopyInfo> copies, List<List<Integer>> adj,
+            SccData scc, byte[] r, List<PlacedAdd> adds, CyclePolicy policy, int n) {
+        int[] inDeg = new int[n];
+        for (int i = 0; i < n; i++) for (int j : adj.get(i)) inDeg[j]++;
+
+        boolean[] removed  = new boolean[n];
+        List<Integer> topo = new ArrayList<>();
+        int[] color        = new int[n];   // 0=unvisited, 1=on-path, 2=done
+        ScanCursor cursor  = new ScanCursor();
+
+        PriorityQueue<int[]> heap = new PriorityQueue<>(
+            Comparator.<int[]>comparingInt(e -> e[0]).thenComparingInt(e -> e[1]));
+        for (int i = 0; i < n; i++) {
+            if (inDeg[i] == 0) heap.add(new int[]{copies.get(i).length(), i});
+        }
+        int processed = 0;
+
+        while (processed < n) {
+            while (!heap.isEmpty()) {
+                int[] entry = heap.poll();
+                int v = entry[1];
+                if (removed[v]) continue;
+                removed[v] = true;
+                topo.add(v);
+                processed++;
+                if (scc.id()[v] != NO_SCC) scc.active()[scc.id()[v]]--;
+                for (int w : adj.get(v)) {
+                    if (!removed[w]) {
+                        inDeg[w]--;
+                        if (inDeg[w] == 0) heap.add(new int[]{copies.get(w).length(), w});
+                    }
+                }
+            }
+
+            if (processed >= n) break;
+
+            int victim = pickVictim(copies, adj, scc, removed, color, cursor, policy, n);
+            CopyInfo ci = copies.get(victim);
+            byte[] data = new byte[ci.length()];
+            System.arraycopy(r, ci.src(), data, 0, ci.length());
+            adds.add(new PlacedAdd(ci.dst(), data));
+            removed[victim] = true;
+            processed++;
+            if (scc.id()[victim] != NO_SCC) scc.active()[scc.id()[victim]]--;
+            for (int w : adj.get(victim)) {
+                if (!removed[w]) {
+                    inDeg[w]--;
+                    if (inDeg[w] == 0) heap.add(new int[]{copies.get(w).length(), w});
+                }
+            }
+        }
+        return topo;
+    }
+
     /**
      * Convert standard delta commands to in-place executable commands.
      *
@@ -145,190 +334,31 @@ public final class Apply {
         if (commands.isEmpty()) return new ArrayList<>();
 
         // Step 1: compute write offsets
-        List<int[]> copies = new ArrayList<>(); // {idx, src, dst, length}
-        List<PlacedAdd> adds = new ArrayList<>();
+        List<CopyInfo> copies = new ArrayList<>();
+        List<PlacedAdd> adds  = new ArrayList<>();
         int writePos = 0;
-
         for (Command cmd : commands) {
             if (cmd instanceof CopyCmd c) {
-                copies.add(new int[]{copies.size(), c.offset(), writePos, c.length()});
+                copies.add(new CopyInfo(c.offset(), writePos, c.length()));
                 writePos += c.length();
             } else if (cmd instanceof AddCmd a) {
                 adds.add(new PlacedAdd(writePos, a.data()));
                 writePos += a.data().length;
             }
         }
-
         int n = copies.size();
         if (n == 0) return new ArrayList<>(adds);
 
-        // Step 2: build CRWI digraph
-        List<List<Integer>> adj = new ArrayList<>();
-        for (int i = 0; i < n; i++) adj.add(new ArrayList<>());
-
-        // O(n log n + E) sweep-line: sort writes by start, then for each read
-        // interval binary-search into the sorted writes to find overlaps.
-        Integer[] writeSorted = new Integer[n];
-        for (int i = 0; i < n; i++) writeSorted[i] = i;
-        Arrays.sort(writeSorted, Comparator.comparingInt(a -> copies.get(a)[2]));
-        int[] writeStarts = new int[n];
-        for (int k = 0; k < n; k++) writeStarts[k] = copies.get(writeSorted[k])[2];
-
-        for (int i = 0; i < n; i++) {
-            int si = copies.get(i)[1], li = copies.get(i)[3];
-            int readEnd = si + li;
-            // Two binary searches exploit the fact that dst intervals are
-            // non-overlapping (each output byte written exactly once):
-            //   lo = first write with dst >= si
-            //   hi = first write with dst >= readEnd
-            // Writes in [lo, hi) start within [si, readEnd) and thus always
-            // overlap the read interval.  The write at lo-1 (if any) starts
-            // before si; it overlaps iff its end exceeds si.
-            int lo = 0, hi = n;
-            { int a = 0, b = n;
-              while (a < b) { int m = a + (b - a) / 2;
-                if (writeStarts[m] < si) a = m + 1; else b = m; }
-              lo = a; }
-            { int a = lo, b = n;
-              while (a < b) { int m = a + (b - a) / 2;
-                if (writeStarts[m] < readEnd) a = m + 1; else b = m; }
-              hi = a; }
-            if (lo > 0) {
-                int j = writeSorted[lo - 1];
-                if (j != i) {
-                    int dj = copies.get(j)[2], lj = copies.get(j)[3];
-                    if (dj + lj > si) { adj.get(i).add(j); }
-                }
-            }
-            for (int k = lo; k < hi; k++) {
-                int j = writeSorted[k];
-                if (j != i) { adj.get(i).add(j); }
-            }
-        }
-
-        // Step 3: Kahn topological sort with Tarjan-scoped cycle breaking.
-        //
-        // Global Kahn preserves the cascade effect (converting a victim
-        // decrements in_deg globally, potentially freeing vertices across SCC
-        // boundaries).  findCycleInScc restricts DFS to one SCC via three
-        // amortizations: sccId filter (no O(|SCC|) set/clear), color=2
-        // persistence, and scanStart resumption.  Total: O(n+E) cycle-breaking.
-        // R.E. Tarjan, SIAM J. Comput., 1(2):146-160, June 1972.
-        List<List<Integer>> sccs = tarjanScc(adj, n);
-
-        int[] inDeg = new int[n];
-        for (int i = 0; i < n; i++) {
-            for (int j : adj.get(i)) { inDeg[j]++; }
-        }
-
-        int[] sccId = new int[n];
-        Arrays.fill(sccId, -1); // -1 = trivial (no cycle)
-        List<List<Integer>> sccList = new ArrayList<>(); // non-trivial SCCs only
-        int[] sccActive = new int[sccs.size()]; // live member count per SCC
-
-        for (List<Integer> scc : sccs) {
-            if (scc.size() > 1) {
-                int sid = sccList.size();
-                for (int v : scc) { sccId[v] = sid; }
-                sccActive[sid] = scc.size();
-                sccList.add(scc);
-            }
-        }
-
-        boolean[] removed = new boolean[n];
-        List<Integer> topoOrder = new ArrayList<>();
-        int[] color = new int[n]; // 0=unvisited, 1=on-path, 2=done
-        int sccPtr = 0;
-        int[] scanPos = {0}; // mutable scan position within sccList.get(sccPtr)
-
-        PriorityQueue<int[]> heap = new PriorityQueue<>(
-            Comparator.<int[]>comparingInt(e -> e[0]).thenComparingInt(e -> e[1]));
-        for (int i = 0; i < n; i++) {
-            if (inDeg[i] == 0) heap.add(new int[]{copies.get(i)[3], i});
-        }
-        int processed = 0;
-
-        while (processed < n) {
-            // Drain all ready vertices.
-            while (!heap.isEmpty()) {
-                int[] entry = heap.poll();
-                int v = entry[1];
-                if (removed[v]) continue;
-                removed[v] = true;
-                topoOrder.add(v);
-                processed++;
-                if (sccId[v] != -1) { sccActive[sccId[v]]--; }
-                for (int w : adj.get(v)) {
-                    if (!removed[w]) {
-                        inDeg[w]--;
-                        if (inDeg[w] == 0)
-                            heap.add(new int[]{copies.get(w)[3], w});
-                    }
-                }
-            }
-
-            if (processed >= n) break;
-
-            // Kahn stalled: all remaining vertices are in CRWI cycles.
-            // Choose a victim to convert from copy to add.
-            int victim = -1;
-            if (policy == CyclePolicy.CONSTANT) {
-                for (int i = 0; i < n; i++) {
-                    if (!removed[i]) { victim = i; break; }
-                }
-            } else { // LOCALMIN
-                while (victim == -1) {
-                    while (sccPtr < sccList.size() && sccActive[sccPtr] == 0) {
-                        sccPtr++; scanPos[0] = 0;
-                    }
-                    if (sccPtr >= sccList.size()) {
-                        // Safety fallback — should not happen with a correct graph.
-                        for (int i = 0; i < n; i++) {
-                            if (!removed[i]) { victim = i; break; }
-                        }
-                        break;
-                    }
-                    List<Integer> cycle = findCycleInScc(
-                        adj, sccList.get(sccPtr), sccPtr,
-                        sccId, removed, color, scanPos);
-                    if (cycle != null) {
-                        victim = cycle.get(0);
-                        for (int v : cycle) {
-                            if (copies.get(v)[3] < copies.get(victim)[3] ||
-                                (copies.get(v)[3] == copies.get(victim)[3] && v < victim)) {
-                                victim = v;
-                            }
-                        }
-                    } else {
-                        // SCC's remaining subgraph is acyclic; advance.
-                        sccPtr++; scanPos[0] = 0;
-                    }
-                }
-            }
-
-            // Convert victim: materialize copy data as literal add.
-            int[] ci = copies.get(victim);
-            byte[] data = new byte[ci[3]];
-            System.arraycopy(r, ci[1], data, 0, ci[3]);
-            adds.add(new PlacedAdd(ci[2], data));
-            removed[victim] = true;
-            processed++;
-            if (sccId[victim] != -1) { sccActive[sccId[victim]]--; }
-
-            for (int w : adj.get(victim)) {
-                if (!removed[w]) {
-                    inDeg[w]--;
-                    if (inDeg[w] == 0)
-                        heap.add(new int[]{copies.get(w)[3], w});
-                }
-            }
-        } // while processed < n
+        // Steps 2-3: build digraph, topological sort, break cycles
+        List<List<Integer>> adj = buildCrwiDigraph(copies, n);
+        SccData scc             = buildSccList(adj, n);
+        List<Integer> topoOrder = runKahn(copies, adj, scc, r, adds, policy, n);
 
         // Step 4: assemble result — copies in topo order, then all adds
         List<PlacedCommand> result = new ArrayList<>();
         for (int i : topoOrder) {
-            int[] ci = copies.get(i);
-            result.add(new PlacedCopy(ci[1], ci[2], ci[3]));
+            CopyInfo ci = copies.get(i);
+            result.add(new PlacedCopy(ci.src(), ci.dst(), ci.length()));
         }
         result.addAll(adds);
         return result;
@@ -345,38 +375,35 @@ public final class Apply {
      */
     private static List<List<Integer>> tarjanScc(List<List<Integer>> adj, int n) {
         int[] index = new int[n];
-        Arrays.fill(index, -1); // -1 = unvisited
+        Arrays.fill(index, NO_SCC); // NO_SCC = unvisited
         int[] lowlink = new int[n];
         boolean[] onStack = new boolean[n];
         Deque<Integer> tarjanStack = new ArrayDeque<>();
         List<List<Integer>> sccs = new ArrayList<>();
-        int[] counter = {0};
-        // DFS call stack: int[]{vertex, next_neighbor_index}
-        Deque<int[]> callStack = new ArrayDeque<>();
+        int counter = 0;
+        Deque<DfsFrame> callStack = new ArrayDeque<>();
 
         for (int start = 0; start < n; start++) {
-            if (index[start] != -1) continue;
+            if (index[start] != NO_SCC) continue;
 
-            index[start] = lowlink[start] = counter[0]++;
+            index[start] = lowlink[start] = counter++;
             onStack[start] = true;
             tarjanStack.push(start);
-            callStack.push(new int[]{start, 0});
+            callStack.push(new DfsFrame(start));
 
             while (!callStack.isEmpty()) {
-                int[] frame = callStack.peek();
-                int v = frame[0];
-                int ni = frame[1];
+                DfsFrame frame = callStack.peek();
+                int v = frame.v;
                 List<Integer> neighbors = adj.get(v);
 
-                if (ni < neighbors.size()) {
-                    int w = neighbors.get(ni);
-                    frame[1]++;
-                    if (index[w] == -1) {
+                if (frame.ni < neighbors.size()) {
+                    int w = neighbors.get(frame.ni++);
+                    if (index[w] == NO_SCC) {
                         // Tree edge: descend into w
-                        index[w] = lowlink[w] = counter[0]++;
+                        index[w] = lowlink[w] = counter++;
                         onStack[w] = true;
                         tarjanStack.push(w);
-                        callStack.push(new int[]{w, 0});
+                        callStack.push(new DfsFrame(w));
                     } else if (onStack[w]) {
                         // Back-edge into current SCC
                         if (index[w] < lowlink[v]) lowlink[v] = index[w];
@@ -384,7 +411,7 @@ public final class Apply {
                 } else {
                     callStack.pop();
                     if (!callStack.isEmpty()) {
-                        int parent = callStack.peek()[0];
+                        int parent = callStack.peek().v;
                         if (lowlink[v] < lowlink[parent])
                             lowlink[parent] = lowlink[v];
                     }
@@ -411,59 +438,56 @@ public final class Apply {
      *   1. sccId filter: O(1) per neighbor check, no O(|SCC|) set/clear sweep.
      *   2. color persistence: color=2 (fully explored) persists across calls;
      *      vertex removal can only reduce edges, so color=2 is monotone-correct.
-     *   3. scanStart[0]: outer loop resumes from last position, O(|SCC|) total.
+     *   3. scanStart: outer loop resumes from last position, O(|SCC|) total.
      *
-     * On cycle found: resets path (color=1) vertices to 0; color=2 intact.
-     * On null (acyclic): color=2 persists (sccId filter isolates SCCs).
+     * Returns a CycleResult whose cycle is non-null on cycle found (path color=1
+     * vertices reset to 0), or null when the SCC subgraph is acyclic.  newScan
+     * is the updated scan position for the next call.
      */
-    private static List<Integer> findCycleInScc(
+    private static CycleResult findCycleInScc(
             List<List<Integer>> adj, List<Integer> scc, int sid,
-            int[] sccId, boolean[] removed, int[] color, int[] scanStart) {
+            int[] sccId, boolean[] removed, int[] color, int scanStart) {
         List<Integer> path = new ArrayList<>();
-        int scan = scanStart[0];
+        int scan   = scanStart;
         int sccLen = scc.size();
 
         while (scan < sccLen) {
             int start = scc.get(scan);
-            if (removed[start] || color[start] != 0) { scan++; continue; }
+            if (removed[start] || color[start] != COLOR_UNVISITED) { scan++; continue; }
 
-            color[start] = 1;
+            color[start] = COLOR_ON_PATH;
             path.add(start);
-            // Stack entries: int[]{vertex, next_neighbor_index}
-            Deque<int[]> stack = new ArrayDeque<>();
-            stack.push(new int[]{start, 0});
+            Deque<DfsFrame> stack = new ArrayDeque<>();
+            stack.push(new DfsFrame(start));
 
             outer:
             while (!stack.isEmpty()) {
-                int[] frame = stack.peek();
-                int v = frame[0];
-                int ni = frame[1];
+                DfsFrame frame = stack.peek();
+                int v = frame.v;
                 List<Integer> neighbors = adj.get(v);
                 boolean advanced = false;
 
-                while (ni < neighbors.size()) {
-                    int w = neighbors.get(ni++);
+                while (frame.ni < neighbors.size()) {
+                    int w = neighbors.get(frame.ni++);
                     if (sccId[w] != sid || removed[w]) { continue; }
-                    if (color[w] == 1) {
+                    if (color[w] == COLOR_ON_PATH) {
                         // Back-edge: cycle found.
                         int pos = path.indexOf(w);
                         List<Integer> cycle = new ArrayList<>(path.subList(pos, path.size()));
-                        for (int u : path) { color[u] = 0; }
-                        scanStart[0] = scan;
-                        return cycle;
+                        for (int u : path) { color[u] = COLOR_UNVISITED; }
+                        return new CycleResult(cycle, scan);
                     }
-                    if (color[w] == 0) {
-                        frame[1] = ni;
-                        color[w] = 1;
+                    if (color[w] == COLOR_UNVISITED) {
+                        color[w] = COLOR_ON_PATH;
                         path.add(w);
-                        stack.push(new int[]{w, 0});
+                        stack.push(new DfsFrame(w));
                         advanced = true;
                         continue outer;
                     }
                 }
                 if (!advanced) {
                     stack.pop();
-                    color[v] = 2; // Fully explored — persists across calls.
+                    color[v] = COLOR_DONE; // Fully explored — persists across calls.
                     path.remove(path.size() - 1);
                 }
             }
@@ -471,8 +495,7 @@ public final class Apply {
             scan++;
         }
 
-        scanStart[0] = scan;
-        return null;
+        return new CycleResult(null, scan);
     }
 
     /** Compute summary statistics for placed commands. */

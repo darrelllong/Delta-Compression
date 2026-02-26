@@ -1147,12 +1147,12 @@ def _tarjan_scc(adj, n):
     SIAM Journal on Computing, 1(2):146-160, June 1972.
     """
     index_counter = 0
-    index = [-1] * n          # -1 = unvisited
-    lowlink = [0] * n
+    index    = [-1] * n          # -1 = unvisited
+    lowlink  = [0] * n
     on_stack = [False] * n
-    tarjan_stack = []          # Tarjan's SCC stack
-    sccs = []
-    call_stack = []            # iterative DFS frames: [vertex, next_neighbor_idx]
+    tarjan_stack = []            # Tarjan's SCC stack
+    sccs     = []
+    call_stack = []              # iterative DFS call stack
 
     for start in range(n):
         if index[start] != -1:
@@ -1162,23 +1162,22 @@ def _tarjan_scc(adj, n):
         index_counter += 1
         on_stack[start] = True
         tarjan_stack.append(start)
-        call_stack.append([start, 0])
+        call_stack.append(_DfsFrame(start))
 
         while call_stack:
             frame = call_stack[-1]
-            v = frame[0]
-            ni = frame[1]
+            v = frame.v
 
-            if ni < len(adj[v]):
-                w = adj[v][ni]
-                frame[1] += 1
+            if frame.ni < len(adj[v]):
+                w = adj[v][frame.ni]
+                frame.ni += 1
                 if index[w] == -1:
                     # Tree edge: descend into w
                     index[w] = lowlink[w] = index_counter
                     index_counter += 1
                     on_stack[w] = True
                     tarjan_stack.append(w)
-                    call_stack.append([w, 0])
+                    call_stack.append(_DfsFrame(w))
                 elif on_stack[w]:
                     # Back-edge into current SCC
                     if index[w] < lowlink[v]:
@@ -1187,7 +1186,7 @@ def _tarjan_scc(adj, n):
                 # Done with v — backtrack
                 call_stack.pop()
                 if call_stack:
-                    parent = call_stack[-1][0]
+                    parent = call_stack[-1].v
                     if lowlink[v] < lowlink[parent]:
                         lowlink[parent] = lowlink[v]
                 # Root of an SCC?
@@ -1204,65 +1203,237 @@ def _tarjan_scc(adj, n):
     return sccs  # sinks first; caller reverses for source-first order
 
 
-def _find_cycle_in_scc(adj, scc, sid, scc_id, removed, color, scan_start_ref):
+def _find_cycle_in_scc(adj, scc, sid, scc_id, removed, color, scan_start):
     """Find a cycle in the active subgraph of one SCC.
 
     Three amortizations give O(|SCC| + E_SCC) total work per SCC:
       1. scc_id filter: O(1) per neighbor, no O(|SCC|) set/clear sweep.
       2. color persistence: color=2 (fully explored) persists across calls;
          vertex removal can only reduce edges, so color=2 is monotone-correct.
-      3. scan_start_ref: outer loop resumes from last position, O(|SCC|) total.
+      3. scan_start: outer loop resumes from last position, O(|SCC|) total.
 
-    On cycle found: resets path (color=1) vertices to 0; color=2 intact.
-    On None: color=2 persists harmlessly (scc_id filter isolates SCCs).
+    Returns (cycle, new_scan) where cycle is the found cycle or None, and
+    new_scan is the updated scan position for the next call.
     """
     path = []
-    scan = scan_start_ref[0]
+    scan = scan_start
     scc_len = len(scc)
 
     while scan < scc_len:
         start = scc[scan]
-        if removed[start] or color[start] != 0:
+        if removed[start] or color[start] != _COLOR_UNVISITED:
             scan += 1
             continue
 
-        color[start] = 1
+        color[start] = _COLOR_ON_PATH
         path.append(start)
-        stack = [(start, 0)]
+        stack = [_DfsFrame(start)]
 
         while stack:
-            v, ni = stack[-1]
+            frame = stack[-1]
+            v = frame.v
             advanced = False
-            while ni < len(adj[v]):
-                w = adj[v][ni]
-                ni += 1
+            while frame.ni < len(adj[v]):
+                w = adj[v][frame.ni]
+                frame.ni += 1
                 if scc_id[w] != sid or removed[w]:
                     continue
-                if color[w] == 1:
+                if color[w] == _COLOR_ON_PATH:
                     # Back-edge: cycle found
                     pos = path.index(w)
                     cycle = path[pos:]
                     for u in path:
-                        color[u] = 0
-                    scan_start_ref[0] = scan
-                    return cycle
-                if color[w] == 0:
-                    stack[-1] = (v, ni)
-                    color[w] = 1
+                        color[u] = _COLOR_UNVISITED
+                    return cycle, scan
+                if color[w] == _COLOR_UNVISITED:
+                    color[w] = _COLOR_ON_PATH
                     path.append(w)
-                    stack.append((w, 0))
+                    stack.append(_DfsFrame(w))
                     advanced = True
                     break
             if not advanced:
                 stack.pop()
-                color[v] = 2  # Fully explored — persists across calls.
+                color[v] = _COLOR_DONE  # Fully explored — persists across calls.
                 path.pop()
 
         # start's reachable SCC-subgraph fully explored; no cycle.
         scan += 1
 
-    scan_start_ref[0] = scan
-    return None
+    return None, scan
+
+
+@dataclass(frozen=True)
+class _CopyInfo:
+    """Source offset, destination offset, and length of one copy command."""
+    src: int
+    dst: int
+    length: int
+
+
+@dataclass
+class _SccData:
+    """Non-trivial SCCs with per-SCC active counts and vertex-to-SCC mapping."""
+    sccs:   list   # list[list[int]] — non-trivial SCCs
+    active: list   # list[int] — active vertex count per SCC
+    scc_id: list   # list[int | None] — vertex → SCC index (None = trivial)
+
+
+@dataclass
+class _ScanCursor:
+    """Mutable cursor tracking which SCC and scan position pickVictim is examining."""
+    scc_ptr:  int = 0
+    scan_pos: int = 0
+
+
+@dataclass
+class _DfsFrame:
+    """One frame on the iterative DFS call stack: vertex and next-neighbor index."""
+    v:  int
+    ni: int = 0
+
+
+# DFS color states for _find_cycle_in_scc and _tarjan_scc
+_COLOR_UNVISITED = 0
+_COLOR_ON_PATH   = 1
+_COLOR_DONE      = 2
+
+
+def _build_crwi_digraph(copy_info, n):
+    """Build CRWI digraph on copy commands via O(n log n + E) sweep-line.
+
+    Edge i→j means copy i reads from a region that copy j will overwrite,
+    so i must execute before j.
+    """
+    import bisect
+    adj = [[] for _ in range(n)]
+    write_sorted = sorted(range(n), key=lambda j: copy_info[j].dst)
+    write_starts = [copy_info[j].dst for j in write_sorted]
+
+    for i in range(n):
+        src, length = copy_info[i].src, copy_info[i].length
+        read_end = src + length
+        # lo = first write with dst >= src; hi = first write with dst >= read_end.
+        # Writes in [lo, hi) start inside [src, read_end) — they always overlap.
+        # The write at lo-1 starts before src; overlaps iff its end exceeds src.
+        lo = bisect.bisect_left(write_starts, src)
+        hi = bisect.bisect_left(write_starts, read_end)
+        if lo > 0:
+            j = write_sorted[lo - 1]
+            if i != j and copy_info[j].dst + copy_info[j].length > src:
+                adj[i].append(j)
+        for k in range(lo, hi):
+            j = write_sorted[k]
+            if i != j:
+                adj[i].append(j)
+    return adj
+
+
+def _build_scc_list(adj, n):
+    """Wrap _tarjan_scc output into an _SccData containing only non-trivial SCCs."""
+    all_sccs = _tarjan_scc(adj, n)
+    scc_id   = [None] * n
+    sccs     = []
+    active   = []
+
+    for scc in all_sccs:
+        if len(scc) > 1:
+            sid = len(sccs)
+            for v in scc:
+                scc_id[v] = sid
+            sccs.append(scc)
+            active.append(len(scc))
+
+    return _SccData(sccs=sccs, active=active, scc_id=scc_id)
+
+
+def _pick_victim(copy_info, adj, scc_data, removed, color, cursor, policy, n):
+    """Select a victim copy to break a cycle when Kahn's algorithm stalls.
+
+    Constant: first remaining vertex.  Localmin: minimum-length copy in a cycle.
+    cursor.scc_ptr and cursor.scan_pos are advanced in place across repeated calls.
+    """
+    if policy == 'constant':
+        return next(i for i in range(n) if not removed[i])
+
+    victim = None
+    while victim is None:
+        while cursor.scc_ptr < len(scc_data.sccs) and scc_data.active[cursor.scc_ptr] == 0:
+            cursor.scc_ptr += 1
+            cursor.scan_pos = 0
+        if cursor.scc_ptr >= len(scc_data.sccs):
+            victim = next(i for i in range(n) if not removed[i])
+        else:
+            cycle, new_scan = _find_cycle_in_scc(
+                adj, scc_data.sccs[cursor.scc_ptr], cursor.scc_ptr,
+                scc_data.scc_id, removed, color, cursor.scan_pos)
+            cursor.scan_pos = new_scan
+            if cycle is not None:
+                victim = min(cycle, key=lambda v: (copy_info[v].length, v))
+            else:
+                cursor.scc_ptr += 1
+                cursor.scan_pos = 0
+    return victim
+
+
+def _run_kahn(copy_info, adj, scc_data, r, add_info, policy, n):
+    """Run Kahn topological sort; when the heap stalls, call _pick_victim to
+    break the cycle by materialising one copy as a literal add.
+
+    Returns (topo_order, cycles_broken).
+    """
+    in_deg = [0] * n
+    for i in range(n):
+        for j in adj[i]:
+            in_deg[j] += 1
+
+    removed    = [False] * n
+    topo_order = []
+    cycles_broken = 0
+    color  = [0] * n
+    cursor = _ScanCursor()
+
+    heap = []
+    for i in range(n):
+        if in_deg[i] == 0:
+            heapq.heappush(heap, (copy_info[i].length, i))
+    processed = 0
+
+    while processed < n:
+        while heap:
+            _, v = heapq.heappop(heap)
+            if removed[v]:
+                continue
+            removed[v] = True
+            topo_order.append(v)
+            processed += 1
+            sid = scc_data.scc_id[v]
+            if sid is not None:
+                scc_data.active[sid] -= 1
+            for w in adj[v]:
+                if not removed[w]:
+                    in_deg[w] -= 1
+                    if in_deg[w] == 0:
+                        heapq.heappush(heap, (copy_info[w].length, w))
+
+        if processed >= n:
+            break
+
+        victim = _pick_victim(copy_info, adj, scc_data, removed, color, cursor, policy, n)
+        ci = copy_info[victim]
+        add_info.append((ci.dst, bytes(r[ci.src:ci.src + ci.length])))
+        cycles_broken += 1
+        removed[victim] = True
+        processed += 1
+        sid = scc_data.scc_id[victim]
+        if sid is not None:
+            scc_data.active[sid] -= 1
+        for w in adj[victim]:
+            if not removed[w]:
+                in_deg[w] -= 1
+                if in_deg[w] == 0:
+                    heapq.heappush(heap, (copy_info[w].length, w))
+
+    return topo_order, cycles_broken
 
 
 def make_inplace(R: bytes, commands: List[Command],
@@ -1287,14 +1458,13 @@ def make_inplace(R: bytes, commands: List[Command],
     if not commands:
         return []
 
-    # Step 1: compute write offsets for each command
-    copy_info = []   # [(index, src, dst, length)]
-    add_info = []    # [(dst, data)]
+    # Step 1: compute write offsets
+    copy_info = []  # list[_CopyInfo]
+    add_info  = []  # list[(dst, data)]
     write_pos = 0
-
     for cmd in commands:
         if isinstance(cmd, CopyCmd):
-            copy_info.append((len(copy_info), cmd.offset, write_pos, cmd.length))
+            copy_info.append(_CopyInfo(src=cmd.offset, dst=write_pos, length=cmd.length))
             write_pos += cmd.length
         elif isinstance(cmd, AddCmd):
             add_info.append((write_pos, cmd.data))
@@ -1304,155 +1474,21 @@ def make_inplace(R: bytes, commands: List[Command],
     if n == 0:
         return [PlacedAdd(dst=d, data=dat) for d, dat in add_info]
 
-    # Step 2: build CRWI digraph
-    # Edge i -> j means i's read interval [src_i, src_i+len_i) overlaps
-    # j's write interval [dst_j, dst_j+len_j), so i must execute before j.
-    adj = [[] for _ in range(n)]
+    # Steps 2-3: build digraph, topological sort, break cycles
+    adj              = _build_crwi_digraph(copy_info, n)
+    scc_data         = _build_scc_list(adj, n)
+    topo_order, ncyc = _run_kahn(copy_info, adj, scc_data, R, add_info, policy, n)
 
-    # O(n log n + E) sweep-line: sort writes by start, then for each read
-    # interval binary-search into the sorted writes to find overlaps.
-    import bisect
-    write_sorted = sorted(range(n), key=lambda j: copy_info[j][2])
-    write_starts = [copy_info[j][2] for j in write_sorted]
-
-    for i in range(n):
-        si, li = copy_info[i][1], copy_info[i][3]
-        read_end = si + li
-        # Two binary searches exploit the fact that dst intervals are
-        # non-overlapping (each output byte written exactly once):
-        #   lo = first write with dst >= si
-        #   hi = first write with dst >= read_end
-        # Writes in [lo, hi) start within [si, read_end) and thus always
-        # overlap the read interval.  The write at lo-1 (if any) starts
-        # before si; it overlaps iff its end exceeds si.
-        lo = bisect.bisect_left(write_starts, si)
-        hi = bisect.bisect_left(write_starts, read_end)
-        if lo > 0:
-            j = write_sorted[lo - 1]
-            if i != j and copy_info[j][2] + copy_info[j][3] > si:
-                adj[i].append(j)
-        for k in range(lo, hi):
-            j = write_sorted[k]
-            if i != j:
-                adj[i].append(j)
-
-    # Step 3: Kahn topological sort with Tarjan-scoped cycle breaking.
-    #
-    # Tarjan SCC pre-decomposition identifies cyclic vertices.  Global Kahn
-    # preserves the cascade effect (converting a victim decrements in_deg
-    # globally, potentially freeing vertices across SCC boundaries without
-    # extra conversions).  _find_cycle_in_scc restricts DFS to one SCC using
-    # three amortizations: scc_id filter (no O(|SCC|) set/clear), color=2
-    # persistence, and scan_start resumption.  Total: O(n+E) cycle-breaking.
-    # R.E. Tarjan, SIAM J. Comput., 1(2):146-160, June 1972.
-    sccs = _tarjan_scc(adj, n)
-
-    in_deg = [0] * n
-    for i in range(n):
-        for j in adj[i]:
-            in_deg[j] += 1
-
-    scc_id = [None] * n   # None = trivial (no cycle)
-    scc_list = []          # non-trivial SCCs only
-    scc_active = []        # live member count per SCC
-
-    for scc in sccs:
-        if len(scc) > 1:
-            sid = len(scc_list)
-            for v in scc:
-                scc_id[v] = sid
-            scc_active.append(len(scc))
-            scc_list.append(scc)
-
-    removed = [False] * n
-    topo_order = []
-    cycles_broken = 0
-    color = [0] * n
-    scc_ptr = 0
-    scan_pos = [0]  # mutable scan position within scc_list[scc_ptr]
-
-    heap = []
-    for i in range(n):
-        if in_deg[i] == 0:
-            heapq.heappush(heap, (copy_info[i][3], i))
-
-    processed = 0
-
-    while processed < n:
-        # Drain all ready vertices.
-        while heap:
-            _, v = heapq.heappop(heap)
-            if removed[v]:
-                continue
-            removed[v] = True
-            topo_order.append(v)
-            processed += 1
-            sid = scc_id[v]
-            if sid is not None:
-                scc_active[sid] -= 1
-            for w in adj[v]:
-                if not removed[w]:
-                    in_deg[w] -= 1
-                    if in_deg[w] == 0:
-                        heapq.heappush(heap, (copy_info[w][3], w))
-
-        if processed >= n:
-            break
-
-        # Kahn stalled: all remaining vertices are in CRWI cycles.
-        # Choose a victim to convert from copy to add.
-        if policy == 'constant':
-            victim = next(i for i in range(n) if not removed[i])
-        else:  # localmin
-            victim = None
-            while victim is None:
-                while scc_ptr < len(scc_list) and scc_active[scc_ptr] == 0:
-                    scc_ptr += 1
-                    scan_pos[0] = 0
-                if scc_ptr >= len(scc_list):
-                    # Safety fallback — should not happen with a correct graph.
-                    victim = next(i for i in range(n) if not removed[i])
-                    break
-                cycle = _find_cycle_in_scc(
-                    adj, scc_list[scc_ptr], scc_ptr, scc_id,
-                    removed, color, scan_pos)
-                if cycle is not None:
-                    victim = min(cycle, key=lambda v: (copy_info[v][3], v))
-                else:
-                    # SCC's remaining subgraph is acyclic; advance.
-                    scc_ptr += 1
-                    scan_pos[0] = 0
-
-        # Convert victim: materialize its copy data as a literal add.
-        _, src, dst, length = copy_info[victim]
-        add_info.append((dst, bytes(R[src:src + length])))
-        cycles_broken += 1
-        removed[victim] = True
-        processed += 1
-        sid = scc_id[victim]
-        if sid is not None:
-            scc_active[sid] -= 1
-
-        for w in adj[victim]:
-            if not removed[w]:
-                in_deg[w] -= 1
-                if in_deg[w] == 0:
-                    heapq.heappush(heap, (copy_info[w][3], w))
-
-    # Step 4: assemble result — copies first (in topo order) because they
-    # read from the buffer; adds last because they only write literal data
-    # and never read, so they can't conflict with any copy's source region.
+    # Step 4: assemble result — copies in topo order, then all adds
     result: List[PlacedCommand] = []
-
     for i in topo_order:
-        _, src, dst, length = copy_info[i]
-        result.append(PlacedCopy(src=src, dst=dst, length=length))
-
+        ci = copy_info[i]
+        result.append(PlacedCopy(src=ci.src, dst=ci.dst, length=ci.length))
     for dst, data in add_info:
         result.append(PlacedAdd(dst=dst, data=data))
 
     if return_stats:
-        return result, {'cycles_broken': cycles_broken}
+        return result, {'cycles_broken': ncyc}
     return result
 
 
