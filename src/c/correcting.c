@@ -9,13 +9,19 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ── Lookback buffer entry (Section 5.2) ───────────────────────────── */
-
+/*
+ * One entry in the correction lookback buffer (Section 5.2).
+ *
+ * The correcting algorithm may discover that a newly found match overlaps
+ * commands already emitted.  The buffer holds the most recent buf_cap tentative
+ * commands so they can be trimmed or cancelled (tail correction) when a better
+ * match is found.  Commands are flushed to the output list as they age out.
+ */
 typedef struct buf_entry {
-	size_t v_start;
-	size_t v_end;
-	delta_command_t cmd;
-	bool dummy;
+	size_t v_start;          /* First V byte covered by this entry. */
+	size_t v_end;            /* One past the last V byte covered. */
+	delta_command_t cmd;     /* The tentative command (CMD_COPY or CMD_ADD). */
+	bool dummy;              /* Reserved; always false in the current implementation. */
 	struct buf_entry *next;
 	struct buf_entry *prev;
 } buf_entry_t;
