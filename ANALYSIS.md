@@ -260,11 +260,11 @@ time dominates regardless.
 
 | Implementation | Time |
 |----------------|-----:|
-| C | 4s |
 | Rust | 4s |
+| C | 4s |
 | C++ | 4s |
-| Go | 5s |
-| Kotlin | 5s |
+| Go | 6s |
+| Kotlin | 6s |
 | Java | 6s |
 | Scala | 6s |
 | Python | 247s |
@@ -274,12 +274,12 @@ time dominates regardless.
 | Implementation | Time |
 |----------------|-----:|
 | Rust | 9s |
-| Java | 11s |
 | Kotlin | 11s |
+| Java | 12s |
 | Scala | 12s |
 | Go | 13s |
-| C++ | 17s |
 | C | 18s |
+| C++ | 18s |
 | Python | 583s |
 
 C leads onepass by a narrow margin; Rust, C, and C++ are within a
