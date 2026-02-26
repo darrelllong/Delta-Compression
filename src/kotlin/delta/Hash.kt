@@ -83,6 +83,14 @@ class RollingHash(data: ByteArray, offset: Int, p: Int) {
  */
 private val MR_WITNESSES = longArrayOf(2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37)
 
+/**
+ * Deterministic Miller-Rabin primality test.
+ *
+ * Writes n-1 = 2^r * d, then for each witness a checks whether
+ * a^d ≡ 1 (mod n) or a^{2^j d} ≡ -1 (mod n) for some j < r.
+ * If neither holds, n is composite.  With the fixed witnesses above,
+ * the test is deterministic for all n relevant to hash table sizing.
+ */
 fun isPrime(n: Long): Boolean {
     if (n < 2L) return false
     if (n < 4L) return true

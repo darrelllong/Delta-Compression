@@ -10,6 +10,19 @@ package delta
  * k  = checkpoint class (Eq. 3, p. 348).
  */
 
+/**
+ * One entry in the correction lookback buffer (Section 5.2).
+ *
+ * The correcting algorithm may discover that a newly found match overlaps
+ * commands already emitted.  The buffer holds the most recent bufCap tentative
+ * commands so they can be trimmed or cancelled (tail correction) when a better
+ * match is found.  Commands are flushed to the output list as they age out.
+ *
+ * @param vStart First V byte covered by this entry.
+ * @param vEnd   One past the last V byte covered.
+ * @param cmd    The tentative command (Add or Copy).
+ * @param dummy  Reserved; always false in the current implementation.
+ */
 private class BufEntry(val vStart: Int, var vEnd: Int, var cmd: Command, val dummy: Boolean)
 
 fun diffCorrecting(r: ByteArray, v: ByteArray, opts: DiffOptions): List<Command> {

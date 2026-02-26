@@ -30,27 +30,65 @@ const val DELTA_BUF_CAP     = 256
 
 // ── Delta commands (Section 2.1.1) ─────────────────────────────────────────
 
-/** Algorithm output: copy from reference, or add literal bytes. */
+/**
+ * Algorithm-level command, as produced by the diff algorithms.
+ *
+ * Offsets are positions in R or V at the time of the diff scan; destinations
+ * are not yet assigned.  Call placeCommands (or makeInplace) to get
+ * PlacedCommands ready for encoding and application.
+ */
 sealed class Command {
+    /** Copy [length] bytes starting at [offset] in the reference R. */
     data class Copy(val offset: Int, val length: Int) : Command()
+    /** Append literal bytes from V that could not be matched in R. */
     class Add(val data: ByteArray) : Command()
 }
 
-/** A command with explicit source and destination offsets. */
+/**
+ * A command with explicit source and destination byte offsets (Section 2.1.1).
+ *
+ * Produced by placeCommands or makeInplace; required for delta encoding and
+ * for in-place or standard application.
+ */
 sealed class PlacedCommand {
+    /** Copy [length] bytes from [src] in R (or working buffer) to [dst] in output. */
     data class Copy(val src: Int, val dst: Int, val length: Int) : PlacedCommand()
+    /** Write literal bytes to [dst] in the output. */
     class Add(val dst: Int, val data: ByteArray) : PlacedCommand()
 }
 
 // ── Enums ──────────────────────────────────────────────────────────────────
 
-enum class Algorithm { GREEDY, ONEPASS, CORRECTING }
+/** Differencing algorithm selection. */
+enum class Algorithm {
+    /** Optimal under simple cost; O(|V|·|R|) time, O(|R|) space (Section 3). */
+    GREEDY,
+    /** Linear time and near-constant space; concurrent scan of R and V (Section 4). */
+    ONEPASS,
+    /** Near-optimal, 1.5-pass; hash table with fingerprint checkpointing (Sections 7–8). */
+    CORRECTING
+}
 
-enum class CyclePolicy { LOCALMIN, CONSTANT }
+/** Cycle-breaking policy for in-place reordering (Section 4.3 of Burns et al. 2003). */
+enum class CyclePolicy {
+    /** Break each cycle at the copy with the shortest length, minimising literal bytes added. */
+    LOCALMIN,
+    /** Break each cycle at the first remaining vertex; simpler but ignores copy lengths. */
+    CONSTANT
+}
 
 // ── Options ────────────────────────────────────────────────────────────────
 
-/** Options for differencing algorithms. All fields have sensible defaults. */
+/**
+ * Tuning parameters for differencing algorithms.
+ *
+ * @param p        Seed length: minimum match length and fingerprint window (Section 2.1.3).
+ * @param q        Hash table capacity floor; algorithms auto-size upward from input length.
+ * @param bufCap   Lookback buffer depth for the correcting algorithm (Section 5.2).
+ * @param verbose  Print per-run statistics to stderr when true.
+ * @param useSplay Use a Sleator-Tarjan splay tree instead of a hash table for R lookups.
+ * @param maxTable Auto-sizing ceiling; prevents unbounded memory use on very large inputs.
+ */
 data class DiffOptions(
     val p:        Int     = SEED_LEN,
     val q:        Int     = TABLE_SIZE,
@@ -62,6 +100,16 @@ data class DiffOptions(
 
 // ── Summary statistics ─────────────────────────────────────────────────────
 
+/**
+ * Summary statistics for a set of placed commands.
+ *
+ * @param numCommands      Total number of commands (copies + adds).
+ * @param numCopies        Number of COPY commands.
+ * @param numAdds          Number of ADD commands.
+ * @param copyBytes        Total bytes reproduced by COPY commands.
+ * @param addBytes         Total literal bytes in ADD commands.
+ * @param totalOutputBytes Reconstructed output size (= copyBytes + addBytes).
+ */
 data class PlacedSummary(
     val numCommands:      Int,
     val numCopies:        Int,

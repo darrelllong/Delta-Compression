@@ -10,6 +10,15 @@ package delta
  *   ADD:  type=2, dst:u32, len:u32, data
  */
 
+/**
+ * Decoded delta file content.
+ *
+ * @param commands    The placed commands to execute during apply.
+ * @param inplace     True if the delta uses the in-place format.
+ * @param versionSize Byte length of the reconstructed version.
+ * @param srcCrc      CRC-64/XZ of the reference (8 bytes big-endian).
+ * @param dstCrc      CRC-64/XZ of the version (8 bytes big-endian).
+ */
 class DecodeResult(
     val commands: List<PlacedCommand>,
     val inplace: Boolean,
@@ -110,6 +119,7 @@ fun isInplaceDelta(data: ByteArray): Boolean {
     return (data[DELTA_MAGIC.size].toInt() and DELTA_FLAG_INPLACE.toInt()) != 0
 }
 
+/** Write a 32-bit unsigned value in big-endian byte order. */
 private fun putU32BE(buf: ByteArray, off: Int, value: Int) {
     buf[off]     = (value ushr 24).toByte()
     buf[off + 1] = (value ushr 16).toByte()
@@ -117,6 +127,7 @@ private fun putU32BE(buf: ByteArray, off: Int, value: Int) {
     buf[off + 3] = value.toByte()
 }
 
+/** Read a 32-bit unsigned value in big-endian byte order. */
 private fun getU32BE(buf: ByteArray, off: Int): Int =
     ((buf[off].toInt()     and 0xFF) shl 24) or
     ((buf[off + 1].toInt() and 0xFF) shl 16) or

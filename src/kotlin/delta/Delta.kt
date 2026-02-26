@@ -30,6 +30,7 @@ fun main(args: Array<String>) {
     }
 }
 
+/** Dispatch to the appropriate subcommand based on the first argument. */
 private fun run(args: Array<String>) {
     if (args.isEmpty()) usage()
     when (args[0]) {
@@ -65,6 +66,7 @@ private fun usage(): Nothing = throw IllegalArgumentException(
     "         --inplace, --policy P, --verbose, --splay"
 )
 
+/** encode: diff R→V with the chosen algorithm, write a binary delta file, and print statistics. */
 private fun encode(args: Array<String>) {
     if (args.size < 5) usage()
 
@@ -128,6 +130,7 @@ private fun encode(args: Array<String>) {
     System.out.printf("Time:         %.3fs%n", elapsed / 1e9)
 }
 
+/** decode: apply a binary delta file to R and write the reconstructed version. */
 private fun decode(args: Array<String>) {
     if (args.size < 4) usage()
 
@@ -183,6 +186,7 @@ private fun decode(args: Array<String>) {
     System.out.printf("Time:         %.3fs%n", elapsed / 1e9)
 }
 
+/** info: print the header fields and command summary of a binary delta file. */
 private fun info(args: Array<String>) {
     if (args.size < 2) usage()
 
@@ -203,6 +207,7 @@ private fun info(args: Array<String>) {
     System.out.printf("Output size:  %d bytes%n", stats.totalOutputBytes)
 }
 
+/** inplace: convert a standard delta file to in-place format using the CRWI algorithm. */
 private fun inplace(args: Array<String>) {
     if (args.size < 4) usage()
 

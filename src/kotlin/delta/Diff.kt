@@ -1,8 +1,6 @@
 package delta
 
-/**
- * Shared utilities and algorithm dispatcher (Section 2.1.1).
- */
+// ── Shared utilities and algorithm dispatcher (Section 2.1.1) ─────────────
 
 /** Compare byte subarrays for equality. */
 fun ByteArray.regionEquals(aOff: Int, b: ByteArray, bOff: Int, len: Int): Boolean {
@@ -43,6 +41,7 @@ fun printStats(commands: List<Command>) {
     }
 }
 
+/** Run the selected algorithm to produce a command list for R→V. */
 fun diff(algo: Algorithm, r: ByteArray, v: ByteArray, opts: DiffOptions): List<Command> =
     when (algo) {
         Algorithm.GREEDY     -> diffGreedy(r, v, opts)
@@ -50,5 +49,6 @@ fun diff(algo: Algorithm, r: ByteArray, v: ByteArray, opts: DiffOptions): List<C
         Algorithm.CORRECTING -> diffCorrecting(r, v, opts)
     }
 
+/** Run the selected algorithm with default tuning options. */
 fun diffDefault(algo: Algorithm, r: ByteArray, v: ByteArray): List<Command> =
     diff(algo, r, v, DiffOptions())
