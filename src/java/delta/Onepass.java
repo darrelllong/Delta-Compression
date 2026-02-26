@@ -18,6 +18,7 @@ import static delta.Types.*;
 public final class Onepass {
     private Onepass() {}
 
+    /** Run the one-pass algorithm on R and V with the given options. */
     public static List<Command> diff(byte[] r, byte[] v, DiffOptions opts) {
         List<Command> commands = new ArrayList<>();
         if (v.length == 0) return commands;
@@ -186,6 +187,10 @@ public final class Onepass {
         return commands;
     }
 
+    /**
+     * Store (fp, off) at slot fp%q, unless the slot already holds a value from
+     * the current scan version (retain-existing policy: first entry wins).
+     */
     private static void htPut(long[] fps, int[] offs, long[] vers,
                                long fp, int off, int q, long ver) {
         int idx = (int) (Long.remainderUnsigned(fp, q));
@@ -195,6 +200,10 @@ public final class Onepass {
         vers[idx] = ver;
     }
 
+    /**
+     * Return the offset stored for fp at slot fp%q if it belongs to the current
+     * scan version, or -1 on a miss or stale entry.
+     */
     private static int htGet(long[] fps, int[] offs, long[] vers,
                               long fp, int q, long ver) {
         int idx = (int) (Long.remainderUnsigned(fp, q));

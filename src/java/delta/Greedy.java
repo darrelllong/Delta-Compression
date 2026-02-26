@@ -17,6 +17,7 @@ import static delta.Types.*;
 public final class Greedy {
     private Greedy() {}
 
+    /** Run the greedy algorithm on R and V with the given options. */
     public static List<Command> diff(byte[] r, byte[] v, DiffOptions opts) {
         List<Command> commands = new ArrayList<>();
         if (v.length == 0) return commands;

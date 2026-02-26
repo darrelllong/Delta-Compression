@@ -20,9 +20,22 @@ import static delta.Types.*;
 public final class Correcting {
     private Correcting() {}
 
+    /**
+     * One entry in the correction lookback buffer (Section 5.2).
+     *
+     * The correcting algorithm may discover that a newly found match overlaps
+     * commands already emitted.  The buffer holds the most recent bufCap tentative
+     * commands so they can be trimmed or cancelled (tail correction) when a better
+     * match is found.  Commands are flushed to the output list as they age out.
+     */
     private static final class BufEntry {
-        int vStart, vEnd;
+        /** First V byte covered by this entry. */
+        int vStart;
+        /** One past the last V byte covered. */
+        int vEnd;
+        /** The tentative command (Add or Copy). */
         Command cmd;
+        /** Reserved; always false in the current implementation. */
         boolean dummy;
 
         BufEntry(int vStart, int vEnd, Command cmd, boolean dummy) {
@@ -33,6 +46,7 @@ public final class Correcting {
         }
     }
 
+    /** Run the correcting algorithm on R and V with the given options. */
     public static List<Command> diff(byte[] r, byte[] v, DiffOptions opts) {
         List<Command> commands = new ArrayList<>();
         if (v.length == 0) return commands;

@@ -17,6 +17,15 @@ import static delta.Types.*;
 public final class Encoding {
     private Encoding() {}
 
+    /**
+     * Decoded delta file content.
+     *
+     * @param commands    The placed commands to execute during apply.
+     * @param inplace     True if the delta uses the in-place format.
+     * @param versionSize Byte length of the reconstructed version.
+     * @param srcCrc      CRC-64/XZ of the reference (8 bytes big-endian).
+     * @param dstCrc      CRC-64/XZ of the version (8 bytes big-endian).
+     */
     public record DecodeResult(
         List<PlacedCommand> commands,
         boolean inplace,
@@ -134,6 +143,7 @@ public final class Encoding {
         return (data[DELTA_MAGIC.length] & DELTA_FLAG_INPLACE) != 0;
     }
 
+    /** Write a 32-bit unsigned value in big-endian byte order. */
     private static void putU32BE(byte[] buf, int off, int value) {
         buf[off]     = (byte) (value >>> 24);
         buf[off + 1] = (byte) (value >>> 16);
@@ -141,6 +151,7 @@ public final class Encoding {
         buf[off + 3] = (byte) value;
     }
 
+    /** Read a 32-bit unsigned value in big-endian byte order. */
     private static int getU32BE(byte[] buf, int off) {
         return ((buf[off]     & 0xFF) << 24)
              | ((buf[off + 1] & 0xFF) << 16)

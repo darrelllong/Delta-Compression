@@ -34,6 +34,7 @@ public final class Delta {
         }
     }
 
+    /** Dispatch to the appropriate subcommand based on the first argument. */
     private static void run(String[] args) throws IOException {
         if (args.length < 1) usage();
         switch (args[0]) {
@@ -69,6 +70,7 @@ public final class Delta {
             "         --inplace, --policy P, --verbose, --splay");
     }
 
+    /** encode: diff R→V with the chosen algorithm, write a binary delta file, and print statistics. */
     private static void encode(String[] args) throws IOException {
         if (args.length < 5) usage();
 
@@ -136,6 +138,7 @@ public final class Delta {
         System.out.printf("Time:         %.3fs%n", elapsed / 1e9);
     }
 
+    /** decode: apply a binary delta file to R and write the reconstructed version. */
     private static void decode(String[] args) throws IOException {
         if (args.length < 4) usage();
 
@@ -199,6 +202,7 @@ public final class Delta {
         System.out.printf("Time:         %.3fs%n", elapsed / 1e9);
     }
 
+    /** info: print the header fields and command summary of a binary delta file. */
     private static void info(String[] args) throws IOException {
         if (args.length < 2) usage();
 
@@ -220,6 +224,7 @@ public final class Delta {
         System.out.printf("Output size:  %d bytes%n", stats.totalOutputBytes());
     }
 
+    /** inplace: convert a standard delta file to in-place format using the CRWI algorithm. */
     private static void inplace(String[] args) throws IOException {
         if (args.length < 4) usage();
 

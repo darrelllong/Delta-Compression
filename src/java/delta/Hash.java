@@ -102,6 +102,14 @@ public final class Hash {
         2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37
     };
 
+    /**
+     * Deterministic Miller-Rabin primality test.
+     *
+     * Writes n-1 = 2^r * d, then for each witness a checks whether
+     * a^d ≡ 1 (mod n) or a^{2^j d} ≡ -1 (mod n) for some j &lt; r.
+     * If neither holds, n is composite.  With the fixed witnesses above,
+     * the test is deterministic for all n relevant to hash table sizing.
+     */
     public static boolean isPrime(long n) {
         if (n < 2) return false;
         if (n < 4) return true;

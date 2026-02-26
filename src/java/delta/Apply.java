@@ -264,7 +264,7 @@ public final class Apply {
 
         boolean[] removed  = new boolean[n];
         List<Integer> topo = new ArrayList<>();
-        int[] color        = new int[n];   // 0=unvisited, 1=on-path, 2=done
+        int[] color        = new int[n];   // COLOR_UNVISITED initially
         ScanCursor cursor  = new ScanCursor();
 
         PriorityQueue<int[]> heap = new PriorityQueue<>(

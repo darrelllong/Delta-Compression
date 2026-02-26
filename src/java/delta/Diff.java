@@ -55,6 +55,7 @@ public final class Diff {
         }
     }
 
+    /** Run the selected algorithm to produce a command list for R→V. */
     public static List<Command> diff(Algorithm algo, byte[] r, byte[] v,
                                      DiffOptions opts) {
         return switch (algo) {
@@ -64,6 +65,7 @@ public final class Diff {
         };
     }
 
+    /** Run the selected algorithm with default tuning options. */
     public static List<Command> diffDefault(Algorithm algo, byte[] r, byte[] v) {
         return diff(algo, r, v, new DiffOptions());
     }
