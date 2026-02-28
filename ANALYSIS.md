@@ -418,21 +418,49 @@ the from-5.1.1 ratios grow while successive ratios stay flat (0.47–0.50%).
 
 ```mermaid
 xychart-beta
-    title "Extended kernel benchmark: onepass ratio (%)"
+    title "Onepass ratio (%) from base 5.1.0"
     x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
     y-axis "ratio %" 0.45 --> 0.75
     line [0.65, 0.66, 0.69, 0.70, 0.73, 0.73]
+```
+
+```mermaid
+xychart-beta
+    title "Onepass ratio (%) successive chain"
+    x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
+    y-axis "ratio %" 0.45 --> 0.75
     line [0.53, 0.47, 0.50, 0.48, 0.49, 0.47]
+```
+
+```mermaid
+xychart-beta
+    title "Onepass ratio (%) from reference 5.1.1"
+    x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
+    y-axis "ratio %" 0.45 --> 0.75
     line [0.53, 0.54, 0.58, 0.58, 0.62, 0.62]
 ```
 
 ```mermaid
 xychart-beta
-    title "Extended kernel benchmark: correcting time (s)"
+    title "Correcting time (s) from base 5.1.0"
     x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
     y-axis "seconds" 9.5 --> 10.4
     line [9.7, 9.7, 9.6, 9.8, 9.8, 10.1]
+```
+
+```mermaid
+xychart-beta
+    title "Correcting time (s) successive chain"
+    x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
+    y-axis "seconds" 9.5 --> 10.4
     line [10.2, 10.2, 10.3, 10.2, 9.9, 10.1]
+```
+
+```mermaid
+xychart-beta
+    title "Correcting time (s) from reference 5.1.1"
+    x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
+    y-axis "seconds" 9.5 --> 10.4
     line [10.2, 10.2, 10.3, 10.2, 10.2, 10.2]
 ```
 
