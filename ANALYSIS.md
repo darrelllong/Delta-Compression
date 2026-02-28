@@ -302,6 +302,22 @@ runs: this script times one encode per implementation.  Local plots can
 be regenerated with `tests/plot_benchmarks.py`; the generated PNGs are
 intentionally not committed.
 
+```mermaid
+xychart-beta
+    title "Per-language onepass encode time (s)"
+    x-axis ["C", "Rust", "C++", "Go", "Java", "Kotlin", "Scala", "Python"]
+    y-axis "seconds" 0 --> 280
+    bar [4.0, 4.4, 4.7, 4.9, 6.0, 6.0, 6.1, 264.7]
+```
+
+```mermaid
+xychart-beta
+    title "Per-language correcting encode time (s)"
+    x-axis ["Rust", "Kotlin", "Java", "Scala", "Go", "C", "C++", "Python"]
+    y-axis "seconds" 0 --> 650
+    bar [9.9, 11.8, 12.1, 13.2, 13.8, 19.0, 19.5, 611.7]
+```
+
 **Rust, default vs `--splay`**
 
 | Algorithm | Flags | Time | Delta | Copies | Median copy |
@@ -399,6 +415,26 @@ as versions diverge further — slower growth than from base 5.1.0, since 5.1.1
 is inherently closer to all later versions.  The 5.1.1→5.1.2 successive delta
 (0.53%) equals the 5.1.1→5.1.2 from-5.1.1 delta by definition; from there
 the from-5.1.1 ratios grow while successive ratios stay flat (0.47–0.50%).
+
+```mermaid
+xychart-beta
+    title "Extended kernel benchmark: onepass ratio (%)"
+    x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
+    y-axis "ratio %" 0.45 --> 0.75
+    line [0.65, 0.66, 0.69, 0.70, 0.73, 0.73]
+    line [0.53, 0.47, 0.50, 0.48, 0.49, 0.47]
+    line [0.53, 0.54, 0.58, 0.58, 0.62, 0.62]
+```
+
+```mermaid
+xychart-beta
+    title "Extended kernel benchmark: correcting time (s)"
+    x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
+    y-axis "seconds" 9.5 --> 10.4
+    line [9.7, 9.7, 9.6, 9.8, 9.8, 10.1]
+    line [10.2, 10.2, 10.3, 10.2, 9.9, 10.1]
+    line [10.2, 10.2, 10.3, 10.2, 10.2, 10.2]
+```
 
 ### Splay tree: correcting compression ratio
 
