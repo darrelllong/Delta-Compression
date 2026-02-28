@@ -21,3 +21,7 @@ src/cpp/build-release/
 # Go binaries
 src/go/delta/delta
 src/go/delta_bin
+
+# Local benchmark plots / tool caches
+plots/
+.scala-build/

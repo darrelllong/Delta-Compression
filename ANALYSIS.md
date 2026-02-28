@@ -298,9 +298,9 @@ and Scala on correcting in this run.  All eight compiled/JIT
 implementations produce byte-identical delta files.  Python is ~60×
 slower than Rust on both algorithms.  Small shifts versus older snapshots
 should be treated as single-run noise unless they persist across repeated
-runs: this script times one encode per implementation.
-
-![Per-language kernel benchmark](plots/benchmark_per_language.png)
+runs: this script times one encode per implementation.  Local plots can
+be regenerated with `tests/plot_benchmarks.py`; the generated PNGs are
+intentionally not committed.
 
 **Rust, default vs `--splay`**
 
@@ -399,10 +399,6 @@ as versions diverge further — slower growth than from base 5.1.0, since 5.1.1
 is inherently closer to all later versions.  The 5.1.1→5.1.2 successive delta
 (0.53%) equals the 5.1.1→5.1.2 from-5.1.1 delta by definition; from there
 the from-5.1.1 ratios grow while successive ratios stay flat (0.47–0.50%).
-
-![Extended kernel benchmark ratios](plots/benchmark_kernel_ratios.png)
-
-![Extended kernel benchmark times](plots/benchmark_kernel_times.png)
 
 ### Splay tree: correcting compression ratio
 
