@@ -13,6 +13,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+static void
+decode_fail(delta_decode_result_t *result, const char *message)
+{
+	fprintf(stderr, "delta_decode: %s\n", message);
+	delta_decode_result_free(result);
+	exit(1);
+}
+
 // ── Big-endian u32 helpers ────────────────────────────────────────────
 
 static void
@@ -132,46 +140,56 @@ delta_decode(const uint8_t *data, size_t len)
 
 	while (pos < len) {
 		uint8_t t = data[pos++];
-		delta_placed_command_t cmd;
+		delta_placed_command_t cmd = {0};
 
 		if (t == DELTA_CMD_END) {
+			if (pos != len) {
+				decode_fail(&result, "trailing data after END");
+			}
 			return result;
 		}
 
 		if (t == DELTA_CMD_COPY) {
 			if (pos + DELTA_COPY_PAYLOAD > len) {
-				fprintf(stderr, "delta_decode: truncated COPY\n");
-				exit(1);
+				decode_fail(&result, "truncated COPY");
 			}
 			cmd.tag = PCMD_COPY;
 			cmd.copy.src = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
 			cmd.copy.dst = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
 			cmd.copy.length = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
+			if (cmd.copy.dst > result.version_size ||
+			    cmd.copy.length > result.version_size - cmd.copy.dst) {
+				decode_fail(&result, "COPY writes past version size");
+			}
 		} else if (t == DELTA_CMD_ADD) {
 			size_t dlen;
 			if (pos + DELTA_ADD_HEADER > len) {
-				fprintf(stderr, "delta_decode: truncated ADD\n");
-				exit(1);
+				decode_fail(&result, "truncated ADD");
 			}
 			cmd.tag = PCMD_ADD;
 			cmd.add.dst = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
 			dlen = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
 			cmd.add.length = dlen;
+			if (cmd.add.dst > result.version_size ||
+			    dlen > result.version_size - cmd.add.dst) {
+				decode_fail(&result, "ADD writes past version size");
+			}
 			if (pos + dlen > len) {
-				fprintf(stderr, "delta_decode: truncated ADD data\n");
-				exit(1);
+				decode_fail(&result, "truncated ADD data");
 			}
 			cmd.add.data = delta_malloc(dlen);
-			memcpy(cmd.add.data, &data[pos], dlen);
+			if (dlen > 0) {
+				memcpy(cmd.add.data, &data[pos], dlen);
+			}
 			pos += dlen;
 		} else {
-			fprintf(stderr, "delta_decode: unknown command type %d\n", t);
-			exit(1);
+			decode_fail(&result, "unknown command type");
 		}
 
 		delta_placed_commands_push(&result.commands, cmd);
 	}
 
+	decode_fail(&result, "missing END");
 	return result;
 }
 

@@ -1,9 +1,10 @@
-#include <catch2/catch_test_macros.hpp>
+#include "test_harness.h"
 #include <delta/crc64.h>
 #include <delta/hash.h>
 #include <delta/types.h>
 
 #include <array>
+#include <cstdio>
 #include <cstdint>
 #include <string>
 #include <vector>

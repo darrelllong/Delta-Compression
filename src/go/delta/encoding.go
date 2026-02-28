@@ -92,6 +92,9 @@ func DecodeDelta(data []byte) (DecodeResult, error) {
 
 	inplace := (data[4] & DeltaFlagInplace) != 0
 	versionSize := getU32BE(data, 5)
+	if versionSize < 0 {
+		return DecodeResult{}, fmt.Errorf("invalid version size")
+	}
 	crcOff := 9
 	var srcCrc, dstCrc [8]byte
 	copy(srcCrc[:], data[crcOff:crcOff+DeltaCrcSize])
@@ -99,10 +102,12 @@ func DecodeDelta(data []byte) (DecodeResult, error) {
 	pos := DeltaHeaderSize
 
 	var commands []PlacedCommand
+	sawEnd := false
 	for pos < len(data) {
 		t := int(data[pos] & 0xFF)
 		pos++
 		if t == DeltaCmdEnd {
+			sawEnd = true
 			break
 		}
 		switch t {
@@ -116,6 +121,12 @@ func DecodeDelta(data []byte) (DecodeResult, error) {
 			pos += DeltaU32Size
 			length := getU32BE(data, pos)
 			pos += DeltaU32Size
+			if err := validatePlacedRange(dst, length, versionSize, "copy"); err != nil {
+				return DecodeResult{}, err
+			}
+			if src < 0 {
+				return DecodeResult{}, fmt.Errorf("copy src out of range")
+			}
 			commands = append(commands, PlacedCopy{Src: src, DstOff: dst, Length: length})
 		case DeltaCmdAdd:
 			if pos+DeltaAddHeader > len(data) {
@@ -128,6 +139,9 @@ func DecodeDelta(data []byte) (DecodeResult, error) {
 			if pos+length > len(data) {
 				return DecodeResult{}, fmt.Errorf("unexpected EOF")
 			}
+			if err := validatePlacedRange(dst, length, versionSize, "add"); err != nil {
+				return DecodeResult{}, err
+			}
 			payload := make([]byte, length)
 			copy(payload, data[pos:pos+length])
 			pos += length
@@ -135,6 +149,12 @@ func DecodeDelta(data []byte) (DecodeResult, error) {
 		default:
 			return DecodeResult{}, fmt.Errorf("unknown command type: %d", t)
 		}
+	}
+	if !sawEnd {
+		return DecodeResult{}, fmt.Errorf("missing END command")
+	}
+	if pos != len(data) {
+		return DecodeResult{}, fmt.Errorf("trailing data after END")
 	}
 
 	return DecodeResult{
@@ -170,4 +190,14 @@ func putU32BE(buf []byte, off, value int) {
 // getU32BE reads a 32-bit unsigned integer in big-endian byte order.
 func getU32BE(buf []byte, off int) int {
 	return int(buf[off])<<24 | int(buf[off+1])<<16 | int(buf[off+2])<<8 | int(buf[off+3])
+}
+
+func validatePlacedRange(dst, length, versionSize int, kind string) error {
+	if dst < 0 || length < 0 {
+		return fmt.Errorf("%s command out of range", kind)
+	}
+	if dst > versionSize || length > versionSize-dst {
+		return fmt.Errorf("%s command exceeds version size", kind)
+	}
+	return nil
 }

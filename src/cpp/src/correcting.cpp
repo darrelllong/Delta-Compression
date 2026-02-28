@@ -375,7 +375,7 @@ std::vector<Command> diff(
     case Algorithm::Correcting:
         return diff_correcting(r, v, opts);
     }
-    __builtin_unreachable();
+    throw DeltaError("unknown algorithm");
 }
 
 /// Shared verbose stats: result summary + copy length distribution.

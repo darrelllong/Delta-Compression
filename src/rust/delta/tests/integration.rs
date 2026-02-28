@@ -1,9 +1,10 @@
 use delta::{
     apply_delta, apply_delta_inplace, crc64_xz, decode_delta, diff_correcting, diff_greedy,
     diff_onepass, encode_delta, is_inplace_delta, is_prime, make_inplace, next_prime, output_size,
-    place_commands, unplace_commands, Command, CyclePolicy, DeltaError, DiffOptions,
-    PlacedCommand, TABLE_SIZE,
+    place_commands, unplace_commands, validate_placed_commands, Command, CyclePolicy, DeltaError,
+    DiffOptions, PlacedCommand, TABLE_SIZE,
 };
+use std::fs;
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -212,6 +213,73 @@ fn test_binary_encoding_wrong_magic_rejected() {
     let mut bad = encode_delta(&[], false, 0, &[0u8; 8], &[0u8; 8]);
     bad[3] = 0x02; // downgrade to v2
     assert!(matches!(decode_delta(&bad), Err(DeltaError::InvalidFormat(_))));
+}
+
+#[test]
+fn test_decode_rejects_missing_end() {
+    let encoded = encode_delta(&[], false, 0, &[0u8; 8], &[0u8; 8]);
+    assert!(matches!(
+        decode_delta(&encoded[..encoded.len() - 1]),
+        Err(DeltaError::InvalidFormat(msg)) if msg == "missing END command"
+    ));
+}
+
+#[test]
+fn test_decode_rejects_trailing_data() {
+    let mut encoded = encode_delta(&[], false, 0, &[0u8; 8], &[0u8; 8]);
+    encoded.push(0x7f);
+    assert!(matches!(
+        decode_delta(&encoded),
+        Err(DeltaError::InvalidFormat(msg)) if msg == "trailing data after END"
+    ));
+}
+
+#[test]
+fn test_decode_rejects_copy_past_version_size() {
+    let encoded = encode_delta(
+        &[PlacedCommand::Copy {
+            src: 0,
+            dst: 1,
+            length: 2,
+        }],
+        false,
+        2,
+        &[0u8; 8],
+        &[0u8; 8],
+    );
+    assert!(matches!(
+        decode_delta(&encoded),
+        Err(DeltaError::InvalidFormat(msg)) if msg == "copy command exceeds version size"
+    ));
+}
+
+#[test]
+fn test_validate_placed_commands_rejects_source_overflow() {
+    let err = validate_placed_commands(
+        &[PlacedCommand::Copy {
+            src: 1,
+            dst: 0,
+            length: 2,
+        }],
+        2,
+        2,
+        false,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        DeltaError::InvalidFormat(msg) if msg == "copy source out of range"
+    ));
+}
+
+#[test]
+fn test_real_data_roundtrip() {
+    let r = fs::read("../../../README.md").expect("read README");
+    let v = fs::read("../../../HOWTO.md").expect("read HOWTO");
+    for (name, algo) in all_algos() {
+        let got = roundtrip(algo, &r, &v, 8);
+        assert_eq!(got, v, "failed for {}", name);
+    }
 }
 
 // TestLargeCopy

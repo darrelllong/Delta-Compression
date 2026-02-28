@@ -54,6 +54,18 @@ check() {
     fi
 }
 
+check_fails() {
+    TESTS=$((TESTS + 1))
+    desc="$1"; shift
+    if "$@" >/dev/null 2>&1; then
+        FAIL=$((FAIL + 1))
+        printf "FAIL  %s\n" "$desc"
+    else
+        PASS=$((PASS + 1))
+        printf "  ok  %s\n" "$desc"
+    fi
+}
+
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
@@ -83,6 +95,35 @@ for algo in greedy onepass correcting; do
     $DELTA decode "$ref" "$d" "$out"
     check "$algo roundtrip" diff -q "$ver" "$out"
 done
+
+echo ""
+echo "=== Decode validation ==="
+
+base_delta="$tmpdir/onepass.delta"
+base_size=$(wc -c < "$base_delta" | tr -d ' ')
+
+missing_end="$tmpdir/missing-end.delta"
+dd if="$base_delta" of="$missing_end" bs=1 count=$((base_size - 1)) 2>/dev/null
+check_fails "info rejects missing END" $DELTA info "$missing_end"
+
+trailing="$tmpdir/trailing.delta"
+cp "$base_delta" "$trailing"
+printf '\177' >> "$trailing"
+check_fails "info rejects trailing data" $DELTA info "$trailing"
+
+bad_crc="$tmpdir/bad-crc.delta"
+bad_out="$tmpdir/bad-crc.out"
+cp "$base_delta" "$bad_crc"
+printf '\377' | dd of="$bad_crc" bs=1 seek=17 conv=notrunc 2>/dev/null
+TESTS=$((TESTS + 1))
+if ! $DELTA decode "$ref" "$bad_crc" "$bad_out" >/dev/null 2>&1 \
+    && [ ! -e "$bad_out" ]; then
+    PASS=$((PASS + 1))
+    printf "  ok  decode rejects bad CRC without writing output\n"
+else
+    FAIL=$((FAIL + 1))
+    printf "FAIL  decode rejects bad CRC without writing output\n"
+fi
 
 echo ""
 echo "=== In-place tests ==="

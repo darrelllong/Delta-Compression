@@ -3,8 +3,15 @@
 #include <array>
 #include <bit>
 #include <cstring>
+#include <string>
 
 namespace delta {
+
+static void validate_placed_range(size_t dst, size_t length, size_t version_size, const char* kind) {
+    if (dst > version_size || length > version_size - dst) {
+        throw DeltaError(std::string(kind) + " command exceeds version size");
+    }
+}
 
 // Big-endian u32 helpers
 static inline void write_u32_be(std::vector<uint8_t>& out, uint32_t val) {
@@ -76,6 +83,7 @@ std::tuple<std::vector<PlacedCommand>, bool, size_t,
 
     size_t pos = DELTA_HEADER_SIZE;
     std::vector<PlacedCommand> commands;
+    bool saw_end = false;
 
     while (pos < data.size()) {
         uint8_t t = data[pos];
@@ -83,7 +91,8 @@ std::tuple<std::vector<PlacedCommand>, bool, size_t,
 
         switch (t) {
         case DELTA_CMD_END:
-            return {std::move(commands), inplace, version_size, src_crc, dst_crc};
+            saw_end = true;
+            break;
 
         case DELTA_CMD_COPY: {
             if (pos + DELTA_COPY_PAYLOAD > data.size()) {
@@ -92,6 +101,7 @@ std::tuple<std::vector<PlacedCommand>, bool, size_t,
             size_t src = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
             size_t dst = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
             size_t length = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
+            validate_placed_range(dst, length, version_size, "copy");
             commands.emplace_back(PlacedCopy{src, dst, length});
             break;
         }
@@ -105,6 +115,7 @@ std::tuple<std::vector<PlacedCommand>, bool, size_t,
             if (pos + length > data.size()) {
                 throw DeltaError("unexpected end of delta data");
             }
+            validate_placed_range(dst, length, version_size, "add");
             std::vector<uint8_t> add_data(data.begin() + pos,
                                           data.begin() + pos + length);
             pos += length;
@@ -115,8 +126,18 @@ std::tuple<std::vector<PlacedCommand>, bool, size_t,
         default:
             throw DeltaError("unknown command type: " + std::to_string(t));
         }
+
+        if (saw_end) {
+            break;
+        }
     }
 
+    if (!saw_end) {
+        throw DeltaError("missing END command");
+    }
+    if (pos != data.size()) {
+        throw DeltaError("trailing data after END");
+    }
     return {std::move(commands), inplace, version_size, src_crc, dst_crc};
 }
 

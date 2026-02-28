@@ -103,10 +103,14 @@ public final class Encoding {
         System.arraycopy(data, crcOff + DELTA_CRC_SIZE, dstCrc, 0, DELTA_CRC_SIZE);
         int pos = DELTA_HEADER_SIZE;
         List<PlacedCommand> commands = new ArrayList<>();
+        boolean sawEnd = false;
 
         while (pos < data.length) {
             int t = data[pos++] & 0xFF;
-            if (t == DELTA_CMD_END) break;
+            if (t == DELTA_CMD_END) {
+                sawEnd = true;
+                break;
+            }
 
             if (t == DELTA_CMD_COPY) {
                 if (pos + DELTA_COPY_PAYLOAD > data.length)
@@ -114,6 +118,7 @@ public final class Encoding {
                 int src = getU32BE(data, pos); pos += DELTA_U32_SIZE;
                 int dst = getU32BE(data, pos); pos += DELTA_U32_SIZE;
                 int len = getU32BE(data, pos); pos += DELTA_U32_SIZE;
+                validatePlacedRange(dst, len, versionSize, "COPY");
                 commands.add(new PlacedCopy(src, dst, len));
             } else if (t == DELTA_CMD_ADD) {
                 if (pos + DELTA_ADD_HEADER > data.length)
@@ -122,6 +127,7 @@ public final class Encoding {
                 int len = getU32BE(data, pos); pos += DELTA_U32_SIZE;
                 if (pos + len > data.length)
                     throw new IllegalArgumentException("unexpected EOF");
+                validatePlacedRange(dst, len, versionSize, "ADD");
                 byte[] payload = new byte[len];
                 System.arraycopy(data, pos, payload, 0, len);
                 pos += len;
@@ -129,6 +135,12 @@ public final class Encoding {
             } else {
                 throw new IllegalArgumentException("unknown command type: " + t);
             }
+        }
+        if (!sawEnd) {
+            throw new IllegalArgumentException("missing END command");
+        }
+        if (pos != data.length) {
+            throw new IllegalArgumentException("trailing data after END");
         }
 
         return new DecodeResult(commands, inplace, versionSize, srcCrc, dstCrc);
@@ -157,5 +169,11 @@ public final class Encoding {
              | ((buf[off + 1] & 0xFF) << 16)
              | ((buf[off + 2] & 0xFF) << 8)
              |  (buf[off + 3] & 0xFF);
+    }
+
+    private static void validatePlacedRange(int dst, int len, int versionSize, String kind) {
+        if (dst < 0 || len < 0 || dst > versionSize || len > versionSize - dst) {
+            throw new IllegalArgumentException(kind + " extends past version size");
+        }
     }
 }

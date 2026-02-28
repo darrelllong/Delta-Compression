@@ -153,6 +153,7 @@ private fun decode(args: Array<String>) {
         }
         System.err.println("warning: skipping source CRC check (--ignore-hash)")
     }
+    validatePlacedCommands(result.commands, r.size, result.versionSize, result.inplace)
 
     val t0 = System.nanoTime()
     val out = if (result.inplace) {
@@ -235,6 +236,7 @@ private fun inplace(args: Array<String>) {
         println("Delta is already in-place format; copied unchanged.")
         return
     }
+    validatePlacedCommands(result.commands, r.size, result.versionSize, result.inplace)
 
     val t0       = System.nanoTime()
     val commands = unplaceCommands(result.commands)

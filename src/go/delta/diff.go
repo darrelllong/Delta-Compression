@@ -51,18 +51,35 @@ func printStats(commands []Command) {
 	}
 }
 
-// Diff dispatches to the requested differencing algorithm.
-func Diff(algo Algorithm, r, v []byte, opts DiffOptions) []Command {
+// DiffErr dispatches to the requested differencing algorithm.
+func DiffErr(algo Algorithm, r, v []byte, opts DiffOptions) ([]Command, error) {
 	switch algo {
 	case AlgorithmGreedy:
-		return diffGreedy(r, v, opts)
+		return diffGreedy(r, v, opts), nil
 	case AlgorithmOnepass:
-		return diffOnepass(r, v, opts)
+		return diffOnepass(r, v, opts), nil
 	case AlgorithmCorrecting:
-		return diffCorrecting(r, v, opts)
+		return diffCorrecting(r, v, opts), nil
 	default:
-		panic(fmt.Sprintf("unknown algorithm: %v", algo))
+		return nil, fmt.Errorf("unknown algorithm: %d", int(algo))
 	}
+}
+
+// Diff dispatches to the requested differencing algorithm.
+//
+// It returns nil for an unknown algorithm; callers that need explicit error
+// handling should use DiffErr.
+func Diff(algo Algorithm, r, v []byte, opts DiffOptions) []Command {
+	cmds, err := DiffErr(algo, r, v, opts)
+	if err != nil {
+		return nil
+	}
+	return cmds
+}
+
+// DiffDefaultErr runs the given algorithm with default options.
+func DiffDefaultErr(algo Algorithm, r, v []byte) ([]Command, error) {
+	return DiffErr(algo, r, v, DefaultDiffOptions())
 }
 
 // DiffDefault runs the given algorithm with default options.

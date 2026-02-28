@@ -75,13 +75,17 @@ pub fn decode_delta(
 
     let mut pos = DELTA_HEADER_SIZE;
     let mut commands = Vec::new();
+    let mut saw_end = false;
 
     while pos < data.len() {
         let t = data[pos];
         pos += 1;
 
         match t {
-            DELTA_CMD_END => break,
+            DELTA_CMD_END => {
+                saw_end = true;
+                break;
+            }
 
             DELTA_CMD_COPY => {
                 if pos + DELTA_COPY_PAYLOAD > data.len() {
@@ -99,6 +103,7 @@ pub fn decode_delta(
                     data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
                 ]) as usize;
                 pos += DELTA_U32_SIZE;
+                validate_placed_range(dst, length, version_size, "copy")?;
                 commands.push(PlacedCommand::Copy { src, dst, length });
             }
 
@@ -117,6 +122,7 @@ pub fn decode_delta(
                 if pos + length > data.len() {
                     return Err(DeltaError::UnexpectedEof);
                 }
+                validate_placed_range(dst, length, version_size, "add")?;
                 commands.push(PlacedCommand::Add {
                     dst,
                     data: data[pos..pos + length].to_vec(),
@@ -133,6 +139,13 @@ pub fn decode_delta(
         }
     }
 
+    if !saw_end {
+        return Err(DeltaError::InvalidFormat("missing END command".into()));
+    }
+    if pos != data.len() {
+        return Err(DeltaError::InvalidFormat("trailing data after END".into()));
+    }
+
     Ok((commands, inplace, version_size, src_crc, dst_crc))
 }
 
@@ -141,4 +154,14 @@ pub fn is_inplace_delta(data: &[u8]) -> bool {
     data.len() >= DELTA_MAGIC.len() + 1
         && &data[..DELTA_MAGIC.len()] == DELTA_MAGIC
         && data[DELTA_MAGIC.len()] & DELTA_FLAG_INPLACE != 0
+}
+
+fn validate_placed_range(dst: usize, length: usize, version_size: usize, kind: &str) -> Result<(), DeltaError> {
+    if dst > version_size || length > version_size.saturating_sub(dst) {
+        return Err(DeltaError::InvalidFormat(format!(
+            "{} command exceeds version size",
+            kind
+        )));
+    }
+    Ok(())
 }

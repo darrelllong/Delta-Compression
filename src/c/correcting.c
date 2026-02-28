@@ -521,7 +521,7 @@ delta_diff(delta_algorithm_t algo,
 	case ALGO_CORRECTING:
 		return delta_diff_correcting(r, r_len, v, v_len, opts);
 	}
-	// unreachable
+	fprintf(stderr, "delta_diff: unknown algorithm %d\n", (int)algo);
 	{
 		delta_commands_t empty;
 		delta_commands_init(&empty);

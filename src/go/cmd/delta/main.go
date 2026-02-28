@@ -203,7 +203,10 @@ func cmdEncode(args []string) error {
 	dstCrc := delta.Crc64XZ(v)
 
 	t0 := now()
-	commands := delta.Diff(algo, r, v, opts)
+	commands, err := delta.DiffErr(algo, r, v, opts)
+	if err != nil {
+		return err
+	}
 	var placed []delta.PlacedCommand
 	if inplace {
 		placed = delta.MakeInplace(r, commands, policy)
@@ -282,6 +285,9 @@ func cmdDecode(args []string) error {
 			os.Exit(1)
 		}
 		fmt.Fprintln(os.Stderr, "warning: skipping source CRC check (--ignore-hash)")
+	}
+	if err := delta.ValidatePlacedCommands(result.Commands, len(r), result.VersionSize, result.Inplace); err != nil {
+		return err
 	}
 
 	t0 := now()

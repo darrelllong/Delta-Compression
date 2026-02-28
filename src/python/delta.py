@@ -1014,21 +1014,40 @@ def decode_delta(data: bytes):
     dst_crc = bytes(data[crc_offset + DELTA_CRC_SIZE:crc_offset + 2 * DELTA_CRC_SIZE])
     pos = DELTA_HEADER_SIZE
     commands: List[PlacedCommand] = []
+    saw_end = False
 
     while pos < len(data):
         t = data[pos]
         pos += 1
         if t == DELTA_CMD_END:
+            saw_end = True
             break
         elif t == DELTA_CMD_COPY:
+            if pos + DELTA_COPY_PAYLOAD > len(data):
+                raise ValueError("Truncated COPY command")
             src, dst, length = struct.unpack_from('>III', data, pos)
             pos += DELTA_COPY_PAYLOAD
+            if dst + length > version_size:
+                raise ValueError("COPY extends past version size")
             commands.append(PlacedCopy(src=src, dst=dst, length=length))
         elif t == DELTA_CMD_ADD:
+            if pos + DELTA_ADD_HEADER > len(data):
+                raise ValueError("Truncated ADD command header")
             dst, length = struct.unpack_from('>II', data, pos)
             pos += DELTA_ADD_HEADER
+            if pos + length > len(data):
+                raise ValueError("Truncated ADD command payload")
+            if dst + length > version_size:
+                raise ValueError("ADD extends past version size")
             commands.append(PlacedAdd(dst=dst, data=data[pos:pos + length]))
             pos += length
+        else:
+            raise ValueError(f"Unknown command type: {t}")
+
+    if not saw_end:
+        raise ValueError("Missing END command")
+    if pos != len(data):
+        raise ValueError("Trailing data after END")
 
     return commands, inplace, version_size, src_crc, dst_crc
 

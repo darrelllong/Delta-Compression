@@ -84,10 +84,14 @@ fun decodeDelta(data: ByteArray): DecodeResult {
     val dstCrc      = data.copyOfRange(crcOff + DELTA_CRC_SIZE, crcOff + 2 * DELTA_CRC_SIZE)
     var pos         = DELTA_HEADER_SIZE
     val commands    = mutableListOf<PlacedCommand>()
+    var sawEnd      = false
 
-    while (pos < data.size) {
+    while (pos < data.size && !sawEnd) {
         val t = data[pos++].toInt() and 0xFF
-        if (t == DELTA_CMD_END) break
+        if (t == DELTA_CMD_END) {
+            sawEnd = true
+            continue
+        }
 
         when (t) {
             DELTA_CMD_COPY -> {
@@ -95,6 +99,7 @@ fun decodeDelta(data: ByteArray): DecodeResult {
                 val src = getU32BE(data, pos); pos += DELTA_U32_SIZE
                 val dst = getU32BE(data, pos); pos += DELTA_U32_SIZE
                 val len = getU32BE(data, pos); pos += DELTA_U32_SIZE
+                validatePlacedRange(dst, len, versionSize, "COPY")
                 commands.add(PlacedCommand.Copy(src, dst, len))
             }
             DELTA_CMD_ADD -> {
@@ -102,12 +107,15 @@ fun decodeDelta(data: ByteArray): DecodeResult {
                 val dst = getU32BE(data, pos); pos += DELTA_U32_SIZE
                 val len = getU32BE(data, pos); pos += DELTA_U32_SIZE
                 if (pos + len > data.size) throw IllegalArgumentException("unexpected EOF")
+                validatePlacedRange(dst, len, versionSize, "ADD")
                 val payload = data.copyOfRange(pos, pos + len); pos += len
                 commands.add(PlacedCommand.Add(dst, payload))
             }
             else -> throw IllegalArgumentException("unknown command type: $t")
         }
     }
+    if (!sawEnd) throw IllegalArgumentException("missing END command")
+    if (pos != data.size) throw IllegalArgumentException("trailing data after END")
 
     return DecodeResult(commands, inplace, versionSize, srcCrc, dstCrc)
 }
@@ -133,3 +141,9 @@ private fun getU32BE(buf: ByteArray, off: Int): Int =
     ((buf[off + 1].toInt() and 0xFF) shl 16) or
     ((buf[off + 2].toInt() and 0xFF) shl 8)  or
      (buf[off + 3].toInt() and 0xFF)
+
+private fun validatePlacedRange(dst: Int, len: Int, versionSize: Int, kind: String) {
+    if (dst < 0 || len < 0 || dst > versionSize || len > versionSize - dst) {
+        throw IllegalArgumentException("$kind extends past version size")
+    }
+}

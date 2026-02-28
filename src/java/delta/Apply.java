@@ -73,6 +73,21 @@ public final class Apply {
         }
     }
 
+    /** Validate placed commands before apply so malformed deltas fail cleanly. */
+    public static void validatePlacedCommands(List<PlacedCommand> commands,
+                                              int referenceSize, int versionSize,
+                                              boolean inplace) {
+        int sourceLimit = inplace ? Math.max(referenceSize, versionSize) : referenceSize;
+        for (PlacedCommand cmd : commands) {
+            if (cmd instanceof PlacedCopy c) {
+                validateRange(c.dst(), c.length(), versionSize, "copy destination");
+                validateRange(c.src(), c.length(), sourceLimit, "copy source");
+            } else if (cmd instanceof PlacedAdd a) {
+                validateRange(a.dst(), a.data().length, versionSize, "add destination");
+            }
+        }
+    }
+
     /** Reconstruct version from reference + algorithm commands. */
     public static byte[] applyDelta(byte[] r, List<Command> commands) {
         byte[] out = new byte[outputSize(commands)];
@@ -100,6 +115,12 @@ public final class Apply {
             return Arrays.copyOf(buf, versionSize);
         }
         return buf;
+    }
+
+    private static void validateRange(int start, int len, int limit, String label) {
+        if (start < 0 || len < 0 || start > limit || len > limit - start) {
+            throw new IllegalArgumentException(label + " out of range");
+        }
     }
 
     /**

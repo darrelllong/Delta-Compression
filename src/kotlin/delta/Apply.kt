@@ -64,6 +64,21 @@ fun applyPlacedInplaceTo(commands: List<PlacedCommand>, buf: ByteArray) {
     }
 }
 
+/** Validate placed commands before apply so malformed deltas fail cleanly. */
+fun validatePlacedCommands(commands: List<PlacedCommand>, referenceSize: Int,
+                           versionSize: Int, inplace: Boolean) {
+    val sourceLimit = if (inplace) maxOf(referenceSize, versionSize) else referenceSize
+    for (cmd in commands) {
+        when (cmd) {
+            is PlacedCommand.Copy -> {
+                validateRange(cmd.dst, cmd.length, versionSize, "copy destination")
+                validateRange(cmd.src, cmd.length, sourceLimit, "copy source")
+            }
+            is PlacedCommand.Add -> validateRange(cmd.dst, cmd.data.size, versionSize, "add destination")
+        }
+    }
+}
+
 /** Reconstruct version from reference + algorithm commands. */
 fun applyDelta(r: ByteArray, commands: List<Command>): ByteArray {
     val out = ByteArray(outputSize(commands))
@@ -84,6 +99,12 @@ fun applyDeltaInplace(r: ByteArray, commands: List<PlacedCommand>, versionSize: 
     r.copyInto(buf)
     applyPlacedInplaceTo(commands, buf)
     return if (buf.size != versionSize) buf.copyOf(versionSize) else buf
+}
+
+private fun validateRange(start: Int, len: Int, limit: Int, label: String) {
+    if (start < 0 || len < 0 || start > limit || len > limit - start) {
+        throw IllegalArgumentException("$label out of range")
+    }
 }
 
 /**

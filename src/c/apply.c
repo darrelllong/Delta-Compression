@@ -2,6 +2,7 @@
 
 #include "delta.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -221,6 +222,52 @@ delta_unplace_commands(const delta_placed_commands_t *placed)
 	}
 	free(indices);
 	return cmds;
+}
+
+// ── Bounds validation ───────────────────────────────────────────────────
+
+void
+delta_validate_placed_commands(const delta_placed_commands_t *cmds,
+                               size_t reference_size,
+                               size_t version_size,
+                               bool inplace)
+{
+	size_t source_limit = reference_size;
+	size_t i;
+
+	if (inplace && version_size > source_limit) {
+		source_limit = version_size;
+	}
+
+	for (i = 0; i < cmds->len; i++) {
+		const delta_placed_command_t *cmd = &cmds->data[i];
+		size_t dst;
+		size_t cmd_len;
+
+		if (cmd->tag == PCMD_COPY) {
+			dst = cmd->copy.dst;
+			cmd_len = cmd->copy.length;
+			if (cmd->copy.src > source_limit ||
+			    cmd_len > source_limit - cmd->copy.src) {
+				fprintf(stderr,
+				        "delta: COPY command %zu reads past source "
+				        "(src=%zu len=%zu limit=%zu)\n",
+				        i, cmd->copy.src, cmd_len, source_limit);
+				exit(1);
+			}
+		} else {
+			dst = cmd->add.dst;
+			cmd_len = cmd->add.length;
+		}
+
+		if (dst > version_size || cmd_len > version_size - dst) {
+			fprintf(stderr,
+			        "delta: command %zu writes past version size "
+			        "(dst=%zu len=%zu version=%zu)\n",
+			        i, dst, cmd_len, version_size);
+			exit(1);
+		}
+	}
 }
 
 // ── Apply placed commands (standard mode) ─────────────────────────────

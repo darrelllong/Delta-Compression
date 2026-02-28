@@ -34,6 +34,13 @@ void apply_placed_inplace_to(
     const std::vector<PlacedCommand>& commands,
     std::span<uint8_t> buf);
 
+/// Validate placed commands before apply so malformed deltas fail cleanly.
+void validate_placed_commands(
+    const std::vector<PlacedCommand>& commands,
+    size_t reference_size,
+    size_t version_size,
+    bool inplace);
+
 /// Reconstruct the version from reference + algorithm commands.
 std::vector<uint8_t> apply_delta(
     std::span<const uint8_t> r,

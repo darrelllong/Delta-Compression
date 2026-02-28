@@ -22,7 +22,7 @@ pub use algorithm::onepass::{diff_onepass, diff_onepass_default};
 pub use algorithm::correcting::{diff_correcting, diff_correcting_default};
 pub use apply::{
     apply_delta, apply_delta_inplace, apply_delta_to,
-    apply_placed_inplace_to, apply_placed_to,
+    apply_placed_inplace_to, apply_placed_to, validate_placed_commands,
     output_size, place_commands, unplace_commands,
 };
 pub use inplace::{make_inplace, InplaceStats};

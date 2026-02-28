@@ -274,6 +274,7 @@ int main(int argc, char** argv) {
             }
             std::fprintf(stderr, "warning: skipping source CRC check (--ignore-hash)\n");
         }
+        validate_placed_commands(placed, r.size(), version_size, is_ip);
 
         auto t0 = std::chrono::steady_clock::now();
         std::vector<uint8_t> out_bytes;

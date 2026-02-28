@@ -143,6 +143,7 @@ private def cmdDecode(args: Array[String]): Unit = {
     }
     System.err.println("warning: skipping source CRC check (--ignore-hash)")
   }
+  validatePlacedCommands(result.commands, r.length, result.versionSize, result.inplace)
 
   val t0 = System.nanoTime()
   val out =
@@ -224,6 +225,7 @@ private def cmdInplace(args: Array[String]): Unit = {
     println("Delta is already in-place format; copied unchanged.")
     return
   }
+  validatePlacedCommands(result.commands, r.length, result.versionSize, result.inplace)
 
   val t0       = System.nanoTime()
   val commands = unplaceCommands(result.commands)

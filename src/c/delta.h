@@ -357,6 +357,12 @@ delta_placed_commands_t delta_place_commands(const delta_commands_t *cmds);
 
 delta_commands_t delta_unplace_commands(const delta_placed_commands_t *placed);
 
+void           delta_validate_placed_commands(
+                                  const delta_placed_commands_t *cmds,
+                                  size_t reference_size,
+                                  size_t version_size,
+                                  bool inplace);
+
 delta_buffer_t delta_apply_placed(const uint8_t *r,
                                    const delta_placed_commands_t *cmds,
                                    size_t version_size);

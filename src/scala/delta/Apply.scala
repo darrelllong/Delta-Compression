@@ -53,6 +53,19 @@ def applyPlacedInplaceTo(commands: List[PlacedCommand], buf: Array[Byte]): Unit 
     case c: PlacedCommand.Add  => c.data.copyToArray(buf, c.dst)
   }
 
+/** Validate placed commands before apply so malformed deltas fail cleanly. */
+def validatePlacedCommands(commands: List[PlacedCommand], referenceSize: Int,
+                           versionSize: Int, inplace: Boolean): Unit = {
+  val sourceLimit = if inplace then math.max(referenceSize, versionSize) else referenceSize
+  for cmd <- commands do cmd match {
+    case c: PlacedCommand.Copy =>
+      validateRange(c.dst, c.length, versionSize, "copy destination")
+      validateRange(c.src, c.length, sourceLimit, "copy source")
+    case c: PlacedCommand.Add =>
+      validateRange(c.dst, c.data.length, versionSize, "add destination")
+  }
+}
+
 /** Reconstruct version from reference + algorithm commands. */
 def applyDelta(r: Array[Byte], commands: List[Command]): Array[Byte] = {
   val out = new Array[Byte](outputSize(commands))
@@ -74,6 +87,10 @@ def applyDeltaInplace(r: Array[Byte], commands: List[PlacedCommand], versionSize
   applyPlacedInplaceTo(commands, buf)
   if buf.length != versionSize then buf.take(versionSize) else buf
 }
+
+private def validateRange(start: Int, len: Int, limit: Int, label: String): Unit =
+  if start < 0 || len < 0 || start > limit || len > limit - start then
+    throw new IllegalArgumentException(s"$label out of range")
 
 /**
  * Convert placed commands back to algorithm commands (strip destinations).

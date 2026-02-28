@@ -2,6 +2,7 @@ package delta
 
 import (
 	"container/heap"
+	"fmt"
 	"sort"
 )
 
@@ -74,6 +75,34 @@ func ApplyPlacedInplaceTo(commands []PlacedCommand, buf []byte) {
 	}
 }
 
+// ValidatePlacedCommands checks whether placed commands fit within the
+// destination size and readable source window for apply.
+func ValidatePlacedCommands(commands []PlacedCommand, referenceSize, versionSize int, inplace bool) error {
+	if referenceSize < 0 || versionSize < 0 {
+		return fmt.Errorf("negative buffer size")
+	}
+	sourceLimit := referenceSize
+	if inplace && versionSize > sourceLimit {
+		sourceLimit = versionSize
+	}
+	for _, cmd := range commands {
+		switch c := cmd.(type) {
+		case PlacedCopy:
+			if err := validateApplyRange(c.DstOff, c.Length, versionSize, "copy destination"); err != nil {
+				return err
+			}
+			if err := validateApplyRange(c.Src, c.Length, sourceLimit, "copy source"); err != nil {
+				return err
+			}
+		case PlacedAdd:
+			if err := validateApplyRange(c.DstOff, len(c.Data), versionSize, "add destination"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // ApplyDelta reconstructs the version from reference + algorithm commands.
 func ApplyDelta(r []byte, commands []Command) []byte {
 	out := make([]byte, OutputSize(commands))
@@ -104,6 +133,16 @@ func ApplyDeltaInplace(r []byte, commands []PlacedCommand, versionSize int) []by
 		return buf[:versionSize]
 	}
 	return buf
+}
+
+func validateApplyRange(start, length, limit int, name string) error {
+	if start < 0 || length < 0 {
+		return fmt.Errorf("%s out of range", name)
+	}
+	if start > limit || length > limit-start {
+		return fmt.Errorf("%s out of range", name)
+	}
+	return nil
 }
 
 // UnplaceCommands converts placed commands back to algorithm commands.

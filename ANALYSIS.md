@@ -250,46 +250,57 @@ data requirements of the kernel tests.
 
 ## Performance benchmarks
 
+Current rerun status: `tests/transposition-benchmark.sh`,
+`tests/kernel-delta-test.sh`, and `tests/per-language-benchmark.sh` were
+rerun on this machine and the script-backed tables below reflect those
+fresh runs.  The ad hoc sections that are not driven by those scripts
+(`Cross-version kernel benchmark` and `Rust, default vs --splay`) remain
+historical snapshots.
+
 ### Kernel tarball benchmark (linux-5.1 → linux-5.1.1, 871 MB)
 
 All eight implementations, same input pair, default flags.  All produce
 byte-identical delta files.  CRC-64/XZ overhead is negligible (~70 ms
-total for two 871 MB files at ~12 GB/s); Python's 247–583s algorithm
+total for two 871 MB files at ~12 GB/s); Python's 265–612s algorithm
 time dominates regardless.
 
 **onepass** (delta: 4.8 MB, ratio: 0.58%)
 
 | Implementation | Time |
 |----------------|-----:|
-| Rust | 4s |
-| C | 4s |
-| C++ | 4s |
-| Go | 6s |
-| Kotlin | 6s |
-| Java | 6s |
-| Scala | 6s |
-| Python | 247s |
+| C | 4.0s |
+| Rust | 4.4s |
+| C++ | 4.7s |
+| Go | 4.9s |
+| Java | 6.0s |
+| Kotlin | 6.0s |
+| Scala | 6.1s |
+| Python | 264.7s |
 
 **correcting** (delta: 6.6 MB, ratio: 0.79%)
 
 | Implementation | Time |
 |----------------|-----:|
-| Rust | 9s |
-| Kotlin | 11s |
-| Java | 12s |
-| Scala | 12s |
-| Go | 13s |
-| C | 18s |
-| C++ | 18s |
-| Python | 583s |
+| Rust | 9.9s |
+| Kotlin | 11.8s |
+| Java | 12.1s |
+| Scala | 13.2s |
+| Go | 13.8s |
+| C | 19.0s |
+| C++ | 19.5s |
+| Python | 611.7s |
 
 Rust leads onepass by a narrow margin; Rust, C, and C++ are within a
 second of each other.  Go sits between the JVM group and C/Rust/C++ for
 onepass, and just above the JVM group for correcting.  Java, Kotlin, and
-Scala cluster together — all three compile to JVM bytecode and run on
-the same JDK 17 runtime.  All eight compiled/JIT implementations
-produce byte-identical delta files.  Python is ~60× slower than Rust on
-both algorithms.
+Scala cluster together on the same JDK 17 runtime; Kotlin edges out Java
+and Scala on correcting in this run.  All eight compiled/JIT
+implementations produce byte-identical delta files.  Python is ~60×
+slower than Rust on both algorithms.  Small shifts versus older snapshots
+should be treated as single-run noise unless they persist across repeated
+runs: this script times one encode per implementation.
+
+![Per-language kernel benchmark](plots/benchmark_per_language.png)
 
 **Rust, default vs `--splay`**
 
@@ -340,13 +351,13 @@ flags).  All tarballs are ~871 MB post-gunzip.
 
 | Version | onepass ratio | onepass time | correcting ratio | correcting time |
 |---------|-------------:|------------:|-----------------:|----------------:|
-| 5.1.1 | 0.58% | 4s | 0.79% | 9s |
-| 5.1.2 | 0.65% | 4s | 1.00% | 9s |
-| 5.1.3 | 0.66% | 4s | 1.02% | 9s |
-| 5.1.4 | 0.69% | 4s | 1.04% | 9s |
-| 5.1.5 | 0.70% | 5s | 0.85% | 9s |
-| 5.1.6 | 0.73% | 4s | 0.99% | 9s |
-| 5.1.7 | 0.73% | 4s | 0.87% | 9s |
+| 5.1.1 | 0.58% | 3.9s | 0.79% | 9.7s |
+| 5.1.2 | 0.65% | 3.9s | 1.00% | 9.7s |
+| 5.1.3 | 0.66% | 4.0s | 1.02% | 9.7s |
+| 5.1.4 | 0.69% | 4.0s | 1.04% | 9.6s |
+| 5.1.5 | 0.70% | 4.0s | 0.85% | 9.8s |
+| 5.1.6 | 0.73% | 4.0s | 0.99% | 9.8s |
+| 5.1.7 | 0.73% | 3.9s | 0.87% | 10.1s |
 
 Onepass ratios climb steadily as versions accumulate changes from the fixed
 5.1.0 base.  Correcting ratios fluctuate: each version's checkpoint bias k
@@ -357,13 +368,13 @@ seeds survive the checkpoint filter and hence how many matches are found.
 
 | Transition | onepass ratio | onepass time | correcting ratio | correcting time |
 |------------|-------------:|------------:|-----------------:|----------------:|
-| 5.1.0→5.1.1 | 0.58% | 4s | 0.79% | 9s |
-| 5.1.1→5.1.2 | 0.53% | 4s | 0.84% | 9s |
-| 5.1.2→5.1.3 | 0.47% | 4s | 0.99% | 9s |
-| 5.1.3→5.1.4 | 0.50% | 4s | 0.81% | 9s |
-| 5.1.4→5.1.5 | 0.48% | 4s | 0.78% | 9s |
-| 5.1.5→5.1.6 | 0.49% | 4s | 0.77% | 9s |
-| 5.1.6→5.1.7 | 0.47% | 4s | 0.84% | 9s |
+| 5.1.0→5.1.1 | 0.58% | 4.1s | 0.79% | 9.9s |
+| 5.1.1→5.1.2 | 0.53% | 4.1s | 0.84% | 10.2s |
+| 5.1.2→5.1.3 | 0.47% | 4.1s | 0.99% | 10.2s |
+| 5.1.3→5.1.4 | 0.50% | 4.0s | 0.81% | 10.3s |
+| 5.1.4→5.1.5 | 0.48% | 4.1s | 0.78% | 10.2s |
+| 5.1.5→5.1.6 | 0.49% | 4.0s | 0.77% | 9.9s |
+| 5.1.6→5.1.7 | 0.47% | 4.0s | 0.84% | 10.1s |
 
 Successive onepass deltas (0.47–0.58%) are consistently smaller than
 from-base deltas to the same version (0.58–0.73%): each adjacent pair of
@@ -376,18 +387,22 @@ reference size.
 
 | Version | onepass ratio | onepass time | correcting ratio | correcting time |
 |---------|-------------:|------------:|-----------------:|----------------:|
-| 5.1.2 | 0.53% | 4s | 0.84% | 9s |
-| 5.1.3 | 0.54% | 4s | 0.80% | 9s |
-| 5.1.4 | 0.58% | 4s | 0.95% | 9s |
-| 5.1.5 | 0.58% | 4s | 0.81% | 10s |
-| 5.1.6 | 0.62% | 4s | 0.85% | 9s |
-| 5.1.7 | 0.62% | 4s | 0.81% | 9s |
+| 5.1.2 | 0.53% | 4.1s | 0.84% | 10.2s |
+| 5.1.3 | 0.54% | 4.0s | 0.80% | 10.2s |
+| 5.1.4 | 0.58% | 4.1s | 0.95% | 10.3s |
+| 5.1.5 | 0.58% | 4.0s | 0.81% | 10.2s |
+| 5.1.6 | 0.62% | 4.0s | 0.85% | 10.2s |
+| 5.1.7 | 0.62% | 4.1s | 0.81% | 10.2s |
 
 Using 5.1.1 as reference, onepass ratios grow gradually from 0.53% to 0.62%
 as versions diverge further — slower growth than from base 5.1.0, since 5.1.1
 is inherently closer to all later versions.  The 5.1.1→5.1.2 successive delta
 (0.53%) equals the 5.1.1→5.1.2 from-5.1.1 delta by definition; from there
 the from-5.1.1 ratios grow while successive ratios stay flat (0.47–0.50%).
+
+![Extended kernel benchmark ratios](plots/benchmark_kernel_ratios.png)
+
+![Extended kernel benchmark times](plots/benchmark_kernel_times.png)
 
 ### Splay tree: correcting compression ratio
 
@@ -418,21 +433,21 @@ run with `tests/transposition-benchmark.sh`.
 
 | Algorithm | Perm% | Ratio | Copies | Adds | Time |
 |-----------|------:|------:|-------:|-----:|-----:|
-| greedy | 0% | 0.0000 | 1 | 0 | 1.642s |
-| greedy | 25% | 0.0112 | 14,062 | 0 | 1.571s |
-| greedy | 50% | 0.0191 | 24,064 | 0 | 1.598s |
-| greedy | 75% | 0.0238 | 30,015 | 0 | 1.606s |
-| greedy | 100% | 0.0254 | 31,998 | 0 | 1.595s |
+| greedy | 0% | 0.0000 | 1 | 0 | 2.502s |
+| greedy | 25% | 0.0112 | 14,062 | 0 | 2.559s |
+| greedy | 50% | 0.0191 | 24,064 | 0 | 2.558s |
+| greedy | 75% | 0.0238 | 30,015 | 0 | 2.546s |
+| greedy | 100% | 0.0254 | 31,998 | 0 | 2.582s |
 | onepass | 0% | 0.0000 | 1 | 0 | 0.007s |
-| onepass | 25% | 0.2580 | 6,064 | 6,063 | 0.175s |
-| onepass | 50% | 0.5115 | 8,068 | 8,066 | 0.332s |
-| onepass | 75% | 0.7588 | 6,026 | 6,025 | 0.475s |
-| onepass | 100% | 0.9921 | 268 | 268 | 0.773s |
-| correcting | 0% | 0.0000 | 1 | 0 | 0.110s |
-| correcting | 25% | 0.0112 | 14,062 | 0 | 0.112s |
-| correcting | 50% | 0.0191 | 24,064 | 0 | 0.126s |
-| correcting | 75% | 0.0238 | 30,015 | 0 | 0.118s |
-| correcting | 100% | 0.0254 | 31,998 | 0 | 0.125s |
+| onepass | 25% | 0.2580 | 6,064 | 6,063 | 0.193s |
+| onepass | 50% | 0.5115 | 8,068 | 8,066 | 0.369s |
+| onepass | 75% | 0.7588 | 6,026 | 6,025 | 0.517s |
+| onepass | 100% | 0.9921 | 268 | 268 | 0.842s |
+| correcting | 0% | 0.0000 | 1 | 0 | 0.136s |
+| correcting | 25% | 0.0112 | 14,062 | 0 | 0.133s |
+| correcting | 50% | 0.0191 | 24,064 | 0 | 0.145s |
+| correcting | 75% | 0.0238 | 30,015 | 0 | 0.148s |
+| correcting | 100% | 0.0254 | 31,998 | 0 | 0.148s |
 
 At 16 MB with 512 B blocks (~497 seeds per block), correcting matches
 greedy exactly at every permutation level: zero adds, identical copy
@@ -445,16 +460,16 @@ its ratio is 0.9921, nearly the full file size as adds.
 
 | Algorithm | Perm% | Ratio | Copies | Adds | Time |
 |-----------|------:|------:|-------:|-----:|-----:|
-| onepass | 0% | 0.0000 | 1 | 0 | 0.525s |
-| onepass | 25% | 0.4344 | 1,910,225 | 1,910,224 | 20.443s |
-| onepass | 50% | 0.6720 | 1,860,789 | 1,860,788 | 31.817s |
-| onepass | 75% | 0.8066 | 1,387,053 | 1,387,052 | 37.512s |
-| onepass | 100% | 0.8847 | 936,854 | 936,852 | 40.580s |
-| correcting | 0% | 0.0000 | 1 | 0 | 8.496s |
-| correcting | 25% | 0.0657 | 5,037,363 | 20,373 | 10.198s |
-| correcting | 50% | 0.0902 | 6,885,104 | 32,534 | 10.959s |
-| correcting | 75% | 0.0993 | 7,563,613 | 37,876 | 11.248s |
-| correcting | 100% | 0.1027 | 7,813,079 | 40,496 | 11.929s |
+| onepass | 0% | 0.0000 | 1 | 0 | 0.492s |
+| onepass | 25% | 0.4344 | 1,910,225 | 1,910,224 | 22.189s |
+| onepass | 50% | 0.6720 | 1,860,789 | 1,860,788 | 34.403s |
+| onepass | 75% | 0.8066 | 1,387,053 | 1,387,052 | 41.019s |
+| onepass | 100% | 0.8847 | 936,854 | 936,852 | 44.549s |
+| correcting | 0% | 0.0000 | 1 | 0 | 10.133s |
+| correcting | 25% | 0.0657 | 5,037,571 | 20,151 | 12.251s |
+| correcting | 50% | 0.0902 | 6,884,925 | 32,702 | 13.170s |
+| correcting | 75% | 0.0994 | 7,563,033 | 38,482 | 13.643s |
+| correcting | 100% | 0.1027 | 7,813,315 | 40,253 | 13.897s |
 
 At 1 GB with 128 B blocks (~113 seeds per block), correcting diverges
 from greedy.  The checkpoint filter now misses a measurable fraction of
@@ -473,15 +488,15 @@ dependency cycles.
 | Algorithm | Perm% | Ratio-N | Ratio-IP | Adds-N | Adds-IP | Time-N | Time-IP | Cycles |
 |-----------|------:|--------:|---------:|-------:|--------:|-------:|--------:|-------:|
 | onepass | 0% | 0.0000 | 0.0000 | 0 | 0 | 0.007s | 0.008s | 0 |
-| onepass | 25% | 0.2580 | 0.2580 | 6,063 | 6,063 | 0.174s | 0.181s | 0 |
-| onepass | 50% | 0.5115 | 0.5115 | 8,066 | 8,066 | 0.330s | 0.340s | 0 |
-| onepass | 75% | 0.7588 | 0.7588 | 6,025 | 6,025 | 0.482s | 0.490s | 0 |
-| onepass | 100% | 0.9921 | 0.9921 | 268 | 268 | 0.799s | 0.800s | 0 |
-| correcting | 0% | 0.0000 | 0.0000 | 0 | 0 | 0.111s | 0.109s | 0 |
-| correcting | 25% | 0.0112 | 0.1520 | 0 | 4,847 | 0.126s | 0.193s | 4,847 |
-| correcting | 50% | 0.0191 | 0.2409 | 0 | 8,569 | 0.140s | 0.156s | 8,569 |
-| correcting | 75% | 0.0238 | 0.2529 | 0 | 9,841 | 0.119s | 0.189s | 9,841 |
-| correcting | 100% | 0.0254 | 0.2569 | 0 | 10,265 | 0.126s | 0.194s | 10,265 |
+| onepass | 25% | 0.2580 | 0.2580 | 6,063 | 6,063 | 0.188s | 0.188s | 0 |
+| onepass | 50% | 0.5115 | 0.5115 | 8,066 | 8,066 | 0.356s | 0.366s | 0 |
+| onepass | 75% | 0.7588 | 0.7588 | 6,025 | 6,025 | 0.519s | 0.518s | 0 |
+| onepass | 100% | 0.9921 | 0.9921 | 268 | 268 | 0.843s | 0.840s | 0 |
+| correcting | 0% | 0.0000 | 0.0000 | 0 | 0 | 0.144s | 0.127s | 0 |
+| correcting | 25% | 0.0112 | 0.1520 | 0 | 4,847 | 0.132s | 0.159s | 4,847 |
+| correcting | 50% | 0.0191 | 0.2409 | 0 | 8,569 | 0.146s | 0.180s | 8,569 |
+| correcting | 75% | 0.0238 | 0.2529 | 0 | 9,841 | 0.146s | 0.212s | 9,841 |
+| correcting | 100% | 0.0254 | 0.2569 | 0 | 10,265 | 0.151s | 0.238s | 10,265 |
 
 onepass has zero inplace overhead: it already emits adds for displaced
 blocks, so the remaining copies don't create cycles in the CRWI graph.
@@ -509,16 +524,16 @@ done once.  Apply is essentially free.
 
 | Algorithm | Perm% | Apply-N | Apply-IP |
 |-----------|------:|--------:|---------:|
-| onepass | 0% | 0.006s | 0.007s |
+| onepass | 0% | 0.005s | 0.006s |
 | onepass | 25% | 0.007s | 0.008s |
-| onepass | 50% | 0.008s | 0.009s |
-| onepass | 75% | 0.009s | 0.010s |
-| onepass | 100% | 0.009s | 0.010s |
+| onepass | 50% | 0.007s | 0.008s |
+| onepass | 75% | 0.008s | 0.008s |
+| onepass | 100% | 0.009s | 0.008s |
 | correcting | 0% | 0.006s | 0.006s |
-| correcting | 25% | 0.007s | 0.008s |
-| correcting | 50% | 0.008s | 0.009s |
-| correcting | 75% | 0.008s | 0.009s |
-| correcting | 100% | 0.009s | 0.009s |
+| correcting | 25% | 0.006s | 0.007s |
+| correcting | 50% | 0.007s | 0.009s |
+| correcting | 75% | 0.008s | 0.007s |
+| correcting | 100% | 0.009s | 0.008s |
 
 Both algorithms apply in under 10 ms at all permutation levels: all the
 cost lives in CRWI construction and cycle-breaking at encode time.
@@ -531,40 +546,40 @@ the data is streamed sequentially.
 
 | Size | Perm% | Ratio-N | Ratio-IP | Adds-IP | Time-N | Time-IP |
 |-----:|------:|--------:|---------:|--------:|-------:|--------:|
-| 16 MB | 0% | 0.0000 | 0.0000 | 0 | 0.109s | 0.110s |
-| 16 MB | 25% | 0.0112 | 0.1520 | 4,847 | 0.112s | 0.129s |
-| 16 MB | 50% | 0.0191 | 0.2409 | 8,569 | 0.119s | 0.164s |
-| 16 MB | 75% | 0.0238 | 0.2529 | 9,841 | 0.122s | 0.184s |
-| 16 MB | 100% | 0.0254 | 0.2569 | 10,265 | 0.122s | 0.203s |
-| 32 MB | 0% | 0.0000 | 0.0000 | 0 | 0.245s | 0.246s |
-| 32 MB | 25% | 0.0111 | 0.1584 | 10,138 | 0.275s | 0.308s |
-| 32 MB | 50% | 0.0191 | 0.2413 | 17,238 | 0.293s | 0.376s |
-| 32 MB | 75% | 0.0238 | 0.2491 | 19,411 | 0.266s | 0.456s |
-| 32 MB | 100% | 0.0254 | 0.2573 | 20,585 | 0.266s | 0.529s |
-| 64 MB | 0% | 0.0000 | 0.0000 | 0 | 0.509s | 0.510s |
-| 64 MB | 25% | 0.0111 | 0.1531 | 19,274 | 0.539s | 0.723s |
-| 64 MB | 50% | 0.0190 | 0.2368 | 34,053 | 0.545s | 0.868s |
-| 64 MB | 75% | 0.0238 | 0.2542 | 39,652 | 0.574s | 1.159s |
-| 64 MB | 100% | 0.0254 | 0.2576 | 41,191 | 0.557s | 1.261s |
-| 128 MB | 0% | 0.0000 | 0.0000 | 0 | 1.042s | 1.045s |
-| 128 MB | 25% | 0.0111 | 0.1576 | 39,388 | 1.080s | 1.885s |
-| 128 MB | 50% | 0.0190 | 0.2421 | 69,158 | 1.135s | 2.227s |
-| 128 MB | 75% | 0.0238 | 0.2555 | 79,538 | 1.156s | 3.011s |
-| 128 MB | 100% | 0.0254 | 0.2582 | 82,561 | 1.168s | 3.300s |
-| 256 MB | 0% | 0.0000 | 0.0000 | 0 | 2.194s | 2.167s |
-| 256 MB | 25% | 0.0111 | 0.1594 | 79,232 | 2.227s | 4.208s |
-| 256 MB | 50% | 0.0190 | 0.2430 | 138,716 | 2.274s | 5.089s |
-| 256 MB | 75% | 0.0238 | 0.2544 | 158,392 | 2.353s | 7.385s |
-| 256 MB | 100% | 0.0254 | 0.2579 | 164,877 | 2.336s | 9.040s |
+| 16 MB | 0% | 0.0000 | 0.0000 | 0 | 0.134s | 0.137s |
+| 16 MB | 25% | 0.0112 | 0.1520 | 4,847 | 0.141s | 0.159s |
+| 16 MB | 50% | 0.0191 | 0.2409 | 8,569 | 0.146s | 0.181s |
+| 16 MB | 75% | 0.0238 | 0.2529 | 9,841 | 0.148s | 0.213s |
+| 16 MB | 100% | 0.0254 | 0.2569 | 10,265 | 0.149s | 0.234s |
+| 32 MB | 0% | 0.0000 | 0.0000 | 0 | 0.284s | 0.288s |
+| 32 MB | 25% | 0.0111 | 0.1584 | 10,138 | 0.297s | 0.363s |
+| 32 MB | 50% | 0.0191 | 0.2413 | 17,238 | 0.307s | 0.441s |
+| 32 MB | 75% | 0.0238 | 0.2491 | 19,411 | 0.313s | 0.526s |
+| 32 MB | 100% | 0.0254 | 0.2573 | 20,585 | 0.317s | 0.618s |
+| 64 MB | 0% | 0.0000 | 0.0000 | 0 | 0.595s | 0.596s |
+| 64 MB | 25% | 0.0111 | 0.1531 | 19,274 | 0.620s | 0.830s |
+| 64 MB | 50% | 0.0190 | 0.2368 | 34,053 | 0.638s | 1.015s |
+| 64 MB | 75% | 0.0238 | 0.2542 | 39,652 | 0.652s | 1.408s |
+| 64 MB | 100% | 0.0254 | 0.2576 | 41,191 | 0.660s | 1.554s |
+| 128 MB | 0% | 0.0000 | 0.0000 | 0 | 1.214s | 1.212s |
+| 128 MB | 25% | 0.0111 | 0.1576 | 39,388 | 1.263s | 2.243s |
+| 128 MB | 50% | 0.0190 | 0.2421 | 69,158 | 1.304s | 2.633s |
+| 128 MB | 75% | 0.0238 | 0.2555 | 79,538 | 1.329s | 3.530s |
+| 128 MB | 100% | 0.0254 | 0.2582 | 82,561 | 1.340s | 4.150s |
+| 256 MB | 0% | 0.0000 | 0.0000 | 0 | 2.445s | 2.452s |
+| 256 MB | 25% | 0.0111 | 0.1594 | 79,232 | 2.561s | 5.015s |
+| 256 MB | 50% | 0.0190 | 0.2430 | 138,716 | 2.615s | 6.280s |
+| 256 MB | 75% | 0.0238 | 0.2544 | 158,392 | 2.696s | 9.486s |
+| 256 MB | 100% | 0.0254 | 0.2579 | 164,877 | 2.719s | 11.765s |
 
 The CRWI graph build is O(n log n + E): the binary-search sweep exploits
 non-overlapping write intervals for exact overlap detection.
 Standard-mode correcting time scales ~2× per doubling (linear in n).
 Inplace time at 100% permutation scales ~2.6× per doubling
-(0.203 → 0.529 → 1.261 → 3.300 → 9.040 s across 16 → 32 → 64 → 128 → 256 MB),
+(0.234 → 0.618 → 1.554 → 4.150 → 11.765 s across 16 → 32 → 64 → 128 → 256 MB),
 reflecting the O(n log n + E) total complexity of the Tarjan + global
 Kahn + amortized DFS cycle-breaking algorithm.  At 256 MB with 512K
-blocks and 164K conversions, the total encode time is under 10 seconds.
+blocks and 164K conversions, the total encode time is still under 12 seconds.
 
 ### Effect of `--max-table` on correcting ratio (1 GB, 128 B blocks)
 

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <numeric>
+#include <string>
 
 namespace delta {
 
@@ -118,6 +119,30 @@ void apply_placed_inplace_to(
             std::memmove(&buf[c->dst], &buf[c->src], c->length);
         } else if (auto* a = std::get_if<PlacedAdd>(&cmd)) {
             std::memcpy(&buf[a->dst], a->data.data(), a->data.size());
+        }
+    }
+}
+
+static void validate_range(size_t start, size_t length, size_t limit, const char* name) {
+    if (start > limit || length > limit - start) {
+        throw DeltaError(std::string(name) + " out of range");
+    }
+}
+
+void validate_placed_commands(
+    const std::vector<PlacedCommand>& commands,
+    size_t reference_size,
+    size_t version_size,
+    bool inplace) {
+
+    const size_t source_limit = inplace ? std::max(reference_size, version_size)
+                                        : reference_size;
+    for (const auto& cmd : commands) {
+        if (auto* c = std::get_if<PlacedCopy>(&cmd)) {
+            validate_range(c->dst, c->length, version_size, "copy destination");
+            validate_range(c->src, c->length, source_limit, "copy source");
+        } else if (auto* a = std::get_if<PlacedAdd>(&cmd)) {
+            validate_range(a->dst, a->data.size(), version_size, "add destination");
         }
     }
 }

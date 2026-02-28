@@ -68,29 +68,34 @@ def decodeDelta(data: Array[Byte]): DecodeResult = {
   val dstCrc      = data.slice(crcOff + deltaCrcSize, crcOff + 2 * deltaCrcSize)
   var pos         = deltaHeaderSize
   val commands    = scala.collection.mutable.ListBuffer[PlacedCommand]()
+  var sawEnd      = false
 
-  while pos < data.length do {
+  while pos < data.length && !sawEnd do {
     val t = data(pos).toInt & 0xFF
     pos += 1
-    if t == deltaCmdEnd then pos = data.length  // break
+    if t == deltaCmdEnd then sawEnd = true
     else t match {
       case `deltaCmdCopy` =>
         if pos + deltaCopyPayload > data.length then throw new IllegalArgumentException("unexpected EOF")
         val src = getU32BE(data, pos); pos += deltaU32Size
         val dst = getU32BE(data, pos); pos += deltaU32Size
         val len = getU32BE(data, pos); pos += deltaU32Size
+        validatePlacedRange(dst, len, versionSize, "COPY")
         commands += PlacedCommand.Copy(src, dst, len)
       case `deltaCmdAdd` =>
         if pos + deltaAddHeader > data.length then throw new IllegalArgumentException("unexpected EOF")
         val dst = getU32BE(data, pos); pos += deltaU32Size
         val len = getU32BE(data, pos); pos += deltaU32Size
         if pos + len > data.length then throw new IllegalArgumentException("unexpected EOF")
+        validatePlacedRange(dst, len, versionSize, "ADD")
         val payload = data.slice(pos, pos + len); pos += len
         commands += PlacedCommand.Add(dst, payload)
       case other =>
         throw new IllegalArgumentException(s"unknown command type: $other")
     }
   }
+  if !sawEnd then throw new IllegalArgumentException("missing END command")
+  if pos != data.length then throw new IllegalArgumentException("trailing data after END")
 
   DecodeResult(commands.toList, inplace, versionSize, srcCrc, dstCrc)
 }
@@ -114,3 +119,7 @@ private def getU32BE(buf: Array[Byte], off: Int): Int =
   ((buf(off + 1).toInt & 0xFF) << 16) |
   ((buf(off + 2).toInt & 0xFF) << 8)  |
    (buf(off + 3).toInt & 0xFF)
+
+private def validatePlacedRange(dst: Int, len: Int, versionSize: Int, kind: String): Unit =
+  if dst < 0 || len < 0 || dst > versionSize || len > versionSize - dst then
+    throw new IllegalArgumentException(s"$kind extends past version size")

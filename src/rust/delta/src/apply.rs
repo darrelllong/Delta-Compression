@@ -1,4 +1,4 @@
-use crate::types::{Command, PlacedCommand};
+use crate::types::{Command, DeltaError, PlacedCommand};
 
 /// Compute the total output size of algorithm commands.
 pub fn output_size(commands: &[Command]) -> usize {
@@ -95,6 +95,32 @@ pub fn apply_placed_inplace_to(commands: &[PlacedCommand], buf: &mut [u8]) {
     }
 }
 
+/// Validate placed commands before apply so malformed deltas fail cleanly.
+pub fn validate_placed_commands(
+    commands: &[PlacedCommand],
+    reference_size: usize,
+    version_size: usize,
+    inplace: bool,
+) -> Result<(), DeltaError> {
+    let source_limit = if inplace {
+        reference_size.max(version_size)
+    } else {
+        reference_size
+    };
+    for cmd in commands {
+        match cmd {
+            PlacedCommand::Copy { src, dst, length } => {
+                validate_apply_range(*dst, *length, version_size, "copy destination")?;
+                validate_apply_range(*src, *length, source_limit, "copy source")?;
+            }
+            PlacedCommand::Add { dst, data } => {
+                validate_apply_range(*dst, data.len(), version_size, "add destination")?;
+            }
+        }
+    }
+    Ok(())
+}
+
 // ── convenience wrappers (Command → output) ─────────────────────────────
 
 /// Apply algorithm commands, writing into a pre-allocated buffer.
@@ -136,4 +162,16 @@ pub fn apply_delta_inplace(
     apply_placed_inplace_to(commands, &mut buf);
     buf.truncate(version_size);
     buf
+}
+
+fn validate_apply_range(
+    start: usize,
+    length: usize,
+    limit: usize,
+    name: &str,
+) -> Result<(), DeltaError> {
+    if start > limit || length > limit.saturating_sub(start) {
+        return Err(DeltaError::InvalidFormat(format!("{} out of range", name)));
+    }
+    Ok(())
 }

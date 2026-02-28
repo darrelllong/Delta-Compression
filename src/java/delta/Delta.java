@@ -166,6 +166,7 @@ public final class Delta {
             }
             System.err.println("warning: skipping source CRC check (--ignore-hash)");
         }
+        Apply.validatePlacedCommands(result.commands(), r.length, result.versionSize(), result.inplace());
 
         long t0 = System.nanoTime();
         byte[] out;

@@ -2,6 +2,8 @@
 
 package delta
 
+import java.nio.file.Files
+import java.nio.file.Path
 import java.util.Arrays
 import java.util.Random
 
@@ -206,6 +208,52 @@ fun testBinaryEncodingRoundtrip() {
     assertEquals(888L, c.src.toLong(), "copy src")
     assertEquals(3L, c.dst.toLong(), "copy dst")
     assertEquals(488L, c.length.toLong(), "copy length")
+}
+
+fun testDecodeRejectsMissingEnd() {
+    val encoded = encodeDelta(emptyList(), false, 0, ZERO_HASH, ZERO_HASH)
+    val truncated = encoded.copyOf(encoded.size - 1)
+    var threw = false
+    try {
+        decodeDelta(truncated)
+    } catch (e: IllegalArgumentException) {
+        threw = e.message == "missing END command"
+    }
+    assertTrue(threw, "missing END should be rejected")
+}
+
+fun testDecodeRejectsTrailingData() {
+    val encoded = encodeDelta(emptyList(), false, 0, ZERO_HASH, ZERO_HASH)
+    val bad = encoded.copyOf(encoded.size + 1).also { it[it.lastIndex] = 0x7F.toByte() }
+    var threw = false
+    try {
+        decodeDelta(bad)
+    } catch (e: IllegalArgumentException) {
+        threw = e.message == "trailing data after END"
+    }
+    assertTrue(threw, "trailing data should be rejected")
+}
+
+fun testDecodeRejectsCopyPastVersionSize() {
+    val cmds = listOf(PlacedCommand.Copy(0, 1, 2))
+    var threw = false
+    try {
+        decodeDelta(encodeDelta(cmds, false, 2, ZERO_HASH, ZERO_HASH))
+    } catch (e: IllegalArgumentException) {
+        threw = e.message == "COPY extends past version size"
+    }
+    assertTrue(threw, "copy past version size should be rejected")
+}
+
+fun testValidatePlacedCommandsRejectsSourceOverflow() {
+    val cmds = listOf(PlacedCommand.Copy(1, 0, 2))
+    var threw = false
+    try {
+        validatePlacedCommands(cmds, 2, 2, false)
+    } catch (e: IllegalArgumentException) {
+        threw = e.message == "copy source out of range"
+    }
+    assertTrue(threw, "source overflow should be rejected")
 }
 
 fun testBinaryEncodingInplaceFlag() {
@@ -734,6 +782,18 @@ fun testSeedLengthBoundaries() {
     }
 }
 
+fun testRealDataRoundtrip() {
+    try {
+        val r = Files.readAllBytes(Path.of("..", "..", "README.md"))
+        val v = Files.readAllBytes(Path.of("..", "..", "HOWTO.md"))
+        for (algo in ALL_ALGOS) {
+            assertArrayEquals(v, roundtrip(algo, r, v, 8), "$algo real-data roundtrip")
+        }
+    } catch (e: java.io.IOException) {
+        throw AssertionError("failed to read real data: ${e.message}")
+    }
+}
+
 // ── main ──────────────────────────────────────────────────────────────────────
 
 fun main() {
@@ -746,12 +806,17 @@ fun main() {
     check("empty reference",                ::testEmptyReference)
     check("binary roundtrip",               ::testBinaryRoundtrip)
     check("binary encoding roundtrip",      ::testBinaryEncodingRoundtrip)
+    check("decode rejects missing END",     ::testDecodeRejectsMissingEnd)
+    check("decode rejects trailing data",   ::testDecodeRejectsTrailingData)
+    check("decode rejects copy past size",  ::testDecodeRejectsCopyPastVersionSize)
+    check("validate rejects source overflow", ::testValidatePlacedCommandsRejectsSourceOverflow)
     check("binary encoding inplace flag",   ::testBinaryEncodingInplaceFlag)
     check("large copy roundtrip",           ::testLargeCopyRoundtrip)
     check("large add roundtrip",            ::testLargeAddRoundtrip)
     check("backward extension",             ::testBackwardExtension)
     check("transposition",                  ::testTransposition)
     check("scattered modifications",        ::testScatteredModifications)
+    check("real data roundtrip",            ::testRealDataRoundtrip)
 
     println("\n=== In-place basics ===")
     check("inplace paper example",          ::testInplacePaperExample)

@@ -1,5 +1,8 @@
 package delta;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -255,6 +258,55 @@ public class TestDelta {
         assertEquals(888, c.src(), "copy src");
         assertEquals(3, c.dst(), "copy dst");
         assertEquals(488, c.length(), "copy length");
+    }
+
+    static void testDecodeRejectsMissingEnd() {
+        byte[] encoded = Encoding.encodeDelta(new ArrayList<>(), false, 0, ZERO_HASH, ZERO_HASH);
+        byte[] truncated = Arrays.copyOf(encoded, encoded.length - 1);
+        boolean threw = false;
+        try {
+            Encoding.decodeDelta(truncated);
+        } catch (IllegalArgumentException e) {
+            threw = "missing END command".equals(e.getMessage());
+        }
+        assertTrue(threw, "missing END should be rejected");
+    }
+
+    static void testDecodeRejectsTrailingData() {
+        byte[] encoded = Encoding.encodeDelta(new ArrayList<>(), false, 0, ZERO_HASH, ZERO_HASH);
+        byte[] bad = Arrays.copyOf(encoded, encoded.length + 1);
+        bad[bad.length - 1] = 0x7F;
+        boolean threw = false;
+        try {
+            Encoding.decodeDelta(bad);
+        } catch (IllegalArgumentException e) {
+            threw = "trailing data after END".equals(e.getMessage());
+        }
+        assertTrue(threw, "trailing data should be rejected");
+    }
+
+    static void testDecodeRejectsCopyPastVersionSize() {
+        List<PlacedCommand> cmds = new ArrayList<>();
+        cmds.add(new PlacedCopy(0, 1, 2));
+        boolean threw = false;
+        try {
+            Encoding.decodeDelta(Encoding.encodeDelta(cmds, false, 2, ZERO_HASH, ZERO_HASH));
+        } catch (IllegalArgumentException e) {
+            threw = "COPY extends past version size".equals(e.getMessage());
+        }
+        assertTrue(threw, "copy past version size should be rejected");
+    }
+
+    static void testValidatePlacedCommandsRejectsSourceOverflow() {
+        List<PlacedCommand> cmds = new ArrayList<>();
+        cmds.add(new PlacedCopy(1, 0, 2));
+        boolean threw = false;
+        try {
+            Apply.validatePlacedCommands(cmds, 2, 2, false);
+        } catch (IllegalArgumentException e) {
+            threw = "copy source out of range".equals(e.getMessage());
+        }
+        assertTrue(threw, "source overflow should be rejected");
     }
 
     /** The inplace flag bit in the header is set/clear independently of commands. */
@@ -942,6 +994,18 @@ public class TestDelta {
         }
     }
 
+    static void testRealDataRoundtrip() {
+        try {
+            byte[] r = Files.readAllBytes(Path.of("..", "..", "README.md"));
+            byte[] v = Files.readAllBytes(Path.of("..", "..", "HOWTO.md"));
+            for (Algorithm algo : ALL_ALGOS) {
+                assertArrayEquals(v, roundtrip(algo, r, v, 8), algo + " real-data roundtrip");
+            }
+        } catch (IOException e) {
+            throw new AssertionError("failed to read real data: " + e.getMessage());
+        }
+    }
+
     // ── main ──────────────────────────────────────────────────────────────────
 
     // ── CRC-64/XZ check values ────────────────────────────────────────────────
@@ -975,12 +1039,17 @@ public class TestDelta {
         check("empty reference",                TestDelta::testEmptyReference);
         check("binary roundtrip",               TestDelta::testBinaryRoundtrip);
         check("binary encoding roundtrip",      TestDelta::testBinaryEncodingRoundtrip);
+        check("decode rejects missing END",     TestDelta::testDecodeRejectsMissingEnd);
+        check("decode rejects trailing data",   TestDelta::testDecodeRejectsTrailingData);
+        check("decode rejects copy past size",  TestDelta::testDecodeRejectsCopyPastVersionSize);
+        check("validate rejects source overflow", TestDelta::testValidatePlacedCommandsRejectsSourceOverflow);
         check("binary encoding inplace flag",   TestDelta::testBinaryEncodingInplaceFlag);
         check("large copy roundtrip",           TestDelta::testLargeCopyRoundtrip);
         check("large add roundtrip",            TestDelta::testLargeAddRoundtrip);
         check("backward extension",             TestDelta::testBackwardExtension);
         check("transposition",                  TestDelta::testTransposition);
         check("scattered modifications",        TestDelta::testScatteredModifications);
+        check("real data roundtrip",            TestDelta::testRealDataRoundtrip);
 
         System.out.println("\n=== In-place basics ===");
         check("inplace paper example",          TestDelta::testInplacePaperExample);

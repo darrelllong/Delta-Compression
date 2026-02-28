@@ -7,7 +7,7 @@ use memmap2::MmapMut;
 
 use delta::{
     Algorithm, CyclePolicy, DiffOptions,
-    apply_placed_inplace_to, apply_placed_to,
+    apply_placed_inplace_to, apply_placed_to, validate_placed_commands,
     crc64_xz, decode_delta, encode_delta,
     make_inplace, place_commands, unplace_commands,
     placed_summary,
@@ -325,6 +325,10 @@ fn main() {
                 }
                 eprintln!("warning: skipping source CRC check (--ignore-hash)");
             }
+            validate_placed_commands(&placed, r.len(), version_size, is_ip).unwrap_or_else(|e| {
+                eprintln!("Error validating delta: {}", e);
+                process::exit(1);
+            });
 
             let out_bytes: Vec<u8> = if is_ip {
                 let buf_size = r.len().max(version_size);

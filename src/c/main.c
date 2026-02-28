@@ -77,16 +77,33 @@ read_file(const char *path, size_t *out_len)
 	FILE *f = fopen(path, "rb");
 	uint8_t *buf;
 	size_t len;
+	long size;
 	if (!f) {
 		fprintf(stderr, "Error reading %s: %s\n", path, strerror(errno));
 		exit(1);
 	}
-	fseek(f, 0, SEEK_END);
-	len = (size_t)ftell(f);
-	fseek(f, 0, SEEK_SET);
-	buf = malloc(len);
-	if (fread(buf, 1, len, f) != len) {
+	if (fseek(f, 0, SEEK_END) != 0) {
+		fprintf(stderr, "Error seeking %s: %s\n", path, strerror(errno));
+		fclose(f);
+		exit(1);
+	}
+	size = ftell(f);
+	if (size < 0) {
+		fprintf(stderr, "Error sizing %s: %s\n", path, strerror(errno));
+		fclose(f);
+		exit(1);
+	}
+	len = (size_t)size;
+	if (fseek(f, 0, SEEK_SET) != 0) {
+		fprintf(stderr, "Error seeking %s: %s\n", path, strerror(errno));
+		fclose(f);
+		exit(1);
+	}
+	buf = delta_malloc(len);
+	if (len > 0 && fread(buf, 1, len, f) != len) {
 		fprintf(stderr, "Error reading %s\n", path);
+		fclose(f);
+		free(buf);
 		exit(1);
 	}
 	fclose(f);
@@ -107,15 +124,6 @@ write_file(const char *path, const uint8_t *data, size_t len)
 		exit(1);
 	}
 	fclose(f);
-}
-
-// Write a file while computing its CRC-64/XZ in the same pass.
-static void
-write_file_hashed(const char *path, const uint8_t *data, size_t len,
-                  uint8_t out_crc[DELTA_CRC_SIZE])
-{
-	write_file(path, data, len);
-	delta_crc64_xz(data, len, out_crc);
 }
 
 // ── Elapsed time helper ────────────────────────────────────────────────
@@ -144,11 +152,44 @@ static size_t
 parse_size_suffix(const char *s)
 {
 	char *end;
+	unsigned long long mult = 1;
 	unsigned long long n = strtoull(s, &end, 10);
-	if (*end == 'k' || *end == 'K') { n *= 1000ULL; }
-	else if (*end == 'M' || *end == 'm') { n *= 1000000ULL; }
-	else if (*end == 'B' || *end == 'b') { n *= 1000000000ULL; }
+	if (end == s || *s == '\0') {
+		fprintf(stderr, "Invalid size: %s\n", s);
+		exit(1);
+	}
+	if (*end != '\0') {
+		if (end[1] != '\0') {
+			fprintf(stderr, "Invalid size suffix: %s\n", s);
+			exit(1);
+		}
+		if (*end == 'k' || *end == 'K') { mult = 1000ULL; }
+		else if (*end == 'M' || *end == 'm') { mult = 1000000ULL; }
+		else if (*end == 'B' || *end == 'b') { mult = 1000000000ULL; }
+		else {
+			fprintf(stderr, "Invalid size suffix: %s\n", s);
+			exit(1);
+		}
+	}
+	if (mult > 0 && n > SIZE_MAX / mult) {
+		fprintf(stderr, "Size too large: %s\n", s);
+		exit(1);
+	}
+	n *= mult;
 	return (size_t)n;
+}
+
+static delta_cycle_policy_t
+parse_policy(const char *policy_str)
+{
+	if (strcmp(policy_str, "localmin") == 0) {
+		return POLICY_LOCALMIN;
+	}
+	if (strcmp(policy_str, "constant") == 0) {
+		return POLICY_CONSTANT;
+	}
+	fprintf(stderr, "Unknown policy: %s\n", policy_str);
+	exit(1);
 }
 
 // ── Usage ─────────────────────────────────────────────────────────────
@@ -231,15 +272,13 @@ main(int argc, char **argv)
 			case 's': seed_len = (size_t)atol(optarg); break;
 			case 't': table_size = (size_t)atol(optarg); break;
 			case 'x': max_table = parse_size_suffix(optarg); break;
-			case 'i': flags = delta_flag_set(flags, DELTA_OPT_INPLACE); break;
-			case 'p':
-				policy_str = optarg;
-				if (strcmp(optarg, "constant") == 0) {
-					policy = POLICY_CONSTANT;
-				}
-				break;
-			case 'v': flags = delta_flag_set(flags, DELTA_OPT_VERBOSE); break;
-			case 'y': flags = delta_flag_set(flags, DELTA_OPT_SPLAY); break;
+				case 'i': flags = delta_flag_set(flags, DELTA_OPT_INPLACE); break;
+				case 'p':
+					policy_str = optarg;
+					policy = parse_policy(optarg);
+					break;
+				case 'v': flags = delta_flag_set(flags, DELTA_OPT_VERBOSE); break;
+				case 'y': flags = delta_flag_set(flags, DELTA_OPT_SPLAY); break;
 			default: usage();
 			}
 		}
@@ -351,10 +390,13 @@ main(int argc, char **argv)
 				}
 				fprintf(stderr, "warning: skipping source CRC check (--ignore-hash)\n");
 			}
-		}
+			}
 
-		struct timespec t0, t1;
-		clock_gettime(CLOCK_MONOTONIC, &t0);
+			delta_validate_placed_commands(&dr.commands, r_file.size,
+			                               dr.version_size, dr.inplace);
+
+			struct timespec t0, t1;
+			clock_gettime(CLOCK_MONOTONIC, &t0);
 
 		delta_buffer_t out_buf;
 		if (dr.inplace) {
@@ -367,20 +409,21 @@ main(int argc, char **argv)
 		}
 
 		clock_gettime(CLOCK_MONOTONIC, &t1);
-		double elapsed = elapsed_sec(&t0, &t1);
+			double elapsed = elapsed_sec(&t0, &t1);
 
-		// Write output and compute CRC in a single pass.
-		uint8_t out_crc[DELTA_CRC_SIZE];
-		write_file_hashed(out_path, out_buf.data, out_buf.len, out_crc);
+			// Verify output before writing it to disk.
+			uint8_t out_crc[DELTA_CRC_SIZE];
+			delta_crc64_xz(out_buf.data, out_buf.len, out_crc);
 
-		// Post-check: verify output matches embedded dst_crc.
-		if (memcmp(out_crc, dr.dst_crc, DELTA_CRC_SIZE) != 0) {
-			if (!ignore_hash) {
-				fprintf(stderr, "output integrity check failed\n");
-				exit(1);
+			if (memcmp(out_crc, dr.dst_crc, DELTA_CRC_SIZE) != 0) {
+				if (!ignore_hash) {
+					fprintf(stderr, "output integrity check failed\n");
+					exit(1);
+				}
+				fprintf(stderr, "warning: skipping output CRC check (--ignore-hash)\n");
 			}
-			fprintf(stderr, "warning: skipping output CRC check (--ignore-hash)\n");
-		}
+
+			write_file(out_path, out_buf.data, out_buf.len);
 
 		printf("Format:       %s\n", dr.inplace ? "in-place" : "standard");
 		printf("Reference:    %s (%zu bytes)\n", ref_path, r_file.size);
@@ -436,24 +479,24 @@ main(int argc, char **argv)
 		{
 			int a;
 			for (a = 5; a < argc; a++) {
-				if (strcmp(argv[a], "--policy") == 0 &&
-				    a + 1 < argc) {
-					policy_str = argv[++a];
-					if (strcmp(policy_str, "constant") == 0) {
-						policy = POLICY_CONSTANT;
+					if (strcmp(argv[a], "--policy") == 0 &&
+					    a + 1 < argc) {
+						policy_str = argv[++a];
+						policy = parse_policy(policy_str);
 					}
 				}
 			}
-		}
 
 		mapped_file_t r_file = map_file(ref_path);
 		size_t delta_len;
-		uint8_t *delta_data = read_file(delta_in_path, &delta_len);
+			uint8_t *delta_data = read_file(delta_in_path, &delta_len);
 
-		delta_decode_result_t dr = delta_decode(delta_data, delta_len);
+			delta_decode_result_t dr = delta_decode(delta_data, delta_len);
+			delta_validate_placed_commands(&dr.commands, r_file.size,
+			                               dr.version_size, dr.inplace);
 
-		if (dr.inplace) {
-			write_file(delta_out_path, delta_data, delta_len);
+			if (dr.inplace) {
+				write_file(delta_out_path, delta_data, delta_len);
 			printf("Delta is already in-place format; "
 			       "copied unchanged.\n");
 			delta_decode_result_free(&dr);

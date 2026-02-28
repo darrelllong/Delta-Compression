@@ -1,7 +1,10 @@
-#include <catch2/catch_test_macros.hpp>
+#include "test_harness.h"
 #include <delta/delta.h>
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <numeric>
 #include <random>
 #include <vector>
@@ -190,6 +193,59 @@ TEST_CASE("binary encoding wrong magic rejected", "[integration]") {
     auto encoded = encode_delta(placed, false, 1, zh, zh);
     encoded[3] = 0x02; // corrupt magic to v2
     CHECK_THROWS_AS(decode_delta(encoded), DeltaError);
+}
+
+TEST_CASE("decode rejects missing END", "[integration]") {
+    std::array<uint8_t, DELTA_CRC_SIZE> zh{};
+    auto encoded = encode_delta({}, false, 0, zh, zh);
+    encoded.pop_back();
+    CHECK_THROWS_AS(decode_delta(encoded), DeltaError);
+}
+
+TEST_CASE("decode rejects trailing data", "[integration]") {
+    std::array<uint8_t, DELTA_CRC_SIZE> zh{};
+    auto encoded = encode_delta({}, false, 0, zh, zh);
+    encoded.push_back(0x7F);
+    CHECK_THROWS_AS(decode_delta(encoded), DeltaError);
+}
+
+TEST_CASE("decode rejects copy past version size", "[integration]") {
+    std::array<uint8_t, DELTA_CRC_SIZE> zh{};
+    auto encoded = encode_delta({PlacedCopy{0, 1, 2}}, false, 2, zh, zh);
+    CHECK_THROWS_AS(decode_delta(encoded), DeltaError);
+}
+
+TEST_CASE("validate placed commands rejects source overflow", "[integration]") {
+    CHECK_THROWS_AS(
+        validate_placed_commands({PlacedCopy{1, 0, 2}}, 2, 2, false),
+        DeltaError);
+}
+
+TEST_CASE("real data roundtrip", "[integration]") {
+    auto read_bytes = [](const char* path) {
+        std::ifstream in(path, std::ios::binary);
+        REQUIRE(in.good());
+        return std::vector<uint8_t>(
+            std::istreambuf_iterator<char>(in),
+            std::istreambuf_iterator<char>());
+    };
+    const auto repo_root = std::filesystem::path(__FILE__)
+        .parent_path()
+        .parent_path()
+        .parent_path()
+        .parent_path();
+    auto r = read_bytes((repo_root / "README.md").c_str());
+    auto v = read_bytes((repo_root / "HOWTO.md").c_str());
+    for (auto& [name, algo] : all_algos()) {
+        INFO(name);
+        REQUIRE(roundtrip(algo, r, v, 8) == v);
+    }
+}
+
+TEST_CASE("diff rejects invalid algorithm", "[integration]") {
+    CHECK_THROWS_AS(
+        diff(static_cast<Algorithm>(99), std::span<const uint8_t>{}, std::span<const uint8_t>{}),
+        DeltaError);
 }
 
 TEST_CASE("binary encoding inplace flag", "[integration]") {

@@ -6,6 +6,7 @@ Run:  python3 test_delta.py [-v]
 
 import random
 import unittest
+from pathlib import Path
 
 from delta import (
     DELTA_CRC_SIZE, DELTA_MAGIC, TABLE_SIZE,
@@ -189,6 +190,38 @@ class TestBinaryEncoding(unittest.TestCase):
                              src_crc=self._src, dst_crc=self._dst)
         # header (25) + END byte (1)
         self.assertEqual(len(delta), 26)
+
+class TestBinaryEncodingErrors(unittest.TestCase):
+
+    _src = b"\x00" * 8
+    _dst = b"\x00" * 8
+
+    def test_missing_end_rejected(self):
+        delta = encode_delta([], inplace=False, version_size=0,
+                             src_crc=self._src, dst_crc=self._dst)[:-1]
+        with self.assertRaisesRegex(ValueError, "Missing END"):
+            decode_delta(delta)
+
+    def test_unknown_opcode_rejected(self):
+        delta = (encode_delta([], inplace=False, version_size=0,
+                              src_crc=self._src, dst_crc=self._dst)[:-1]
+                 + b"\x7f")
+        with self.assertRaisesRegex(ValueError, "Unknown command type"):
+            decode_delta(delta)
+
+    def test_truncated_copy_rejected(self):
+        delta = (encode_delta([], inplace=False, version_size=1,
+                              src_crc=self._src, dst_crc=self._dst)[:-1]
+                 + bytes([1]))
+        with self.assertRaisesRegex(ValueError, "Truncated COPY"):
+            decode_delta(delta)
+
+    def test_copy_past_version_size_rejected(self):
+        delta = encode_delta([PlacedCopy(src=0, dst=1, length=2)],
+                             inplace=False, version_size=2,
+                             src_crc=self._src, dst_crc=self._dst)
+        with self.assertRaisesRegex(ValueError, "COPY extends past version size"):
+            decode_delta(delta)
 
 
 class TestLargeCopy(unittest.TestCase):
@@ -1229,6 +1262,23 @@ class TestSeedLengthBoundaries(unittest.TestCase):
         self.assertEqual(roundtrip(fn, R, V, p=2), V)
         self.assertEqual(roundtrip(fn, R, V, p=len(R)), V)      # one seed in R
         self.assertEqual(roundtrip(fn, R, V, p=len(R) + 1), V)  # no seeds in R
+
+    def test_greedy(self):     self._run(diff_greedy)
+    def test_onepass(self):    self._run(diff_onepass)
+    def test_correcting(self): self._run(diff_correcting)
+
+
+class TestRealDataRoundTrip(unittest.TestCase):
+    """Roundtrip actual repository files instead of synthetic byte literals."""
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parents[2]
+        cls.R = (root / "README.md").read_bytes()
+        cls.V = (root / "HOWTO.md").read_bytes()
+
+    def _run(self, fn):
+        self.assertEqual(roundtrip(fn, self.R, self.V, p=8), self.V)
 
     def test_greedy(self):     self._run(diff_greedy)
     def test_onepass(self):    self._run(diff_onepass)

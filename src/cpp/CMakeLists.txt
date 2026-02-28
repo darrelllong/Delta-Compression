@@ -31,14 +31,7 @@ target_include_directories(delta_lib PUBLIC include)
 
 # ── CLI binary ────────────────────────────────────────────────────────────
 
-include(FetchContent)
-
-FetchContent_Declare(
-    cli11
-    GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
-    GIT_TAG        v2.4.2
-)
-FetchContent_MakeAvailable(cli11)
+find_package(CLI11 CONFIG REQUIRED)
 
 add_executable(delta main.cpp)
 target_link_libraries(delta PRIVATE delta_lib CLI11::CLI11)

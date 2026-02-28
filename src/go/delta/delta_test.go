@@ -3,6 +3,7 @@ package delta
 import (
 	"bytes"
 	"math/rand"
+	"os"
 	"testing"
 )
 
@@ -258,6 +259,70 @@ func TestBinaryEncodingInplaceFlag(t *testing.T) {
 	}
 	if r1.VersionSize != r2.VersionSize {
 		t.Fatal("version sizes differ")
+	}
+}
+
+func TestDecodeRejectsMissingEnd(t *testing.T) {
+	encoded := EncodeDelta(nil, false, 0, zeroHash, zeroHash)
+	_, err := DecodeDelta(encoded[:len(encoded)-1])
+	if err == nil || err.Error() != "missing END command" {
+		t.Fatalf("got %v, want missing END command", err)
+	}
+}
+
+func TestDecodeRejectsTrailingData(t *testing.T) {
+	encoded := append(EncodeDelta(nil, false, 0, zeroHash, zeroHash), 0x7f)
+	_, err := DecodeDelta(encoded)
+	if err == nil || err.Error() != "trailing data after END" {
+		t.Fatalf("got %v, want trailing data after END", err)
+	}
+}
+
+func TestDecodeRejectsCopyPastVersionSize(t *testing.T) {
+	encoded := EncodeDelta([]PlacedCommand{
+		PlacedCopy{Src: 0, DstOff: 1, Length: 2},
+	}, false, 2, zeroHash, zeroHash)
+	_, err := DecodeDelta(encoded)
+	if err == nil || err.Error() != "copy command exceeds version size" {
+		t.Fatalf("got %v, want copy command exceeds version size", err)
+	}
+}
+
+func TestValidatePlacedCommandsRejectsSourceOverflow(t *testing.T) {
+	err := ValidatePlacedCommands([]PlacedCommand{
+		PlacedCopy{Src: 1, DstOff: 0, Length: 2},
+	}, 2, 2, false)
+	if err == nil || err.Error() != "copy source out of range" {
+		t.Fatalf("got %v, want copy source out of range", err)
+	}
+}
+
+func TestDiffErrRejectsUnknownAlgorithm(t *testing.T) {
+	_, err := DiffErr(Algorithm(99), b("abc"), b("xyz"), DefaultDiffOptions())
+	if err == nil || err.Error() != "unknown algorithm: 99" {
+		t.Fatalf("got %v, want unknown algorithm error", err)
+	}
+	if cmds := Diff(Algorithm(99), b("abc"), b("xyz"), DefaultDiffOptions()); cmds != nil {
+		t.Fatalf("Diff should return nil for unknown algorithm, got %v", cmds)
+	}
+}
+
+func TestRealDataRoundtrip(t *testing.T) {
+	r, err := os.ReadFile("../../../README.md")
+	if err != nil {
+		t.Fatalf("read README: %v", err)
+	}
+	v, err := os.ReadFile("../../../HOWTO.md")
+	if err != nil {
+		t.Fatalf("read HOWTO: %v", err)
+	}
+	for _, algo := range allAlgos {
+		t.Run(algo.String(), func(t *testing.T) {
+			got := roundtrip(t, algo, r, v, 8)
+			if !bytes.Equal(v, got) {
+				t.Fatal("real-data roundtrip failed")
+			}
+		})
 	}
 }
 
@@ -991,7 +1056,7 @@ func TestSizeSweep(t *testing.T) {
 			}
 			vNew := make([]byte, vLen)
 			for i := range vNew {
-				vNew[i] = byte(i*7+1 & 0xFF)
+				vNew[i] = byte(i*7 + 1&0xFF)
 			}
 			if got := roundtrip(t, algo, bigRef, vNew, p); !bytes.Equal(vNew, got) {
 				t.Fatalf("%s vLen=%d all-new ver failed", algo, vLen)
