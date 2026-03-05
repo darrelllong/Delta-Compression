@@ -269,8 +269,8 @@ main(int argc, char **argv)
 		int opt;
 		while ((opt = getopt_long(argc, argv, "", long_opts, NULL)) != -1) {
 			switch (opt) {
-			case 's': seed_len = (size_t)atol(optarg); break;
-			case 't': table_size = (size_t)atol(optarg); break;
+			case 's': seed_len   = parse_size_suffix(optarg); break;
+			case 't': table_size = parse_size_suffix(optarg); break;
 			case 'x': max_table = parse_size_suffix(optarg); break;
 			case 'i': flags = delta_flag_set(flags, DELTA_OPT_INPLACE); break;
 			case 'p':
@@ -288,6 +288,10 @@ main(int argc, char **argv)
 
 		if (seed_len == 0) {
 			fprintf(stderr, "error: --seed-len must be >= 1\n");
+			exit(1);
+		}
+		if (table_size == 0) {
+			fprintf(stderr, "error: --table-size must be >= 1\n");
 			exit(1);
 		}
 
@@ -366,7 +370,12 @@ main(int argc, char **argv)
 
 		int ignore_hash = 0;
 		for (int a = 5; a < argc; a++) {
-			if (strcmp(argv[a], "--ignore-hash") == 0) ignore_hash = 1;
+			if (strcmp(argv[a], "--ignore-hash") == 0) {
+				ignore_hash = 1;
+			} else {
+				fprintf(stderr, "error: unknown decode option: %s\n", argv[a]);
+				exit(1);
+			}
 		}
 
 		mapped_file_t r_file = map_file(ref_path);
@@ -479,10 +488,16 @@ main(int argc, char **argv)
 		{
 			int a;
 			for (a = 5; a < argc; a++) {
-				if (strcmp(argv[a], "--policy") == 0 &&
-				    a + 1 < argc) {
+				if (strcmp(argv[a], "--policy") == 0) {
+					if (a + 1 >= argc) {
+						fprintf(stderr, "error: --policy: missing value\n");
+						exit(1);
+					}
 					policy_str = argv[++a];
 					policy = parse_policy(policy_str);
+				} else {
+					fprintf(stderr, "error: unknown inplace option: %s\n", argv[a]);
+					exit(1);
 				}
 			}
 		}

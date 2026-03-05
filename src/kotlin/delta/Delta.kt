@@ -52,7 +52,10 @@ private fun parseSizeSuffix(s: String): Int {
         'b', 'B' -> 1_000_000_000L to s.dropLast(1)
         else     -> 1L             to s
     }
-    return (num.toLong() * mult).toInt()
+    val result = num.toLong() * mult
+    if (result < 0L || result > Int.MAX_VALUE)
+        throw IllegalArgumentException("size too large: $s")
+    return result.toInt()
 }
 
 private fun usage(): Nothing = throw IllegalArgumentException(
@@ -82,11 +85,23 @@ private fun encode(args: Array<String>) {
     var i = 5
     while (i < args.size) {
         when (args[i]) {
-            "--seed-len"   -> { opts = opts.copy(p        = args[++i].toInt()) }
-            "--table-size" -> { opts = opts.copy(q        = args[++i].toInt()) }
-            "--max-table"  -> { opts = opts.copy(maxTable = parseSizeSuffix(args[++i])) }
+            "--seed-len" -> {
+                if (i + 1 >= args.size) throw IllegalArgumentException("--seed-len: missing value")
+                opts = opts.copy(p = args[++i].toInt())
+            }
+            "--table-size" -> {
+                if (i + 1 >= args.size) throw IllegalArgumentException("--table-size: missing value")
+                opts = opts.copy(q = args[++i].toInt())
+            }
+            "--max-table" -> {
+                if (i + 1 >= args.size) throw IllegalArgumentException("--max-table: missing value")
+                opts = opts.copy(maxTable = parseSizeSuffix(args[++i]))
+            }
             "--inplace"    -> { inplace = true }
-            "--policy"     -> { policy  = parsePolicy(args[++i]) }
+            "--policy" -> {
+                if (i + 1 >= args.size) throw IllegalArgumentException("--policy: missing value")
+                policy = parsePolicy(args[++i])
+            }
             "--verbose"    -> { opts = opts.copy(verbose  = true) }
             "--splay"      -> { opts = opts.copy(useSplay = true) }
             else           -> throw IllegalArgumentException("Unknown option: ${args[i]}")
@@ -137,7 +152,13 @@ private fun decode(args: Array<String>) {
     val refPath   = args[1]
     val deltaPath = args[2]
     val outPath   = args[3]
-    val ignoreHash = args.drop(4).any { it == "--ignore-hash" }
+    var ignoreHash = false
+    for (j in 4 until args.size) {
+        when (args[j]) {
+            "--ignore-hash" -> ignoreHash = true
+            else -> throw IllegalArgumentException("Unknown decode option: ${args[j]}")
+        }
+    }
 
     val r          = readFile(refPath)
     val deltaBytes = readFile(deltaPath)
@@ -220,9 +241,13 @@ private fun inplace(args: Array<String>) {
 
     var i = 4
     while (i < args.size) {
-        if (args[i] == "--policy" && i + 1 < args.size) {
-            policy    = parsePolicy(args[++i])
-            policyStr = policy.name.lowercase()
+        when (args[i]) {
+            "--policy" -> {
+                if (i + 1 >= args.size) throw IllegalArgumentException("--policy: missing value")
+                policy    = parsePolicy(args[++i])
+                policyStr = policy.name.lowercase()
+            }
+            else -> throw IllegalArgumentException("Unknown inplace option: ${args[i]}")
         }
         i++
     }

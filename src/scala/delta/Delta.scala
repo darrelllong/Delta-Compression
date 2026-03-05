@@ -43,7 +43,10 @@ private def parseSizeSuffix(s: String): Int = {
     case 'b' | 'B' => (1_000_000_000L, s.init)
     case _         => (1L,             s)
   }
-  (num.toLong * mult).toInt
+  val result = num.toLong * mult
+  if result < 0L || result > Int.MaxValue then
+    throw new IllegalArgumentException(s"size too large: $s")
+  result.toInt
 }
 
 private def usage(): Nothing = throw new IllegalArgumentException(
@@ -73,11 +76,19 @@ private def cmdEncode(args: Array[String]): Unit = {
   var i = 5
   while i < args.length do {
     args(i) match {
-      case "--seed-len"   => opts = opts.copy(p        = args({i += 1; i}).toInt)
-      case "--table-size" => opts = opts.copy(q        = args({i += 1; i}).toInt)
-      case "--max-table"  => opts = opts.copy(maxTable = parseSizeSuffix(args({i += 1; i})))
+      case "--seed-len" =>
+        if i + 1 >= args.length then throw new IllegalArgumentException("--seed-len: missing value")
+        i += 1; opts = opts.copy(p = args(i).toInt)
+      case "--table-size" =>
+        if i + 1 >= args.length then throw new IllegalArgumentException("--table-size: missing value")
+        i += 1; opts = opts.copy(q = args(i).toInt)
+      case "--max-table" =>
+        if i + 1 >= args.length then throw new IllegalArgumentException("--max-table: missing value")
+        i += 1; opts = opts.copy(maxTable = parseSizeSuffix(args(i)))
       case "--inplace"    => inplace = true
-      case "--policy"     => policy  = parsePolicy(args({i += 1; i}))
+      case "--policy" =>
+        if i + 1 >= args.length then throw new IllegalArgumentException("--policy: missing value")
+        i += 1; policy = parsePolicy(args(i))
       case "--verbose"    => opts = opts.copy(verbose  = true)
       case "--splay"      => opts = opts.copy(useSplay = true)
       case other          => throw new IllegalArgumentException(s"Unknown option: $other")
@@ -127,7 +138,12 @@ private def cmdDecode(args: Array[String]): Unit = {
   val refPath    = args(1)
   val deltaPath  = args(2)
   val outPath    = args(3)
-  val ignoreHash = args.drop(4).contains("--ignore-hash")
+  var ignoreHash = false
+  for j <- 4 until args.length do
+    args(j) match {
+      case "--ignore-hash" => ignoreHash = true
+      case other => throw new IllegalArgumentException(s"Unknown decode option: $other")
+    }
 
   val r          = readFile(refPath)
   val deltaBytes = readFile(deltaPath)
@@ -208,10 +224,13 @@ private def cmdInplace(args: Array[String]): Unit = {
 
   var i = 4
   while i < args.length do {
-    if args(i) == "--policy" && i + 1 < args.length then {
-      i += 1
-      policy    = parsePolicy(args(i))
-      policyStr = policy.toString.toLowerCase
+    args(i) match {
+      case "--policy" =>
+        if i + 1 >= args.length then throw new IllegalArgumentException("--policy: missing value")
+        i += 1
+        policy    = parsePolicy(args(i))
+        policyStr = policy.toString.toLowerCase
+      case other => throw new IllegalArgumentException(s"Unknown inplace option: $other")
     }
     i += 1
   }

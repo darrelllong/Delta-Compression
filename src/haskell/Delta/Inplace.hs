@@ -9,7 +9,7 @@ import Data.Array (Array, (!), accumArray, bounds, listArray)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Foldable (toList)
-import Data.List (foldl', minimumBy, sortBy)
+import Data.List (minimumBy, sortBy)
 import Data.Ord (comparing)
 import Data.Sequence (Seq, (|>))
 import qualified Data.Sequence as Seq
@@ -251,11 +251,11 @@ markRemoved v st =
 pickVictim :: CyclePolicy -> Int -> Array Int CopyInfo -> IM.IntMap [Int] -> IS.IntSet -> SccState -> (Int, SccState)
 pickVictim policy n copyArr adj removed st0 =
   case policy of
-    Constant -> (firstRemaining, st0)
+    Constant -> (firstRemainingOrDefault, st0)
     Localmin -> choose st0
   where
     choose st
-      | ssPtr st >= ssCount st = (firstRemaining, st)
+      | ssPtr st >= ssCount st = (firstRemainingOrDefault, st)
       | IM.findWithDefault 0 (ssPtr st) (ssActive st) == 0 =
           choose st {ssPtr = ssPtr st + 1, ssScan = 0}
       | otherwise =
@@ -268,11 +268,18 @@ pickVictim policy n copyArr adj removed st0 =
                 Just cycleNodes -> (minimumBy (comparing key) cycleNodes, st')
                 Nothing -> choose st' {ssPtr = sid + 1, ssScan = 0}
 
+    firstRemainingOrDefault =
+      case firstRemaining of
+        Just i -> i
+        -- Invariant fallback: runKahn only calls pickVictim when processed < n.
+        -- In that state there should always be an unremoved vertex.
+        Nothing -> 0
+
     firstRemaining =
       let go !i
-            | i >= n = error "pickVictim: no remaining vertices"
+            | i >= n = Nothing
             | IS.member i removed = go (i + 1)
-            | otherwise = i
+            | otherwise = Just i
        in go 0
 
     key i = (ciLen (copyArr ! i), i)
@@ -301,8 +308,8 @@ findCycleInScc sid sccVerts sccId adj removed color0 scan0 = goScan scan0 color0
                     (Just cyc, color') -> (Just cyc, color', scan)
                     (Nothing, color') -> goScan (scan + 1) color'
 
-    dfs v path color0 =
-      let color1 = IM.insert v 1 color0
+    dfs v path colorStart =
+      let color1 = IM.insert v 1 colorStart
        in walk (IM.findWithDefault [] v adj) color1
       where
         walk [] color = (Nothing, IM.insert v 2 color)

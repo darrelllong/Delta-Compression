@@ -77,17 +77,20 @@ emitStats True cmds = do
       <> " bytes"
   case sort copyLens of
     [] -> pure ()
-    sorted -> do
+    sorted@(minLen : rest) -> do
+      let copyCount = length sorted
+          maxLen = foldl' (\_ x -> x) minLen rest
+          mid = copyCount `div` 2
+          median = listIndexDefault minLen mid sorted
       let mean :: Double
-          mean = fromIntegral totalCopy / fromIntegral (length sorted)
-          median = sorted !! (length sorted `div` 2)
+          mean = fromIntegral totalCopy / fromIntegral copyCount
       hPutStrLn stderr $
         "  copies: "
-          <> show (length sorted)
+          <> show copyCount
           <> " regions, min="
-          <> show (head sorted)
+          <> show minLen
           <> " max="
-          <> show (last sorted)
+          <> show maxLen
           <> " mean="
           <> showFF mean
           <> " median="
@@ -98,3 +101,11 @@ emitStats True cmds = do
     showFF x =
       let rounded = fromIntegral (round (x * 10) :: Int) / 10.0 :: Double
        in show rounded
+
+    listIndexDefault :: a -> Int -> [a] -> a
+    listIndexDefault def idx = go idx
+      where
+        go !n (y : ys)
+          | n <= 0 = y
+          | otherwise = go (n - 1) ys
+        go _ [] = def

@@ -123,7 +123,14 @@ static size_t parse_size_suffix(const std::string& s) {
     if (last == 'k' || last == 'K') { mult = 1000ULL;           num = s.substr(0, s.size() - 1); }
     else if (last == 'M' || last == 'm') { mult = 1'000'000ULL;         num = s.substr(0, s.size() - 1); }
     else if (last == 'B' || last == 'b') { mult = 1'000'000'000ULL;     num = s.substr(0, s.size() - 1); }
-    return static_cast<size_t>(std::stoull(num)) * mult;
+    size_t val;
+    try {
+        val = static_cast<size_t>(std::stoull(num));
+    } catch (const std::exception&) {
+        std::cerr << "error: invalid size: " << s << "\n";
+        std::exit(1);
+    }
+    return val * mult;
 }
 
 // ── main ─────────────────────────────────────────────────────────────────

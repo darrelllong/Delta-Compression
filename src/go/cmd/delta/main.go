@@ -149,6 +149,7 @@ func cmdEncode(args []string) error {
 	for i < len(args) {
 		switch args[i] {
 		case "--seed-len":
+			if i+1 >= len(args) { return fmt.Errorf("--seed-len: missing value") }
 			i++
 			n, err := strconv.Atoi(args[i])
 			if err != nil {
@@ -156,6 +157,7 @@ func cmdEncode(args []string) error {
 			}
 			opts.P = n
 		case "--table-size":
+			if i+1 >= len(args) { return fmt.Errorf("--table-size: missing value") }
 			i++
 			n, err := strconv.Atoi(args[i])
 			if err != nil {
@@ -163,6 +165,7 @@ func cmdEncode(args []string) error {
 			}
 			opts.Q = n
 		case "--max-table":
+			if i+1 >= len(args) { return fmt.Errorf("--max-table: missing value") }
 			i++
 			n, err := parseSizeSuffix(args[i])
 			if err != nil {
@@ -172,6 +175,7 @@ func cmdEncode(args []string) error {
 		case "--inplace":
 			inplace = true
 		case "--policy":
+			if i+1 >= len(args) { return fmt.Errorf("--policy: missing value") }
 			i++
 			policy, err = parsePolicy(args[i])
 			if err != nil {
@@ -260,6 +264,8 @@ func cmdDecode(args []string) error {
 	for _, a := range args[4:] {
 		if a == "--ignore-hash" {
 			ignoreHash = true
+		} else {
+			return fmt.Errorf("unknown decode option: %s", a)
 		}
 	}
 
@@ -375,7 +381,9 @@ func cmdInplace(args []string) error {
 
 	i := 4
 	for i < len(args) {
-		if args[i] == "--policy" && i+1 < len(args) {
+		switch args[i] {
+		case "--policy":
+			if i+1 >= len(args) { return fmt.Errorf("--policy: missing value") }
 			i++
 			var err error
 			policy, err = parsePolicy(args[i])
@@ -383,6 +391,8 @@ func cmdInplace(args []string) error {
 				return err
 			}
 			policyStr = policy.String()
+		default:
+			return fmt.Errorf("unknown inplace option: %s", args[i])
 		}
 		i++
 	}

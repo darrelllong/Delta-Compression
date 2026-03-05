@@ -55,7 +55,10 @@ public final class Delta {
         if      (last == 'k' || last == 'K') { mult = 1_000L;         num = s.substring(0, s.length() - 1); }
         else if (last == 'M' || last == 'm') { mult = 1_000_000L;     num = s.substring(0, s.length() - 1); }
         else if (last == 'B' || last == 'b') { mult = 1_000_000_000L; num = s.substring(0, s.length() - 1); }
-        return (int) (Long.parseLong(num) * mult);
+        long result = Long.parseLong(num) * mult;
+        if (result < 0 || result > Integer.MAX_VALUE)
+            throw new IllegalArgumentException("size too large: " + s);
+        return (int) result;
     }
 
     private static void usage() {
@@ -85,11 +88,23 @@ public final class Delta {
 
         for (int i = 5; i < args.length; i++) {
             switch (args[i]) {
-                case "--seed-len"   -> opts.p = Integer.parseInt(args[++i]);
-                case "--table-size" -> opts.q = Integer.parseInt(args[++i]);
-                case "--max-table"  -> opts.maxTable = parseSizeSuffix(args[++i]);
+                case "--seed-len" -> {
+                    if (++i >= args.length) throw new IllegalArgumentException("--seed-len: missing value");
+                    opts.p = Integer.parseInt(args[i]);
+                }
+                case "--table-size" -> {
+                    if (++i >= args.length) throw new IllegalArgumentException("--table-size: missing value");
+                    opts.q = Integer.parseInt(args[i]);
+                }
+                case "--max-table" -> {
+                    if (++i >= args.length) throw new IllegalArgumentException("--max-table: missing value");
+                    opts.maxTable = parseSizeSuffix(args[i]);
+                }
                 case "--inplace"    -> inplace = true;
-                case "--policy"     -> policy = parsePolicy(args[++i]);
+                case "--policy" -> {
+                    if (++i >= args.length) throw new IllegalArgumentException("--policy: missing value");
+                    policy = parsePolicy(args[i]);
+                }
                 case "--verbose"    -> opts.verbose = true;
                 case "--splay"      -> opts.useSplay = true;
                 default -> throw new IllegalArgumentException("Unknown option: " + args[i]);
@@ -149,6 +164,7 @@ public final class Delta {
         boolean ignoreHash = false;
         for (int i = 4; i < args.length; i++) {
             if ("--ignore-hash".equals(args[i])) ignoreHash = true;
+            else throw new IllegalArgumentException("Unknown decode option: " + args[i]);
         }
 
         byte[] r          = readFile(refPath);
@@ -237,9 +253,12 @@ public final class Delta {
         String policyStr   = "localmin";
 
         for (int i = 4; i < args.length; i++) {
-            if ("--policy".equals(args[i]) && i + 1 < args.length) {
-                policy = parsePolicy(args[++i]);
+            if ("--policy".equals(args[i])) {
+                if (++i >= args.length) throw new IllegalArgumentException("--policy: missing value");
+                policy = parsePolicy(args[i]);
                 policyStr = policy.name().toLowerCase();
+            } else {
+                throw new IllegalArgumentException("Unknown inplace option: " + args[i]);
             }
         }
 
