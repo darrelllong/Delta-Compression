@@ -22,7 +22,7 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Foldable (toList)
 import qualified Data.Map.Strict as M
-import Data.Sequence (Seq(..), ViewL(..), ViewR(..), (|>))
+import Data.Sequence (Seq(..), (|>))
 import qualified Data.Sequence as Seq
 import Data.Word (Word64)
 import Delta.Hash
@@ -108,7 +108,7 @@ diffCorrecting r v opts
                       then tblSplay
                       else M.insertWith (\_ old -> old) fp a tblSplay
                in if a + 1 >= numSeeds
-                    then buildSplay (a + 1) rh tblSplay'
+                    then tblSplay'
                     else
                       let !oldB = fromIntegral (byteAt r a) :: Word64
                           !newB = fromIntegral (byteAt r (a + p)) :: Word64
@@ -228,9 +228,9 @@ diffCorrecting r v opts
     tailCorrect vM matchEnd vS0 = go vS0
       where
         go !effectiveStart b =
-          case Seq.viewr b of
-            EmptyR -> (effectiveStart, b)
-            rest :> tailEntry
+          case b of
+            Seq.Empty -> (effectiveStart, b)
+            rest Seq.:|> tailEntry
               -- WHAT: drop fully covered buffered entry.
               -- WHY: the new copy supersedes it completely.
               | beStart tailEntry >= vM && beEnd tailEntry <= matchEnd ->
@@ -257,9 +257,9 @@ emitBuf cap entry buf outRev
   -- WHY: tail-correction can only revise recent commands, so old entries are
   -- committed as soon as capacity is exceeded.
   | Seq.length buf >= cap =
-      case Seq.viewl buf of
-        EmptyL -> (Seq.singleton entry, outRev)
-        oldest :< rest -> (rest |> entry, beCmd oldest : outRev)
+      case buf of
+        Seq.Empty -> (Seq.singleton entry, outRev)
+        oldest Seq.:<| rest -> (rest |> entry, beCmd oldest : outRev)
   | otherwise = (buf |> entry, outRev)
 
 lookupCheckpoint :: CheckpointHash -> Int -> Word64 -> Maybe Int

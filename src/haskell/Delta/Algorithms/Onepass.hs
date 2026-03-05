@@ -11,8 +11,7 @@ module Delta.Algorithms.Onepass (diffOnepass) where
 --   byte-compatible output with the other language implementations.
 
 import Control.Monad.ST (ST, runST)
-import Data.Array.Base (unsafeRead, unsafeWrite)
-import Data.Array.ST (STUArray, newArray)
+import Data.Array.ST (STUArray, newArray, readArray, writeArray)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.IntMap.Strict as IM
@@ -25,6 +24,9 @@ import Delta.Util
 type Entry = (Word64, Int, Int)
 type HashTable = IM.IntMap Entry
 type SplayTable = M.Map Word64 (Int, Int)
+
+slotWord :: Word64 -> Word64 -> Int
+slotWord !qW !fp = fromIntegral (fp `rem` qW)
 
 -- | WHAT:
 --   Scan reference (R) and version (V) in lockstep, match on seed fingerprints,
@@ -54,6 +56,11 @@ diffOnepassMutable r v opts = runST $ do
       rLen = BS.length r
       canV0 = vLen >= p
       canR0 = rLen >= p
+      -- WHAT:
+      --   Sentinel rolling-hash value used only when a side has no valid seed.
+      -- WHY:
+      --   `loop` advances hashes only when `canAt` holds, so this value is never
+      --   observed in matching math; it keeps the mutable state unboxed.
       dummyRh = RollingHash 0 0 p
       rhV0
         | canV0 = initRollingHash v 0 p
@@ -67,9 +74,8 @@ diffOnepassMutable r v opts = runST $ do
       -- WHAT:
       --   Convert a fingerprint to its hash-table slot index.
       -- WHY:
-      --   `unsafeRead`/`unsafeWrite` below are justified because `rem qW` keeps
-      --   all indices in [0, q-1] for q >= 2, matching array bounds exactly.
-      slotQ fp = fromIntegral (fp `rem` qW)
+      --   `rem qW` keeps all indices in [0, q-1] for q >= 2.
+      slotQ fp = slotWord qW fp
 
       finalize !vSFinal !acc
         | vSFinal < vLen = reverse (Add (sliceV vSFinal vLen) : acc)
@@ -88,33 +94,38 @@ diffOnepassMutable r v opts = runST $ do
         -- WHAT:
         --   Fast table probe on current slot generation.
         -- WHY:
-        --   We use unsafe array access to remove per-op bounds checks in the
-        --   onepass hot loop; slotQ establishes the index invariant.
-        curVer <- unsafeRead verArr idx
+        --   Generation tagging implements O(1) logical flush with no table clear.
+        curVer <- readArray verArr idx
         if curVer == ver
           then pure ()
           else do
             -- WHAT: retain-first per logical version.
             -- WHY: matches the paper's one-entry-per-slot behavior.
-            unsafeWrite fpArr idx fp
-            unsafeWrite offArr idx off
-            unsafeWrite verArr idx ver
+            writeArray fpArr idx fp
+            writeArray offArr idx off
+            writeArray verArr idx ver
 
       getEntryOff !ver !fp fpArr offArr verArr = do
         let !idx = slotQ fp
         -- WHAT:
         --   Fast slot lookup with version+fingerprint validation.
         -- WHY:
-        --   Same safety argument as putEntry: idx is always in-range by slotQ.
-        curVer <- unsafeRead verArr idx
+        --   Version + fingerprint checks preserve first-entry semantics.
+        curVer <- readArray verArr idx
         if curVer /= ver
           then pure (-1)
           else do
-            curFp <- unsafeRead fpArr idx
+            curFp <- readArray fpArr idx
             if curFp == fp
-              then unsafeRead offArr idx
+              then readArray offArr idx
               else pure (-1)
 
+      -- WHAT:
+      --   Advance rolling-hash state at a scan position.
+      -- WHY:
+      --   The three-way dispatch (same position, +1 slide, non-adjacent jump)
+      --   avoids rehashing when possible while keeping correctness on jumps.
+      --   The unboxed tuple return avoids allocating a boxed 3-tuple per byte.
       advanceFingerprint !bs !pos !rh !rhPos
         | pos == rhPos = (# rhValue rh, rh, rhPos #)
         | pos == rhPos + 1 =
@@ -149,77 +160,43 @@ diffOnepassMutable r v opts = runST $ do
             if canV then putEntry ver fpVNow vC fpV offV verV else pure ()
             if canR then putEntry ver fpRNow rC fpR offR verR else pure ()
 
-            -- WHAT:
-            --   Check candidate matches directly in the hot loop.
-            -- WHY:
-            --   This duplicated control flow intentionally avoids building
-            --   intermediate Maybe/pair values on every scan step.
+            let stepMiss = loop ver (rC + 1) (vC + 1) vS rhV1 rhR1 rhVPos1 rhRPos1 accRev
+                acceptMatch !rM !vM = do
+                  let !ml = extendForward r v rM vM 0
+                  if ml < p
+                    then stepMiss
+                    else
+                      let !accRev' =
+                            if vS < vM
+                              then Copy rM ml : Add (sliceV vS vM) : accRev
+                              else Copy rM ml : accRev
+                          !vNext = vM + ml
+                          !rNext = rM + ml
+                          -- WHAT: bump logical table version.
+                          -- WHY: O(1) "flush" with no physical clearing.
+                       in loop (ver + 1) rNext vNext vNext rhV1 rhR1 rhVPos1 rhRPos1 accRev'
+
             if canR
               then do
                 vCand <- getEntryOff ver fpRNow fpV offV verV
                 if vCand >= 0 && regionEquals r rC v vCand p
-                  then do
-                    let !rM = rC
-                        !vM = vCand
-                        !ml = extendForward r v rM vM 0
-                    if ml < p
-                      then loop ver (rC + 1) (vC + 1) vS rhV1 rhR1 rhVPos1 rhRPos1 accRev
-                      else
-                        let !accRev' =
-                              if vS < vM
-                                then Copy rM ml : Add (sliceV vS vM) : accRev
-                                else Copy rM ml : accRev
-                            !vNext = vM + ml
-                            !rNext = rM + ml
-                            -- WHAT: bump logical table version.
-                            -- WHY: O(1) "flush" with no physical clearing.
-                         in loop (ver + 1) rNext vNext vNext rhV1 rhR1 rhVPos1 rhRPos1 accRev'
+                  then acceptMatch rC vCand
                   else
                     if canV
                       then do
                         rCand <- getEntryOff ver fpVNow fpR offR verR
                         if rCand >= 0 && regionEquals v vC r rCand p
-                          then do
-                            let !rM = rCand
-                                !vM = vC
-                                !ml = extendForward r v rM vM 0
-                            if ml < p
-                              then loop ver (rC + 1) (vC + 1) vS rhV1 rhR1 rhVPos1 rhRPos1 accRev
-                              else
-                                let !accRev' =
-                                      if vS < vM
-                                        then Copy rM ml : Add (sliceV vS vM) : accRev
-                                        else Copy rM ml : accRev
-                                    !vNext = vM + ml
-                                    !rNext = rM + ml
-                                    -- WHAT: bump logical table version.
-                                    -- WHY: O(1) "flush" with no physical clearing.
-                                 in loop (ver + 1) rNext vNext vNext rhV1 rhR1 rhVPos1 rhRPos1 accRev'
-                          else loop ver (rC + 1) (vC + 1) vS rhV1 rhR1 rhVPos1 rhRPos1 accRev
-                      else loop ver (rC + 1) (vC + 1) vS rhV1 rhR1 rhVPos1 rhRPos1 accRev
+                          then acceptMatch rCand vC
+                          else stepMiss
+                      else stepMiss
               else
                 if canV
                   then do
                     rCand <- getEntryOff ver fpVNow fpR offR verR
                     if rCand >= 0 && regionEquals v vC r rCand p
-                      then do
-                        let !rM = rCand
-                            !vM = vC
-                            !ml = extendForward r v rM vM 0
-                        if ml < p
-                          then loop ver (rC + 1) (vC + 1) vS rhV1 rhR1 rhVPos1 rhRPos1 accRev
-                          else
-                            let !accRev' =
-                                  if vS < vM
-                                    then Copy rM ml : Add (sliceV vS vM) : accRev
-                                    else Copy rM ml : accRev
-                                !vNext = vM + ml
-                                !rNext = rM + ml
-                                -- WHAT: bump logical table version.
-                                -- WHY: O(1) "flush" with no physical clearing.
-                             in loop (ver + 1) rNext vNext vNext rhV1 rhR1 rhVPos1 rhRPos1 accRev'
-                      else loop ver (rC + 1) (vC + 1) vS rhV1 rhR1 rhVPos1 rhRPos1 accRev
-                  else loop ver (rC + 1) (vC + 1) vS rhV1 rhR1 rhVPos1 rhRPos1 accRev
+                      then acceptMatch rCand vC
+                      else stepMiss
+                  else stepMiss
 
   loop 0 0 0 0 rhV0 rhR0 0 0 []
 
@@ -333,9 +310,17 @@ diffOnepassPure r v opts
                   | regionEquals v vC r rCand p -> Just (rCand, vC)
                 _ -> Nothing
 
+-- WHAT:
+--   Shared slot computation for pure/tree helper paths.
+-- WHY:
+--   Kept consistent with the mutable path's `slotQ` (`slotWord` with q as Word64).
 slot :: Int -> Word64 -> Int
-slot q fp = fromIntegral (fp `mod` fromIntegral q)
+slot q fp = slotWord (fromIntegral q) fp
 
+-- WHAT:
+--   Insert retain-first hash entry for a logical table generation.
+-- WHY:
+--   Mirrors Figure 3's one-entry-per-slot semantics for onepass.
 putEntryHash :: Int -> Int -> Word64 -> Int -> HashTable -> HashTable
 putEntryHash q ver fp off table =
   let idx = slot q fp
@@ -344,6 +329,10 @@ putEntryHash q ver fp off table =
           | entryVer == ver -> table
         _ -> IM.insert idx (fp, off, ver) table
 
+-- WHAT:
+--   Lookup hash entry in the current logical generation.
+-- WHY:
+--   Generation tagging provides O(1) logical flush with no table clearing.
 getEntryHash :: Int -> Int -> Word64 -> HashTable -> Maybe Int
 getEntryHash q ver fp table =
   let idx = slot q fp
@@ -352,6 +341,10 @@ getEntryHash q ver fp table =
           | entryVer == ver && entryFp == fp -> Just off
         _ -> Nothing
 
+-- WHAT:
+--   Insert retain-first entry in tree mode.
+-- WHY:
+--   Preserves generation semantics while keying by full fingerprint.
 putEntrySplay :: Int -> Word64 -> Int -> SplayTable -> SplayTable
 putEntrySplay ver fp off table =
   case M.lookup fp table of
@@ -359,6 +352,10 @@ putEntrySplay ver fp off table =
       | entryVer == ver -> table
     _ -> M.insert fp (off, ver) table
 
+-- WHAT:
+--   Lookup entry in tree mode for the current generation.
+-- WHY:
+--   Keeps pure fallback behavior aligned with mutable-path flush semantics.
 getEntrySplay :: Int -> Word64 -> SplayTable -> Maybe Int
 getEntrySplay ver fp table =
   case M.lookup fp table of
@@ -366,6 +363,10 @@ getEntrySplay ver fp table =
       | entryVer == ver -> Just off
     _ -> Nothing
 
+-- WHAT:
+--   Pure rolling-hash progression helper for fallback mode.
+-- WHY:
+--   Handles contiguous slides in O(1) and exact reinit on non-adjacent jumps.
 calcFingerprint :: ByteString -> Int -> Int -> Maybe RollingHash -> Int -> (Maybe Word64, Maybe RollingHash, Int)
 calcFingerprint _ _ _ Nothing rhPos = (Nothing, Nothing, rhPos)
 calcFingerprint bs p pos (Just rh) rhPos

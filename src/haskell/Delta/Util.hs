@@ -11,7 +11,7 @@ module Delta.Util
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Unsafe as BSU
-import Data.List (foldl', sort)
+import Data.List (sort)
 import Data.Word (Word8)
 import Delta.Types
 import System.IO (hPutStrLn, stderr)
@@ -27,9 +27,17 @@ byteAt = BSU.unsafeIndex
 regionEquals :: ByteString -> Int -> ByteString -> Int -> Int -> Bool
 regionEquals a aOff b bOff len
   | len <= 0 = True
-  | otherwise =
-      -- ByteString equality delegates to a low-level memcmp path.
-      BS.take len (BS.drop aOff a) == BS.take len (BS.drop bOff b)
+  | otherwise = go 0
+  where
+    -- WHAT:
+    --   Compare two windows byte-for-byte.
+    -- WHY:
+    --   This avoids allocating intermediate slice headers on every call in
+    --   hot match-confirmation paths.
+    go !i
+      | i >= len = True
+      | byteAt a (aOff + i) /= byteAt b (bOff + i) = False
+      | otherwise = go (i + 1)
 
 chunkSize :: Int
 chunkSize = 32
@@ -98,11 +106,11 @@ emitStats True cmds = do
       <> " bytes"
   case sort copyLens of
     [] -> pure ()
-    sorted@(minLen : rest) -> do
+    sorted@(minLen : _) -> do
       let copyCount = length sorted
-          maxLen = foldl' (\_ x -> x) minLen rest
+          maxLen = last sorted
           mid = copyCount `div` 2
-          median = listIndexDefault minLen mid sorted
+          median = sorted !! mid
       let mean :: Double
           mean = fromIntegral totalCopy / fromIntegral copyCount
       hPutStrLn stderr $
@@ -122,11 +130,3 @@ emitStats True cmds = do
     showFF x =
       let rounded = fromIntegral (round (x * 10) :: Int) / 10.0 :: Double
        in show rounded
-
-    listIndexDefault :: a -> Int -> [a] -> a
-    listIndexDefault def idx = go idx
-      where
-        go !n (y : ys)
-          | n <= 0 = y
-          | otherwise = go (n - 1) ys
-        go _ [] = def
