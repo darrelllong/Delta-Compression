@@ -6,8 +6,9 @@ GHCFLAGS ?= -O2 -Wall
 all: delta-hs
 
 delta-hs: Main.hs Delta/Types.hs Delta/Util.hs Delta/Hash.hs Delta/Diff.hs \
-	Delta/Apply.hs Delta/Encoding.hs Delta/Algorithms/Greedy.hs \
-	Delta/Algorithms/Onepass.hs Delta/Algorithms/Correcting.hs
+	Delta/Apply.hs Delta/Encoding.hs Delta/Inplace.hs \
+	Delta/Algorithms/Greedy.hs Delta/Algorithms/Onepass.hs \
+	Delta/Algorithms/Correcting.hs
 	$(GHC) $(GHCFLAGS) -i. -o $@ Main.hs
 
 clean:
