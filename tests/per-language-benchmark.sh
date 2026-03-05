@@ -38,14 +38,23 @@ if [[ -z "$JAVA" || ! -x "$JAVA" ]]; then
 fi
 
 # ── Locate Scala library ──────────────────────────────────────────────────────
+# Homebrew (macOS): scala.jar lives under libexec/lib/.
+# SDKMAN Scala 3 (Linux): runtime is split across two maven2 jars.  Build a
+#   colon-separated SCALA_LIB from both so -cp works with either install.
 
 SCALA_LIB=$(grep 'SCALA_LIB\s*=' "$REPO_ROOT/src/scala/Makefile" | head -1 | sed 's/.*= *//')
 if [[ ! -f "$SCALA_LIB" ]]; then
-    # Fall back to SDKMAN install (Linux)
-    SCALA_LIB=$(find "${HOME}/.sdkman/candidates/scala/current/lib" \
-                     -name "scala-library.jar" 2>/dev/null | head -1)
+    # Try SDKMAN Scala 3 layout (scala3-library + scala2-compat)
+    _SDKMAN_SCALA="${HOME}/.sdkman/candidates/scala/current/maven2/org/scala-lang"
+    _S3="${_SDKMAN_SCALA}/scala3-library_3"
+    _S2="${_SDKMAN_SCALA}/scala-library"
+    _S3J=$(find "$_S3" -name "scala3-library_3-*.jar" 2>/dev/null | sort -V | tail -1)
+    _S2J=$(find "$_S2" -name "scala-library-*.jar"    2>/dev/null | sort -V | tail -1)
+    if [[ -f "$_S3J" && -f "$_S2J" ]]; then
+        SCALA_LIB="${_S3J}:${_S2J}"
+    fi
 fi
-if [[ -z "$SCALA_LIB" || ! -f "$SCALA_LIB" ]]; then
+if [[ -z "$SCALA_LIB" ]]; then
     echo "WARNING: Scala library not found — Scala will be skipped" >&2
     SCALA_LIB=""
 fi
