@@ -25,10 +25,7 @@ fi
 
 # ── Locate Java ───────────────────────────────────────────────────────────────
 
-JAVA=/opt/homebrew/opt/openjdk@17/bin/java
-if [[ ! -x "$JAVA" ]]; then
-    JAVA=$(command -v java 2>/dev/null || true)
-fi
+JAVA=$(command -v java 2>/dev/null || true)
 
 # ── Locate Scala library ──────────────────────────────────────────────────────
 
