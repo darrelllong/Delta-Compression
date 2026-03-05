@@ -570,7 +570,7 @@ is inherently closer to all later versions.  The 5.1.1→5.1.2 successive delta
 the from-5.1.1 ratios grow while successive ratios stay flat (0.47–0.50%).
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {'xyChart': {'plotColorPalette': '#1e88e5'}}}}%%
+%%{init: {"xyChart": {"plotColorPalette": "#e65100"}}}%%
 xychart-beta
     title "Onepass ratio (%) from base 5.1.0"
     x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
@@ -579,7 +579,7 @@ xychart-beta
 ```
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {'xyChart': {'plotColorPalette': '#1e88e5'}}}}%%
+%%{init: {"xyChart": {"plotColorPalette": "#e65100"}}}%%
 xychart-beta
     title "Onepass ratio (%) successive chain"
     x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
@@ -588,7 +588,7 @@ xychart-beta
 ```
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {'xyChart': {'plotColorPalette': '#1e88e5'}}}}%%
+%%{init: {"xyChart": {"plotColorPalette": "#e65100"}}}%%
 xychart-beta
     title "Onepass ratio (%) from reference 5.1.1"
     x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
@@ -597,7 +597,7 @@ xychart-beta
 ```
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {'xyChart': {'plotColorPalette': '#1e88e5'}}}}%%
+%%{init: {"xyChart": {"plotColorPalette": "#e65100"}}}%%
 xychart-beta
     title "Correcting time (s) from base 5.1.0"
     x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
@@ -606,7 +606,7 @@ xychart-beta
 ```
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {'xyChart': {'plotColorPalette': '#1e88e5'}}}}%%
+%%{init: {"xyChart": {"plotColorPalette": "#e65100"}}}%%
 xychart-beta
     title "Correcting time (s) successive chain"
     x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
@@ -615,7 +615,7 @@ xychart-beta
 ```
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {'xyChart': {'plotColorPalette': '#1e88e5'}}}}%%
+%%{init: {"xyChart": {"plotColorPalette": "#e65100"}}}%%
 xychart-beta
     title "Correcting time (s) from reference 5.1.1"
     x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
