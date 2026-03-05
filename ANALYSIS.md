@@ -10,7 +10,7 @@ string-to-string correction problem (Wagner and Fischer 1974), which
 asks for the minimum-cost sequence of edits transforming one string into
 another.  Levenshtein distance (Levenshtein 1966) is the simplest
 instance: single-character insertions, deletions, and substitutions,
-computed by O(mn) dynamic programming.
+computed by $O(mn)$ dynamic programming.
 
 Early differencing algorithms solved string-to-string correction by
 computing the longest common subsequence (LCS) of strings R and V, then
@@ -22,16 +22,16 @@ in the same order in both strings.  Tichy (1984) generalized to the
 variable-length substrings to be copied multiple times and out of
 sequence.  Traditional algorithms for this problem — the greedy
 algorithm of Reichenberger (1991) and the dynamic programming approach
-of Miller and Myers (1985) — run in O(mn) or O(n^2) time.
+of Miller and Myers (1985) — run in $O(mn)$ or $O(n^2)$ time.
 
 The algorithms implemented here (Ajtai et al. 2002) solve the
 string-to-string correction problem with block move using Karp-Rabin
 fingerprinting (Karp and Rabin 1987) to discover variable-length common
 substrings between R and V in linear time.  A single substring in R may
 be copied to multiple locations in V, and matches need not preserve
-order.  The onepass and correcting algorithms run in O(n) time with O(1)
-space — compared to O(mn) for edit-distance dynamic programming.  For
-a 1 MB file with a 1 KB change, Levenshtein requires ~10^12 operations;
+order.  The onepass and correcting algorithms run in $O(n)$ time with $O(1)$
+space — compared to $O(mn)$ for edit-distance dynamic programming.  For
+a 1 MB file with a 1 KB change, Levenshtein requires $\sim 10^{12}$ operations;
 onepass finds the change in a single linear scan.
 
 ## Checkpointing (correcting algorithm)
@@ -41,19 +41,19 @@ Section 8) to select which seeds enter the hash table.
 
 Two parameters govern the hash table:
 
-- **|C|** = auto-sized table capacity (`next_prime(max(table_size, 2 *
+- **$|C|$** = auto-sized table capacity (`next_prime(max(table_size, 2 *
   num_seeds / p))`).  Each entry is ~16 bytes (fingerprint + position,
   8 bytes each).  `--table-size` sets the floor.
-- **|F|** ≈ 2|R| (auto-computed): the footprint modulus.  Set to
+- **$|F|$** $\approx 2|R|$ (auto-computed): the footprint modulus.  Set to
   `next_prime(2 * num_seeds)` for good distribution.
 
-The checkpoint stride is `m = ⌈|F|/|C|⌉`.  A seed is a **checkpoint
-seed** if its footprint `f = fingerprint mod |F|` satisfies `f ≡ k
-(mod m)` (Section 8.1, Eq. 3), where `k` is a biased checkpoint class
+The checkpoint stride is $m = \lceil |F|/|C| \rceil$.  A seed is a **checkpoint
+seed** if its footprint $f = \text{fingerprint} \bmod |F|$ satisfies $f \equiv k
+\pmod{m}$ (Section 8.1, Eq. 3), where $k$ is a biased checkpoint class
 chosen from V (p. 348).  Only checkpoint seeds are stored in or
 looked up from the hash table; all others are skipped.  This gives
-~|C|/2 occupied slots (~50% load factor) regardless of |R| (Section 8.1,
-p. 347: L · |C|/|F| ≈ |C|/2, hence |F| ≈ 2L).
+$\approx |C|/2$ occupied slots (~50% load factor) regardless of $|R|$ (Section 8.1,
+p. 347: $L \cdot |C|/|F| \approx |C|/2$, hence $|F| \approx 2L$).
 
 The checkpoint stride `m` equals the average spacing between checkpoint
 seeds.  Matching substrings shorter than ~m bytes may be missed because
@@ -62,15 +62,15 @@ reliably: backward extension (Section 5.1) discovers the true start of
 the match even when it falls between checkpoint positions (Section 8.2,
 p. 349).
 
-With auto-sizing, `m ≈ p` (the seed length), so checkpoint granularity
+With auto-sizing, $m \approx p$ (the seed length), so checkpoint granularity
 roughly matches seed granularity.  When the reference is small enough
-that |F| ≤ |C|, the stride is m=1 and every seed is a checkpoint —
+that $|F| \leq |C|$, the stride is $m=1$ and every seed is a checkpoint —
 equivalent to direct indexing with no filtering overhead.
 
-The footprint modulus |F| is chosen as a prime using a deterministic
+The footprint modulus $|F|$ is chosen as a prime using a deterministic
 Miller-Rabin primality test with the fixed witness set {2, 3, 5, 7, 11,
 13, 17, 19, 23, 29, 31, 37}.  This set is proven sufficient for all n <
-3,317,044,064,679,887,385,961,981 (> 2^81), far exceeding any table
+3,317,044,064,679,887,385,961,981 ($> 2^{81}$), far exceeding any table
 size that arises in practice (Jaeschke, Math. Comp. 61(204), 1993).
 No random number generator is required: the result is deterministic and
 identical across all nine language implementations.
@@ -80,11 +80,11 @@ identical across all nine language implementations.
 The splay tree option (`--splay`) replaces the hash table with a
 Tarjan-Sleator self-adjusting binary search tree (Sleator and Tarjan 1985).
 Every access splays the accessed node to the root via zig/zig-zig/zig-zag
-rotations, giving amortized O(log n) per operation.
+rotations, giving amortized $O(\log n)$ per operation.
 
 **Onepass:** onepass inserts a seed from R and then looks it up shortly
 after when it scans the corresponding V region.  The splay tree exploits
-this temporal locality in principle, but O(log n) rotations per access
+this temporal locality in principle, but $O(\log n)$ rotations per access
 outweigh the locality benefit in practice: on 871 MB kernel tarballs the
 splay tree is ~55% slower than the hash table in algorithm time (0.78s
 vs 0.50s).  Total wall time is dominated by I/O (~3.5s reading two 871 MB
@@ -92,8 +92,8 @@ files), so the algorithm-time difference is masked.
 
 **Why it hurts for correcting:** correcting's R pass inserts millions
 of checkpoint seeds in random order before any V lookups begin.  The
-build phase has no locality benefit, and O(log n) per insertion is
-slower than O(1) hash table insertion.  Lookups during the V pass also
+build phase has no locality benefit, and $O(\log n)$ per insertion is
+slower than $O(1)$ hash table insertion.  Lookups during the V pass also
 lack the recent-access advantage.  On kernel tarballs, correcting+splay
 is ~7.5× slower in algorithm time (44s vs 5.9s).
 
@@ -102,17 +102,17 @@ is ~7.5× slower in algorithm time (44s vs 5.9s).
 collide and only the first is retained.  The splay tree keys on the full
 64-bit fingerprint, making collisions negligible: every checkpoint-passing
 R seed gets its own node.  Splay stores more fingerprints and finds more
-matches, yielding slightly better compression at the cost of O(log n)
+matches, yielding slightly better compression at the cost of $O(\log n)$
 lookups.  On the cross-version kernel pairs below, splay consistently
 beats hash by 0.01–0.02 percentage points on correcting ratio.
 
-**Practical access cost:** the O(log n) characterization is a worst-case
-amortized bound.  A fingerprint appearing k times in R is splayed to the
-root k times during the build phase, so the most common fingerprints are
+**Practical access cost:** the $O(\log n)$ characterization is a worst-case
+amortized bound.  A fingerprint appearing $k$ times in R is splayed to the
+root $k$ times during the build phase, so the most common fingerprints are
 near the root by the time the V scan begins.  For a Zipfian frequency
 distribution — which natural language and source code both follow closely
-— the weighted average access cost is O(log H) where H is the entropy of
-the distribution, substantially less than O(log n).  On kernel tarballs
+— the weighted average access cost is $O(\log H)$ where $H$ is the entropy of
+the distribution, substantially less than $O(\log n)$.  On kernel tarballs
 the effect is visible: common boilerplate dominates the fingerprint
 distribution, limiting the practical slowdown to ~7.5× algorithm-only
 rather than what an adversarial access pattern would produce.
@@ -132,7 +132,7 @@ reconstructed version).  Decode performs two checks:
 CRC-64/XZ (ECMA-182 reflected, polynomial `0x42F0E1EBA9EA3693`)
 was chosen for speed: software implementations run at ~12 GB/s, making
 the overhead negligible even on multi-gigabyte kernel tarballs.  The
-8-byte output gives a 2^{-64} probability of an undetected random error,
+8-byte output gives a $2^{-64}$ probability of an undetected random error,
 sufficient for accidental-error detection in delta workflows.  All nine
 implementations use the same table-driven algorithm (reflected polynomial
 `0xC96C5795D7870F42`, init = xorout = `0xFFFFFFFFFFFFFFFF`), verified
@@ -161,9 +161,9 @@ If it contains a cycle, the commands in the cycle cannot all be copies —
 at least one must be converted to a literal add (materializing the source
 data before it is overwritten).
 
-The CRWI graph is built in O(n log n + E): copies are sorted by write
+The CRWI graph is built in $O(n \log n + E)$: copies are sorted by write
 start, and for each copy's read interval a binary search finds the exact
-range of overlapping writes in O(log n), exploiting the fact that write
+range of overlapping writes in $O(\log n)$, exploiting the fact that write
 intervals are non-overlapping (each output byte is written exactly once).
 
 ### Cycle breaking: Kahn + Tarjan + amortized DFS
@@ -187,12 +187,12 @@ structure.  The correct algorithm combines three ideas:
 
 3. **Per-SCC amortized DFS** finds a cycle within one SCC, selects the
    minimum-length copy in that cycle as the victim, and converts it to
-   an add.  Three amortizations ensure O(|SCC| + E_SCC) total work per
-   SCC, not O(|SCC|) per stall:
+   an add.  Three amortizations ensure $O(|SCC| + E_{SCC})$ total work per
+   SCC, not $O(|SCC|)$ per stall:
 
-   - **scc_id filter (O(1) per neighbor):** Instead of setting and
-     clearing a `member[]` bitmap for each stall — O(|SCC|) per call —
-     the DFS checks `scc_id[w] != sid || removed[w]` in O(1).
+   - **scc_id filter ($O(1)$ per neighbor):** Instead of setting and
+     clearing a `member[]` bitmap for each stall — $O(|SCC|)$ per call —
+     the DFS checks `scc_id[w] != sid || removed[w]` in $O(1)$.
      The global `scc_id[]` array is precomputed by Tarjan and never
      modified; the scc_id filter isolates one SCC without any per-call
      sweep.
@@ -202,16 +202,16 @@ structure.  The correct algorithm combines three ideas:
      across calls within the same SCC.  This is monotone-correct:
      removing a vertex can only reduce edges, never introduce new cycles,
      so a vertex with no reachable cycle remains cycle-free after any
-     removal.  Total DFS work per SCC is O(|SCC| + E_SCC) amortized
-     across all stalls, not O(|SCC|) per stall.
+     removal.  Total DFS work per SCC is $O(|SCC| + E_{SCC})$ amortized
+     across all stalls, not $O(|SCC|)$ per stall.
 
    - **scan_start:** the outer DFS loop resumes from where the last call
-     left off, accumulating O(|SCC|) total outer-loop work per SCC
-     instead of O(|SCC|) per stall.
+     left off, accumulating $O(|SCC|)$ total outer-loop work per SCC
+     instead of $O(|SCC|)$ per stall.
 
    On cycle found, only the gray (color=1) vertices on the cycle path
    are reset to 0; black (color=2) vertices are untouched.  An
-   `scc_active[id]` counter tracks live members, giving O(1) SCC
+   `scc_active[id]` counter tracks live members, giving $O(1)$ SCC
    exhaustion checks in the global Kahn loop.
 
 ### Why per-SCC local Kahn is wrong
@@ -226,10 +226,10 @@ at 16 MB 100% permutation) and significantly worse compression ratios
 
 ### Complexity
 
-CRWI graph build: O(n log n + E).
-Kahn + Tarjan + amortized DFS: O(n log n + E) (Kahn heap is O(n log n);
-Tarjan and amortized DFS are O(n + E)).
-Total: O(n log n + E).
+CRWI graph build: $O(n \log n + E)$.
+Kahn + Tarjan + amortized DFS: $O(n \log n + E)$ (Kahn heap is $O(n \log n)$;
+Tarjan and amortized DFS are $O(n + E)$).
+Total: $O(n \log n + E)$.
 
 ---
 
@@ -323,7 +323,7 @@ The Haskell implementation is pure at the public API boundary and does
 not use C wrappers/FFI, but a purely persistent internal design was
 too slow for the kernel workload.  The main bottlenecks were:
 
-- `IntMap`-based seed tables in onepass/correcting (`O(log n)` plus heavy allocation).
+- `IntMap`-based seed tables in onepass/correcting ($O(\log n)$ plus heavy allocation).
 - `Integer` allocations in the rolling-hash modular multiply path.
 - Quadratic overlap checks in early CRWI graph construction.
 
@@ -332,8 +332,8 @@ in hot loops (`STUArray`/unboxed arrays) while preserving deterministic,
 byte-compatible output:
 
 - Direct-addressed mutable slot tables for onepass and correcting.
-- `Word64` Mersenne reduction for `2^61 - 1` (no per-multiply `Integer` heap traffic).
-- Interval-sweep CRWI edge construction (`O(n log n + E)`).
+- `Word64` Mersenne reduction for $2^{61} - 1$ (no per-multiply `Integer` heap traffic).
+- Interval-sweep CRWI edge construction ($O(n \log n + E)$).
 
 Measured on linux-5.1 → linux-5.1.1 on Dyson (M4):
 Rust = 4.5s onepass / 9.9s correcting, Haskell = 5.1s onepass /
@@ -570,6 +570,7 @@ is inherently closer to all later versions.  The 5.1.1→5.1.2 successive delta
 the from-5.1.1 ratios grow while successive ratios stay flat (0.47–0.50%).
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'xyChart': {'plotColorPalette': '#1e88e5'}}}}%%
 xychart-beta
     title "Onepass ratio (%) from base 5.1.0"
     x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
@@ -578,6 +579,7 @@ xychart-beta
 ```
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'xyChart': {'plotColorPalette': '#1e88e5'}}}}%%
 xychart-beta
     title "Onepass ratio (%) successive chain"
     x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
@@ -586,6 +588,7 @@ xychart-beta
 ```
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'xyChart': {'plotColorPalette': '#1e88e5'}}}}%%
 xychart-beta
     title "Onepass ratio (%) from reference 5.1.1"
     x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
@@ -594,6 +597,7 @@ xychart-beta
 ```
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'xyChart': {'plotColorPalette': '#1e88e5'}}}}%%
 xychart-beta
     title "Correcting time (s) from base 5.1.0"
     x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
@@ -602,6 +606,7 @@ xychart-beta
 ```
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'xyChart': {'plotColorPalette': '#1e88e5'}}}}%%
 xychart-beta
     title "Correcting time (s) successive chain"
     x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
@@ -610,6 +615,7 @@ xychart-beta
 ```
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'xyChart': {'plotColorPalette': '#1e88e5'}}}}%%
 xychart-beta
     title "Correcting time (s) from reference 5.1.1"
     x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
@@ -785,12 +791,12 @@ the data is streamed sequentially.
 | 256 MB | 75% | 0.0238 | 0.2544 | 158,392 | 2.696s | 9.486s |
 | 256 MB | 100% | 0.0254 | 0.2579 | 164,877 | 2.719s | 11.765s |
 
-The CRWI graph build is O(n log n + E): the binary-search sweep exploits
+The CRWI graph build is $O(n \log n + E)$: the binary-search sweep exploits
 non-overlapping write intervals for exact overlap detection.
 Standard-mode correcting time scales ~2× per doubling (linear in n).
 Inplace time at 100% permutation scales ~2.6× per doubling
 (0.234 → 0.618 → 1.554 → 4.150 → 11.765 s across 16 → 32 → 64 → 128 → 256 MB),
-reflecting the O(n log n + E) total complexity of the Tarjan + global
+reflecting the $O(n \log n + E)$ total complexity of the Tarjan + global
 Kahn + amortized DFS cycle-breaking algorithm.  At 256 MB with 512K
 blocks and 164K conversions, the total encode time is still under 12 seconds.
 
