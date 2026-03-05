@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 #
-# per-language-benchmark.sh — Compare delta encoding speed across all 9 implementations
+# per-language-benchmark.sh — Compare delta encoding speed across compiled implementations
 #
 # Encodes the Linux 5.1.0 → 5.1.1 kernel tarballs (~871 MB each) with onepass
-# and correcting using each implementation in sequence to avoid SSD contention.
-# Tarballs are shared with kernel-delta-test.sh (same default WORKDIR).
+# and correcting using each compiled implementation in sequence to avoid SSD
+# contention.  Tarballs are shared with kernel-delta-test.sh (same WORKDIR).
+#
+# Python is intentionally excluded — 871 MB is an unreasonable workload for an
+# interpreted implementation; use bench_all.sh (Shakespeare, ~5 MB) instead.
 #
 # Usage:
 #   ./tests/per-language-benchmark.sh
 #
 # Requirements:
-#   - All 9 language toolchains installed
+#   - Compiled language toolchains installed (Rust, C, C++, Java, Go, Kotlin, Scala, Haskell)
 #   - curl, gunzip (to download tarballs if not already cached)
 #   - ~2 GB disk in WORKDIR (two ~1 GB tarballs)
 #   - ~2.5 GB RAM (auto-sized hash tables for 871 MB kernel tarballs)
@@ -52,8 +55,6 @@ fi
 
 echo "Building all implementations..."
 echo ""
-
-echo "  Python  — nothing to build"
 
 echo "  Rust    — cargo build --release"
 cd "$REPO_ROOT/src/rust/delta"
@@ -157,7 +158,6 @@ run_lang() {
     printf "  %-12s  %9ss  %11ss\n" "$name" "$t_op" "$t_co"
 }
 
-run_lang "Python"  python3 "$REPO_ROOT/src/python/delta.py" encode
 run_lang "Rust"    "$REPO_ROOT/src/rust/delta/target/release/delta" encode
 run_lang "C++"     "$REPO_ROOT/src/cpp/build/delta" encode
 run_lang "C"       "$REPO_ROOT/src/c/delta" encode
