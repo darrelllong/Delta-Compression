@@ -119,7 +119,4 @@ else
     echo "# Haskell: skipped (binary not found: $HS_BIN)"
 fi
 
-measure "Python-op"   Python  onepass
-measure "Python-co"   Python  correcting
-
 echo ""
