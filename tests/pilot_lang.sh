@@ -2,7 +2,7 @@
 # Pilot-bench workload: one file-encode operation for one language implementation.
 #
 # Usage: pilot_lang.sh <lang> <algo>
-#   lang: Python | Rust | Cpp | C | Java | Go | Kotlin | Scala
+#   lang: Python | Rust | Cpp | C | Java | Go | Kotlin | Scala | Haskell
 #   algo: onepass | correcting
 #
 # Prints MiB/s (ref file size ÷ elapsed encode time) to stdout.
@@ -89,6 +89,9 @@ case "$LANG_ARG" in
             echo "Scala library not found" >&2; exit 1
         fi
         CMD=("$JAVA" -cp "$REPO_ROOT/src/scala/delta.jar:$SCALA_LIB" delta.Delta encode)
+        ;;
+    Haskell)
+        CMD=("$REPO_ROOT/src/haskell/delta-hs" encode)
         ;;
     *)
         echo "unknown language: $LANG_ARG" >&2

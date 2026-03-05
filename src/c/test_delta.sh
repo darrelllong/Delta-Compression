@@ -18,6 +18,7 @@ RUST_DELTA=""
 CPP_DELTA=""
 PY_DELTA=""
 JAVA_DELTA=""
+HASKELL_DELTA=""
 
 if [ -x "../../src/rust/delta/target/release/delta" ]; then
     RUST_DELTA="../../src/rust/delta/target/release/delta"
@@ -40,6 +41,12 @@ if [ -d "../java/out" ] && [ -f "../java/out/delta/Delta.class" ]; then
         JAVA_BIN="/opt/homebrew/opt/openjdk@17/bin/java"
     fi
     JAVA_DELTA="$JAVA_BIN -cp ../java/out delta.Delta"
+fi
+
+if [ -x "../haskell/delta-hs" ]; then
+    HASKELL_DELTA="../haskell/delta-hs"
+elif [ -x "../../src/haskell/delta-hs" ]; then
+    HASKELL_DELTA="../../src/haskell/delta-hs"
 fi
 
 check() {
@@ -235,6 +242,30 @@ else
     echo "  (Rust binary not found, skipping)"
 fi
 
+if [ -n "$HASKELL_DELTA" ]; then
+    for algo in onepass correcting; do
+        # C encode standard → Haskell inplace subcommand → C decode
+        c_std="$tmpdir/c-std-hs-${algo}.delta"
+        h_ip="$tmpdir/hs-ip-from-c-${algo}.delta"
+        c_out="$tmpdir/c-out-from-hs-ip-${algo}.out"
+        $DELTA encode $algo "$ref" "$ver" "$c_std"
+        $HASKELL_DELTA inplace "$ref" "$c_std" "$h_ip"
+        $DELTA decode "$ref" "$h_ip" "$c_out"
+        check "C encode -> Haskell inplace -> C decode ($algo)" diff -q "$ver" "$c_out"
+
+        # Haskell encode standard → C inplace subcommand → Haskell decode
+        h_std="$tmpdir/hs-std-${algo}.delta"
+        c_ip="$tmpdir/c-ip-from-hs-${algo}.delta"
+        h_out="$tmpdir/hs-out-from-c-ip-${algo}.out"
+        $HASKELL_DELTA encode $algo "$ref" "$ver" "$h_std"
+        $DELTA inplace "$ref" "$h_std" "$c_ip"
+        $HASKELL_DELTA decode "$ref" "$c_ip" "$h_out"
+        check "Haskell encode -> C inplace -> Haskell decode ($algo)" diff -q "$ver" "$h_out"
+    done
+else
+    echo "  (Haskell binary not found, skipping)"
+fi
+
 echo ""
 echo "=== Byte-identical deltas (C vs other implementations) ==="
 
@@ -286,6 +317,18 @@ else
     echo "  (Java classes not found, skipping)"
 fi
 
+if [ -n "$HASKELL_DELTA" ]; then
+    for algo in onepass correcting; do
+        c_d="$tmpdir/c-${algo}5.delta"
+        h_d="$tmpdir/hs-${algo}.delta"
+        $DELTA encode $algo "$ref" "$ver" "$c_d"
+        $HASKELL_DELTA encode $algo "$ref" "$ver" "$h_d"
+        check "C vs Haskell $algo byte-identical" diff -q "$c_d" "$h_d"
+    done
+else
+    echo "  (Haskell binary not found, skipping)"
+fi
+
 echo ""
 echo "=== Cross-language decode ==="
 
@@ -324,6 +367,24 @@ if [ -n "$JAVA_DELTA" ]; then
         $JAVA_DELTA encode $algo "$ref" "$ver" "$j_d"
         $DELTA decode "$ref" "$j_d" "$c_out"
         check "Java encode -> C decode ($algo)" diff -q "$ver" "$c_out"
+    done
+fi
+
+if [ -n "$HASKELL_DELTA" ]; then
+    for algo in onepass correcting; do
+        c_d="$tmpdir/c-hdec-${algo}.delta"
+        h_out="$tmpdir/hs-from-c-${algo}.out"
+        $DELTA encode $algo "$ref" "$ver" "$c_d"
+        $HASKELL_DELTA decode "$ref" "$c_d" "$h_out"
+        check "C encode -> Haskell decode ($algo)" diff -q "$ver" "$h_out"
+    done
+
+    for algo in onepass correcting; do
+        h_d="$tmpdir/hs-cdec-${algo}.delta"
+        c_out="$tmpdir/c-from-hs-${algo}.out"
+        $HASKELL_DELTA encode $algo "$ref" "$ver" "$h_d"
+        $DELTA decode "$ref" "$h_d" "$c_out"
+        check "Haskell encode -> C decode ($algo)" diff -q "$ver" "$c_out"
     done
 fi
 

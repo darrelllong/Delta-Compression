@@ -73,7 +73,7 @@ Miller-Rabin primality test with the fixed witness set {2, 3, 5, 7, 11,
 3,317,044,064,679,887,385,961,981 (> 2^81), far exceeding any table
 size that arises in practice (Jaeschke, Math. Comp. 61(204), 1993).
 No random number generator is required: the result is deterministic and
-identical across all eight language implementations.
+identical across all nine language implementations.
 
 ## Splay tree: design and tradeoffs
 
@@ -133,7 +133,7 @@ CRC-64/XZ (ECMA-182 reflected, polynomial `0x42F0E1EBA9EA3693`)
 was chosen for speed: software implementations run at ~12 GB/s, making
 the overhead negligible even on multi-gigabyte kernel tarballs.  The
 8-byte output gives a 2^{-64} probability of an undetected random error,
-sufficient for accidental-error detection in delta workflows.  All eight
+sufficient for accidental-error detection in delta workflows.  All nine
 implementations use the same table-driven algorithm (reflected polynomial
 `0xC96C5795D7870F42`, init = xorout = `0xFFFFFFFFFFFFFFFF`), verified
 against the standard check value `crc64_xz(b"123456789") =
@@ -237,21 +237,21 @@ Total: O(n log n + E).
 
 | Script | Purpose |
 |--------|---------|
-| `tests/correctness.sh` | Builds all eight implementations and runs unit tests + cross-language compatibility (208/56/64/45/52/52/52/52 tests) |
+| `tests/correctness.sh` | Builds all nine implementations and runs unit tests + cross-language compatibility (208/56/64/45/52/52/52/52 unit tests + Haskell build/smoke) |
 | `tests/kernel-delta-test.sh` | Performance benchmark on Linux 5.1.0–5.1.7 kernel tarballs (~871 MB each) |
 | `tests/transposition-benchmark.sh` | Performance benchmark on synthetic block permutations (16 MB–1 GB) |
-| `tests/per-language-benchmark.sh` | Per-language speed comparison (all 8 implementations, linux-5.1.0→5.1.1) |
+| `tests/per-language-benchmark.sh` | Per-language speed comparison (all 9 implementations, linux-5.1.0→5.1.1) |
 | `tests/get_shakespeare.sh` | Download Shakespeare (PG #100) and generate mutated versions for bench_all.sh |
 | `bench_rust.sh` | Rust micro-benchmarks via pilot-bench (1 MiB synthetic data, MiB/s with CI) |
-| `bench_all.sh` | All 8 languages via pilot-bench (Shakespeare ~5.4 MB, 5% mutations, MiB/s with CI) |
+| `bench_all.sh` | All 9 languages via pilot-bench (Shakespeare ~5.4 MB, 5% mutations, MiB/s with CI) |
 
-`tests/correctness.sh` is the primary correctness gate: it verifies that
-all eight implementations agree on every encode/decode round-trip and that
-any implementation can decode a delta produced by any other.  The benchmark
-scripts are separate so they can be run independently without the multi-GB
-data requirements of the kernel tests.  For statistically rigorous CI,
-use `bench_rust.sh` or `bench_all.sh` (require pilot-bench; see
-[BENCHMARKING.md](BENCHMARKING.md)).
+`tests/correctness.sh` is the primary correctness gate: it runs all unit
+suites, executes Haskell build/smoke checks, and verifies cross-language
+compatibility (including Haskell lanes when `delta-hs` is present).  The
+benchmark scripts are separate so they can be run independently without
+the multi-GB data requirements of the kernel tests.  For statistically
+rigorous CI, use `bench_rust.sh` or `bench_all.sh` (require pilot-bench;
+see [BENCHMARKING.md](BENCHMARKING.md)).
 
 ## Performance benchmarks
 
@@ -264,7 +264,7 @@ remain historical snapshots.
 
 ### Kernel tarball benchmark (linux-5.1 → linux-5.1.1, 871 MB)
 
-All eight implementations, same input pair, default flags.  All produce
+All nine implementations, same input pair, default flags.  All produce
 byte-identical delta files.  CRC-64/XZ overhead is negligible (~70 ms
 total for two 871 MB files at ~12 GB/s); Python's 258–596s algorithm
 time dominates regardless.
@@ -280,6 +280,7 @@ time dominates regardless.
 | Java | 5.8s |
 | Kotlin | 5.8s |
 | Scala | 6.0s |
+| Haskell | 6.477s |
 | Python | 257.5s |
 
 **correcting** (delta: 6.6 MB, ratio: 0.79%)
@@ -293,13 +294,15 @@ time dominates regardless.
 | Go | 13.6s |
 | C | 18.3s |
 | C++ | 18.7s |
+| Haskell | 18.721s |
 | Python | 596.3s |
 
 C and Rust tie for first on onepass; both beat the field by under half a
 second.  Go sits between the JVM group and the native group for onepass,
 and just above the JVM group for correcting.  Java, Kotlin, and Scala
 cluster together on the same JDK 17 runtime; Java and Kotlin tie on
-correcting, with Scala a second behind.  All eight implementations
+correcting, with Scala a second behind.  Haskell currently lands between
+the JVM cluster and C/C++ on both onepass and correcting.  All nine implementations
 produce byte-identical delta files.  Python is ~60× slower than Rust
 on both algorithms; CPython's interpreter overhead dominates tight
 hash-lookup loops regardless of input size.  These are single-run
@@ -311,25 +314,50 @@ committed.
 ```mermaid
 xychart-beta
     title "Per-language onepass encode time (s)"
-    x-axis ["C", "Rust", "C++", "Go", "Java", "Kotlin", "Scala", "Python"]
+    x-axis ["C", "Rust", "C++", "Go", "Java", "Kotlin", "Scala", "Haskell", "Python"]
     y-axis "seconds" 0 --> 280
-    bar [3.9, 4.4, 4.4, 4.8, 5.8, 5.8, 6.0, 257.5]
+    bar [3.9, 4.4, 4.4, 4.8, 5.8, 5.8, 6.0, 6.477, 257.5]
 ```
 
 ```mermaid
 xychart-beta
     title "Per-language correcting encode time (s)"
-    x-axis ["Rust", "Java", "Kotlin", "Scala", "Go", "C", "C++", "Python"]
+    x-axis ["Rust", "Java", "Kotlin", "Scala", "Go", "C", "C++", "Haskell", "Python"]
     y-axis "seconds" 0 --> 620
-    bar [9.5, 11.4, 11.4, 12.4, 13.6, 18.3, 18.7, 596.3]
+    bar [9.5, 11.4, 11.4, 12.4, 13.6, 18.3, 18.7, 18.721, 596.3]
 ```
+
+### Haskell performance note: purity at the API, mutability in hot loops
+
+The Haskell implementation is pure at the public API boundary and does
+not use C wrappers/FFI, but a purely persistent internal design was
+too slow for the kernel workload.  The main bottlenecks were:
+
+- `IntMap`-based seed tables in onepass/correcting (`O(log n)` plus heavy allocation).
+- `Integer` allocations in the rolling-hash modular multiply path.
+- Quadratic overlap checks in early CRWI graph construction.
+
+To close the gap, the implementation now uses scoped local mutability
+in hot loops (`STUArray`/unboxed arrays) while preserving deterministic,
+byte-compatible output:
+
+- Direct-addressed mutable slot tables for onepass and correcting.
+- `Word64` Mersenne reduction for `2^61 - 1` (no per-multiply `Integer` heap traffic).
+- Interval-sweep CRWI edge construction (`O(n log n + E)`).
+
+Measured on linux-5.1 → linux-5.1.1 in the latest local run:
+Rust = 4.296s onepass / 10.623s correcting, Haskell = 6.477s onepass /
+18.721s correcting.  Earlier purely persistent versions were over 100s
+on correcting for the same pair, so local mutability was the primary
+performance lever.
 
 ### Throughput with confidence intervals (pilot-bench, Shakespeare)
 
-Shakespeare's complete works (~5.4 MB ref, 5% byte mutations as version),
-all eight implementations, onepass and correcting.  Metric: MiB/s
-(reference file size ÷ elapsed encode time).  Run with `bash bench_all.sh`
-which drives each implementation repeatedly until 95% CI converges.
+Shakespeare's complete works (~5.4 MB ref, 5% byte mutations as version).
+The table below is a historical 8-language snapshot captured before the
+current Haskell lane was added; rerun `bash bench_all.sh` to regenerate
+current 9-language pilot data.  Metric: MiB/s (reference file size ÷
+elapsed encode time).
 
 **onepass**
 

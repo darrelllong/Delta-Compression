@@ -19,6 +19,7 @@
 #   Go      — 52 tests        (go test)
 #   Kotlin  — 52 unit tests   (make test)
 #   Scala   — 52 unit tests   (make test)
+#   Haskell — build + roundtrip smoke test (make)
 #   Cross   — cross-language byte-identical encode/decode (src/c/test_delta.sh)
 
 set -uo pipefail
@@ -91,6 +92,21 @@ run_suite "Kotlin build + unit tests" \
 banner "Scala (52 tests)"
 run_suite "Scala build + unit tests" \
     bash -c "cd '$REPO_ROOT/src/scala' && make test"
+
+# ── Haskell ──────────────────────────────────────────────────────────────────
+
+banner "Haskell (build + smoke)"
+run_suite "Haskell build + roundtrip smoke" \
+    bash -c "cd '$REPO_ROOT/src/haskell' && make clean && make && tmp=\$(mktemp -d) && \
+             printf 'AAAA BBBB CCCC\n' > \"\$tmp/ref.txt\" && \
+             printf 'AAAA XXXX CCCC DDDD\n' > \"\$tmp/ver.txt\" && \
+             ./delta-hs encode onepass \"\$tmp/ref.txt\" \"\$tmp/ver.txt\" \"\$tmp/std.delta\" >/dev/null && \
+             ./delta-hs decode \"\$tmp/ref.txt\" \"\$tmp/std.delta\" \"\$tmp/std.out\" >/dev/null && \
+             diff -q \"\$tmp/ver.txt\" \"\$tmp/std.out\" >/dev/null && \
+             ./delta-hs encode correcting \"\$tmp/ref.txt\" \"\$tmp/ver.txt\" \"\$tmp/ip.delta\" --inplace >/dev/null && \
+             ./delta-hs decode \"\$tmp/ref.txt\" \"\$tmp/ip.delta\" \"\$tmp/ip.out\" >/dev/null && \
+             diff -q \"\$tmp/ver.txt\" \"\$tmp/ip.out\" >/dev/null && \
+             rm -rf \"\$tmp\""
 
 # ── Cross-language compatibility ───────────────────────────────────────────────
 

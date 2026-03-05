@@ -5,9 +5,9 @@ reconstructed from the old file plus the (small) delta.  Supports
 in-place reconstruction — the new version can be rebuilt directly in
 the buffer holding the old version, with no scratch space.
 
-Eight implementations — Python, Rust, C++, C, Java, Go, Kotlin, and
-Scala — producing byte-identical binary deltas.  Encode with any one,
-decode with any other.
+Nine implementations — Python, Rust, C++, C, Java, Go, Kotlin, Scala,
+and Haskell — producing byte-identical binary deltas.  Encode with any
+one, decode with any other.
 
 Implements the algorithms from two papers:
 
@@ -95,6 +95,15 @@ java -cp delta.jar:$SCALA_LIB delta.Delta encode onepass old.bin new.bin delta.b
 java -cp delta.jar:$SCALA_LIB delta.Delta decode old.bin delta.bin recovered.bin
 ```
 
+### Haskell
+
+```bash
+cd src/haskell
+make
+./delta-hs encode onepass old.bin new.bin delta.bin
+./delta-hs decode old.bin delta.bin recovered.bin
+```
+
 ## Algorithms
 
 | Algorithm | Time | Space | Best for |
@@ -115,6 +124,11 @@ slightly: the hash table discards fingerprints that collide to the same
 slot, while the splay tree stores every checkpoint-passing seed.  See
 `HOWTO.md` for benchmark data.  Use `--verbose` to see hash table sizing
 and match statistics on stderr.
+
+Haskell note (alpha): performance-critical internals use scoped local
+mutability (`STUArray` and unboxed buffers) plus specialized `Word64`
+hash math.  The external API remains pure, no C wrappers are used, and
+the binary delta format stays byte-compatible with every other language.
 
 See [`HOWTO.md`](HOWTO.md) for tuning parameters, library API examples,
 checkpointing internals, and benchmark results.
@@ -151,7 +165,7 @@ Cycle-breaking policies:
 
 ## Binary delta format
 
-Unified format used by all eight implementations:
+Unified format used by all nine implementations:
 
 ```
 Header (25 bytes):
@@ -197,6 +211,7 @@ Individual suites:
 | Go | 52 | `cd src/go && go test ./delta/...` |
 | Kotlin | 52 | `cd src/kotlin && make test` |
 | Scala | 52 | `cd src/scala && make test` |
+| Haskell | smoke | `cd src/haskell && make` (round-trip smoke is run by `./tests/correctness.sh`) |
 
 Tests cover all three algorithms, binary round-trips, paper examples,
 edge cases (empty/identical/completely different files), in-place
@@ -205,9 +220,10 @@ transpositions (8–64 blocks with controlled transpositions),
 checkpointing correctness, and cross-language compatibility.
 A kernel tarball benchmark (`tests/kernel-delta-test.sh`) exercises
 onepass and correcting on ~871 MB inputs.  On linux-5.1 → 5.1.1, all
-eight implementations produce identical deltas; C and Rust lead onepass
-(4s), Rust leads correcting (9s), Python slowest (247s / 583s); see
-`ANALYSIS.md` for the full table.
+nine implementations are byte-compatible.  In the latest Haskell alpha
+run on that same pair, onepass is 6.477s and correcting is 18.721s
+(Rust on the same run: 4.296s and 10.623s).  See `ANALYSIS.md` for
+tables and details.
 
 ## Project layout
 
@@ -221,8 +237,9 @@ src/
   go/             Go module — library + CLI + 52 tests
   kotlin/         Makefile project (JVM) — library + CLI + 52 tests
   scala/          Makefile project (JVM/Scala 3) — library + CLI + 52 tests
+  haskell/        Makefile project — library + CLI + smoke tests in correctness gate
 tests/
-  correctness.sh          Run all unit + cross-language tests (all 8 implementations)
+  correctness.sh          Run all unit + cross-language tests (all 9 implementations)
   kernel-delta-test.sh    Kernel tarball benchmark
   transposition-benchmark.sh  Synthetic permutation benchmark
 pubs/                     Ajtai et al. 2002, Burns et al. 2003 (PDFs)

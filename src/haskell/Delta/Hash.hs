@@ -47,9 +47,35 @@ fingerprint bs off p = go 0 0
            in go (i + 1) h'
 
 mulMod :: Word64 -> Word64 -> Word64
-mulMod a b =
-  fromInteger $
-    (toInteger a * toInteger b) `mod` toInteger hashMod
+mulMod !a !b =
+  -- Fast reduction modulo 2^61-1 (hashMod): avoid Integer in the hot path.
+  -- Split operands into 32-bit limbs:
+  --   a = a0 + a1*2^32, b = b0 + b1*2^32
+  -- Then reduce product using 2^61 == 1 (mod M).
+  finalize t
+  where
+    !mask32 = 0xFFFF_FFFF
+    !mask29 = 0x1FFF_FFFF
+
+    !a0 = a .&. mask32
+    !a1 = a `shiftR` 32
+    !b0 = b .&. mask32
+    !b1 = b `shiftR` 32
+
+    !p0 = a0 * b0
+    !p1 = a0 * b1 + a1 * b0
+    !p2 = a1 * b1
+
+    !r0 = (p0 .&. hashMod) + (p0 `shiftR` 61)
+    !r1 = p1 `shiftR` 29
+    !r2 = (p1 .&. mask29) * 0x1_0000_0000
+    !r3 = p2 * 8
+    !s = r0 + r1 + r2 + r3
+    !t = (s .&. hashMod) + (s `shiftR` 61)
+
+    finalize !x =
+      let !x' = if x >= hashMod then x - hashMod else x
+       in if x' >= hashMod then x' - hashMod else x'
 
 addMod :: Word64 -> Word64 -> Word64
 addMod a b

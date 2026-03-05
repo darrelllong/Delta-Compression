@@ -10,35 +10,38 @@ module Delta.Util
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Unsafe as BSU
 import Data.List (sort)
 import Data.Word (Word8)
 import Delta.Types
 import System.IO (hPutStrLn, stderr)
 
 byteAt :: ByteString -> Int -> Word8
-byteAt = BS.index
+byteAt = BSU.unsafeIndex
 
 regionEquals :: ByteString -> Int -> ByteString -> Int -> Int -> Bool
-regionEquals a aOff b bOff len =
-  BS.take len (BS.drop aOff a) == BS.take len (BS.drop bOff b)
+regionEquals a aOff b bOff len = go 0
+  where
+    go !i
+      | i >= len = True
+      | byteAt a (aOff + i) /= byteAt b (bOff + i) = False
+      | otherwise = go (i + 1)
 
 extendForward :: ByteString -> ByteString -> Int -> Int -> Int -> Int
 extendForward r v rOff vOff start = go start
   where
-    rLen = BS.length r
-    vLen = BS.length v
+    maxN = min (BS.length v - vOff) (BS.length r - rOff)
     go !n
-      | vOff + n >= vLen = n
-      | rOff + n >= rLen = n
+      | n >= maxN = n
       | byteAt v (vOff + n) /= byteAt r (rOff + n) = n
       | otherwise = go (n + 1)
 
 extendBackward :: ByteString -> ByteString -> Int -> Int -> Int
 extendBackward r v rOff vOff = go 0
   where
+    maxN = min vOff rOff
     go !n
-      | vOff - n - 1 < 0 = n
-      | rOff - n - 1 < 0 = n
+      | n >= maxN = n
       | byteAt v (vOff - n - 1) /= byteAt r (rOff - n - 1) = n
       | otherwise = go (n + 1)
 

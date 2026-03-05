@@ -1,10 +1,15 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Delta.Algorithms.Correcting (diffCorrecting) where
 
+import Control.Monad (when)
+import Control.Monad.ST (ST, runST)
+import Data.Array.MArray (freeze)
+import Data.Array.ST (STUArray, newArray, readArray, writeArray)
+import Data.Array.Unboxed (UArray, (!))
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
-import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import Data.Sequence (Seq(..), ViewL(..), ViewR(..), (|>))
 import qualified Data.Sequence as Seq
@@ -19,7 +24,12 @@ data BufEntry = BufEntry
   , beCmd :: !Command
   }
 
-type CheckpointHash = IM.IntMap (Word64, Int)
+data CheckpointHash = CheckpointHash
+  { chCap :: !Int
+  , chFp :: !(UArray Int Word64)
+  , chOff :: !(UArray Int Int)
+  }
+
 type CheckpointSplay = M.Map Word64 Int
 
 diffCorrecting :: ByteString -> ByteString -> DiffOptions -> [Command]
@@ -63,41 +73,79 @@ diffCorrecting r v opts
 
     sliceV a b = BS.take (b - a) (BS.drop a v)
 
-    buildTables :: (CheckpointHash, CheckpointSplay)
+    buildTables :: (Maybe CheckpointHash, CheckpointSplay)
     buildTables
-      | numSeeds <= 0 = (IM.empty, M.empty)
-      | otherwise = go 0 (initRollingHash r 0 p) IM.empty M.empty
+      | numSeeds <= 0 = (Nothing, M.empty)
+      | useSplay = (Nothing, buildSplay 0 (initRollingHash r 0 p) M.empty)
+      | otherwise = (Just buildHash, M.empty)
       where
-        go !a !rh !tblHash !tblSplay
-          | a >= numSeeds = (tblHash, tblSplay)
+        buildSplay !a !rh !tblSplay
+          | a >= numSeeds = tblSplay
           | otherwise =
               let !fp = rhValue rh
                   !f = fromIntegral (fp `mod` fromIntegral fSize) :: Int
-                  (!tblHash', !tblSplay') =
+                  !tblSplay' =
                     if f `mod` m /= k
-                      then (tblHash, tblSplay)
-                      else
-                        if useSplay
-                          then
-                            let inserted = M.insertWith (\_ old -> old) fp a tblSplay
-                             in (tblHash, inserted)
-                          else (insertCheckpoint cap (f `div` m) fp a tblHash, tblSplay)
+                      then tblSplay
+                      else M.insertWith (\_ old -> old) fp a tblSplay
                in if a + 1 >= numSeeds
-                    then go (a + 1) rh tblHash' tblSplay'
+                    then buildSplay (a + 1) rh tblSplay'
                     else
                       let !oldB = fromIntegral (byteAt r a) :: Word64
                           !newB = fromIntegral (byteAt r (a + p)) :: Word64
                           !rh' = rollHash oldB newB rh
-                       in go (a + 1) rh' tblHash' tblSplay'
+                       in buildSplay (a + 1) rh' tblSplay'
 
-    scanV :: CheckpointHash -> CheckpointSplay -> ([Command], Seq BufEntry, Int)
+        buildHash = runST buildHashST
+
+        buildHashST :: forall s. ST s CheckpointHash
+        buildHashST = do
+            fpArr <- newArray (0, cap - 1) (0 :: Word64) :: ST s (STUArray s Int Word64)
+            offArr <- newArray (0, cap - 1) (-1 :: Int) :: ST s (STUArray s Int Int)
+            let insertSlot !start !fp !off = probe start
+                  where
+                    probe !i = do
+                      curOff <- readArray offArr i
+                      if curOff == -1
+                        then do
+                          writeArray offArr i off
+                          writeArray fpArr i fp
+                        else do
+                          curFp <- readArray fpArr i
+                          if curFp == fp
+                            then pure ()
+                            else do
+                              let i' = if i + 1 == cap then 0 else i + 1
+                              if i' == start then pure () else probe i'
+                go !a !rh
+                  | a >= numSeeds = pure ()
+                  | otherwise = do
+                      let !fp = rhValue rh
+                          !f = fromIntegral (fp `mod` fromIntegral fSize) :: Int
+                      when (f `mod` m == k) $ insertSlot (f `div` m) fp a
+                      if a + 1 >= numSeeds
+                        then go (a + 1) rh
+                        else do
+                          let !oldB = fromIntegral (byteAt r a) :: Word64
+                              !newB = fromIntegral (byteAt r (a + p)) :: Word64
+                              !rh' = rollHash oldB newB rh
+                          go (a + 1) rh'
+            go 0 (initRollingHash r 0 p)
+            fpFrozen <- freeze fpArr
+            offFrozen <- freeze offArr
+            pure (CheckpointHash cap fpFrozen offFrozen)
+
+    scanV :: Maybe CheckpointHash -> CheckpointSplay -> ([Command], Seq BufEntry, Int)
     scanV tblHash tblSplay
       | vLen < p = ([], Seq.empty, 0)
       | otherwise = go 0 0 (initRollingHash v 0 p) 0 Seq.empty []
       where
         lookupSeed fp fV
           | useSplay = M.lookup fp tblSplay
-          | otherwise = lookupCheckpoint cap (fV `div` m) fp tblHash
+          | otherwise =
+              case tblHash of
+                Just ht -> lookupCheckpoint ht (fV `div` m) fp
+                Nothing -> Nothing
 
         go !vC !vS !rh !rhPos !buf !outRev
           | vC + p > vLen = (outRev, buf, vS)
@@ -185,32 +233,21 @@ emitBuf cap entry buf outRev
 toListSeq :: Seq a -> [a]
 toListSeq = foldr (:) []
 
-insertCheckpoint :: Int -> Int -> Word64 -> Int -> CheckpointHash -> CheckpointHash
-insertCheckpoint cap start fp off tbl =
-  case findInsertSlot cap start fp tbl of
-    Nothing -> tbl
-    Just idx -> IM.insert idx (fp, off) tbl
-
-findInsertSlot :: Int -> Int -> Word64 -> CheckpointHash -> Maybe Int
-findInsertSlot cap start fp tbl = go start
+lookupCheckpoint :: CheckpointHash -> Int -> Word64 -> Maybe Int
+lookupCheckpoint ht start fp = go start
   where
-    go !i =
-      case IM.lookup i tbl of
-        Nothing -> Just i
-        Just (foundFp, _)
-          | foundFp == fp -> Nothing
-          | otherwise ->
-              let i' = if i + 1 == cap then 0 else i + 1
-               in if i' == start then Nothing else go i'
+    cap = chCap ht
+    fpArr = chFp ht
+    offArr = chOff ht
 
-lookupCheckpoint :: Int -> Int -> Word64 -> CheckpointHash -> Maybe Int
-lookupCheckpoint cap start fp tbl = go start
-  where
     go !i =
-      case IM.lookup i tbl of
-        Nothing -> Nothing
-        Just (foundFp, off)
-          | foundFp == fp -> Just off
-          | otherwise ->
-              let i' = if i + 1 == cap then 0 else i + 1
-               in if i' == start then Nothing else go i'
+      let off = offArr ! i
+       in if off == -1
+            then Nothing
+            else
+              let foundFp = fpArr ! i
+               in if foundFp == fp
+                    then Just off
+                    else
+                      let i' = if i + 1 == cap then 0 else i + 1
+                       in if i' == start then Nothing else go i'

@@ -310,15 +310,15 @@ def diff_greedy(R: bytes, V: bytes,
     v_c = 0
     v_s = 0
 
+    nV = len(V)
+    nR = len(R)
+
     # Rolling hash for O(1) per-position V fingerprinting.
-    rh_v = _RollingHash(V, 0, p) if len(V) >= p else None
+    rh_v = _RollingHash(V, 0, p) if nV >= p else None
     rh_v_pos = 0
 
-    while True:
-        # Step (3): stop when no full seed remains in V
-        if v_c + p > len(V):
-            break
-
+    while v_c + p <= nV:
+        # Step (3): scan while seeds remain in V
         if v_c == rh_v_pos:
             fp_v = rh_v.value
         elif v_c == rh_v_pos + 1:
@@ -339,10 +339,19 @@ def diff_greedy(R: bytes, V: bytes,
             # Verify the seed actually matches (footprints can collide)
             if R[r_cand:r_cand + p] != V[v_c:v_c + p]:
                 continue
-            ml = p
-            while (v_c + ml < len(V) and r_cand + ml < len(R)
-                   and V[v_c + ml] == R[r_cand + ml]):
-                ml += 1
+            # Binary search for first mismatch beyond the seed.
+            _max = min(nV - v_c, nR - r_cand)
+            if V[v_c:v_c + _max] == R[r_cand:r_cand + _max]:
+                ml = _max
+            else:
+                _lo, _hi = p, _max
+                while _hi - _lo > 1:
+                    _mid = (_lo + _hi) >> 1
+                    if V[v_c:v_c + _mid] == R[r_cand:r_cand + _mid]:
+                        _lo = _mid
+                    else:
+                        _hi = _mid
+                ml = _lo
             if ml > best_len:
                 best_len = ml
                 best_rm = r_cand
@@ -409,40 +418,15 @@ def diff_onepass(R: bytes, V: bytes,
               file=sys.stderr)
 
     # Step (1): lookup structures with version-based logical flushing.
-    # Each entry stores (fingerprint, offset, version).
-    H_V = [None] * q
-    H_R = [None] * q
+    # Three parallel lists per table: fingerprint, offset, version-stamp.
+    # H_{V,R}_ver[i] != ver means the slot is stale; sentinel -1 never matches.
+    H_V_fp  = [0] * q
+    H_V_off = [0] * q
+    H_V_ver = [-1] * q
+    H_R_fp  = [0] * q
+    H_R_off = [0] * q
+    H_R_ver = [-1] * q
     ver = 0
-
-    def hv_get(fp):
-        """Look up fp in H_V; return offset if present in current version, else None."""
-        idx = fp % q
-        e = H_V[idx]
-        if e is not None and e[2] == ver and e[0] == fp:
-            return e[1]
-        return None
-
-    def hr_get(fp):
-        """Look up fp in H_R; return offset if present in current version, else None."""
-        idx = fp % q
-        e = H_R[idx]
-        if e is not None and e[2] == ver and e[0] == fp:
-            return e[1]
-        return None
-
-    def hv_put(fp, off):
-        """Store fp→off in H_V using retain-existing policy (first entry per version wins)."""
-        idx = fp % q
-        e = H_V[idx]
-        if e is None or e[2] != ver:
-            H_V[idx] = (fp, off, ver)
-
-    def hr_put(fp, off):
-        """Store fp→off in H_R using retain-existing policy (first entry per version wins)."""
-        idx = fp % q
-        e = H_R[idx]
-        if e is None or e[2] != ver:
-            H_R[idx] = (fp, off, ver)
 
     # Step (2): initialize scan pointers for concurrent R/V traversal
     r_c = 0
@@ -452,19 +436,19 @@ def diff_onepass(R: bytes, V: bytes,
     dbg_lookups = 0
     dbg_matches = 0
 
+    nV = len(V)
+    nR = len(R)
+
     # Rolling hashes for O(1) per-position fingerprinting.
-    rh_v = _RollingHash(V, 0, p) if len(V) >= p else None
-    rh_r = _RollingHash(R, 0, p) if len(R) >= p else None
+    rh_v = _RollingHash(V, 0, p) if nV >= p else None
+    rh_r = _RollingHash(R, 0, p) if nR >= p else None
     rh_v_pos = 0
     rh_r_pos = 0
 
-    while True:
-        # Step (3): check if seeds remain in V and/or R
-        can_v = v_c + p <= len(V)
-        can_r = r_c + p <= len(R)
-
-        if not can_v and not can_r:
-            break
+    while v_c + p <= nV or r_c + p <= nR:
+        # Step (3): which streams still have seeds?
+        can_v = v_c + p <= nV
+        can_r = r_c + p <= nR
         dbg_positions += 1
 
         fp_v = None
@@ -493,27 +477,37 @@ def diff_onepass(R: bytes, V: bytes,
                 rh_r_pos = r_c
                 fp_r = rh_r.value
 
-        # Step (4a): store offsets (retain-existing policy)
+        # Step (4a): store offsets (retain-existing policy, first entry wins)
         if fp_v is not None:
-            hv_put(fp_v, v_c)
+            _idx = fp_v % q
+            if H_V_ver[_idx] != ver:
+                H_V_fp[_idx]  = fp_v
+                H_V_off[_idx] = v_c
+                H_V_ver[_idx] = ver
         if fp_r is not None:
-            hr_put(fp_r, r_c)
+            _idx = fp_r % q
+            if H_R_ver[_idx] != ver:
+                H_R_fp[_idx]  = fp_r
+                H_R_off[_idx] = r_c
+                H_R_ver[_idx] = ver
 
         # Step (4b): look for a matching seed in the other table
         match_found = False
         r_m = v_m = 0
 
         if fp_r is not None:
-            v_cand = hv_get(fp_r)
-            if v_cand is not None:
+            _idx = fp_r % q
+            if H_V_ver[_idx] == ver and H_V_fp[_idx] == fp_r:
+                v_cand = H_V_off[_idx]
                 dbg_lookups += 1
                 if R[r_c:r_c + p] == V[v_cand:v_cand + p]:
                     r_m, v_m = r_c, v_cand
                     match_found = True
 
         if not match_found and fp_v is not None:
-            r_cand = hr_get(fp_v)
-            if r_cand is not None:
+            _idx = fp_v % q
+            if H_R_ver[_idx] == ver and H_R_fp[_idx] == fp_v:
+                r_cand = H_R_off[_idx]
                 dbg_lookups += 1
                 if V[v_c:v_c + p] == R[r_cand:r_cand + p]:
                     v_m, r_m = v_c, r_cand
@@ -525,11 +519,20 @@ def diff_onepass(R: bytes, V: bytes,
             continue
         dbg_matches += 1
 
-        # Step (5): extend match forward past the seed
-        ml = 0
-        while (v_m + ml < len(V) and r_m + ml < len(R)
-               and V[v_m + ml] == R[r_m + ml]):
-            ml += 1
+        # Step (5): extend match forward; binary search for first mismatch
+        # (slice equality is C-speed memcmp, avoids per-byte Python loop).
+        _max = min(nV - v_m, nR - r_m)
+        if V[v_m:v_m + _max] == R[r_m:r_m + _max]:
+            ml = _max
+        else:
+            _lo, _hi = 0, _max
+            while _hi - _lo > 1:
+                _mid = (_lo + _hi) >> 1
+                if V[v_m:v_m + _mid] == R[r_m:r_m + _mid]:
+                    _lo = _mid
+                else:
+                    _hi = _mid
+            ml = _lo
 
         # Step (6): emit ADD for unmatched gap, then COPY for match
         if v_s < v_m:
@@ -688,19 +691,18 @@ def diff_correcting(R: bytes, V: bytes,
         dbg_build_passed += 1
         i = f // m
         i0 = i
-        while True:
-            if H_R[i] is None:
-                break                    # empty — store here
+        store = True
+        while H_R[i] is not None:
             if H_R[i][0] == fp:
-                i = -1; break           # same fp already stored — skip
-            i += 1
-            if i == C:
-                i = 0
+                store = False           # same fp already stored — skip
+                break
+            i = (i + 1) % C
             dbg_build_probes += 1
             if i == i0:
-                i = -1; break           # table full (safety)
-        if i >= 0:
-            H_R[i] = (fp, a)            # linear probing (Section 7 Step 1)
+                store = False           # table full (safety)
+                break
+        if store:
+            H_R[i] = (fp, a)           # linear probing (Section 7 Step 1)
             dbg_build_stored += 1
 
     if verbose:
@@ -732,15 +734,14 @@ def diff_correcting(R: bytes, V: bytes,
     v_c = 0
     v_s = 0
 
+    nV = len(V)
+    nR = len(R)
+
     # Rolling hash for O(1) per-position V fingerprinting.
-    rh_v_scan = _RollingHash(V, 0, p) if len(V) >= p else None
+    rh_v_scan = _RollingHash(V, 0, p) if nV >= p else None
     rh_v_pos = 0
 
-    while True:
-        # Step (3): if no more seeds in V, finish up.
-        if v_c + p > len(V):
-            break
-
+    while v_c + p <= nV:
         # Step (4): generate footprint at v_c, apply checkpoint test.
         if v_c == rh_v_pos:
             fp_v = rh_v_scan.value
@@ -762,17 +763,11 @@ def diff_correcting(R: bytes, V: bytes,
         i = f_v // m
         i0 = i
         r_offset = -1
-        while True:
+        entry = H_R[i]
+        while entry is not None and entry[0] != fp_v and (i := (i + 1) % C) != i0:
             entry = H_R[i]
-            if entry is None:
-                break                    # empty — end of chain
-            if entry[0] == fp_v:
-                r_offset = entry[1]; break
-            i += 1
-            if i == C:
-                i = 0
-            if i == i0:
-                break                    # full table — not found
+        if entry is not None and entry[0] == fp_v:
+            r_offset = entry[1]
         if r_offset < 0:
             v_c += 1
             continue
@@ -785,17 +780,37 @@ def diff_correcting(R: bytes, V: bytes,
 
         dbg_scan_match += 1
 
-        # Step (5): extend match forwards and backwards
-        # (Section 7, Step 5; Section 8.2 backward extension, p. 349)
-        fwd = p
-        while (v_c + fwd < len(V) and r_offset + fwd < len(R)
-               and V[v_c + fwd] == R[r_offset + fwd]):
-            fwd += 1
+        # Step (5): extend match forwards and backwards; binary search avoids
+        # per-byte Python loop by using C-speed slice equality (memcmp).
+        # Forward: first p bytes are the verified seed, search beyond them.
+        _fmax = min(nV - v_c, nR - r_offset)
+        if V[v_c:v_c + _fmax] == R[r_offset:r_offset + _fmax]:
+            fwd = _fmax
+        else:
+            _lo, _hi = p, _fmax
+            while _hi - _lo > 1:
+                _mid = (_lo + _hi) >> 1
+                if V[v_c:v_c + _mid] == R[r_offset:r_offset + _mid]:
+                    _lo = _mid
+                else:
+                    _hi = _mid
+            fwd = _lo
 
-        bwd = 0
-        while (v_c - bwd - 1 >= 0 and r_offset - bwd - 1 >= 0
-               and V[v_c - bwd - 1] == R[r_offset - bwd - 1]):
-            bwd += 1
+        # Backward: largest bwd s.t. V[v_c-bwd:v_c] == R[r_offset-bwd:r_offset].
+        _bmax = min(v_c, r_offset)
+        if _bmax == 0:
+            bwd = 0
+        elif V[v_c - _bmax:v_c] == R[r_offset - _bmax:r_offset]:
+            bwd = _bmax
+        else:
+            _lo, _hi = 0, _bmax
+            while _hi - _lo > 1:
+                _mid = (_lo + _hi) >> 1
+                if V[v_c - _mid:v_c] == R[r_offset - _mid:r_offset]:
+                    _lo = _mid
+                else:
+                    _hi = _mid
+            bwd = _lo
 
         v_m = v_c - bwd
         r_m = r_offset - bwd
@@ -1594,10 +1609,7 @@ def _read_with_crc(path: str):
         return b'', (crc ^ 0xFFFFFFFFFFFFFFFF).to_bytes(8, 'big')
     parts = []
     with open(path, 'rb') as f:
-        while True:
-            chunk = f.read(1 << 20)  # 1 MB chunks
-            if not chunk:
-                break
+        while chunk := f.read(1 << 20):  # 1 MB chunks
             for b in chunk:
                 crc = _CRC64_TABLE[(crc ^ b) & 0xFF] ^ (crc >> 8)
             parts.append(chunk)

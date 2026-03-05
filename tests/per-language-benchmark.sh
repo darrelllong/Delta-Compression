@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# per-language-benchmark.sh — Compare delta encoding speed across all 8 implementations
+# per-language-benchmark.sh — Compare delta encoding speed across all 9 implementations
 #
 # Encodes the Linux 5.1.0 → 5.1.1 kernel tarballs (~871 MB each) with onepass
 # and correcting using each implementation in sequence to avoid SSD contention.
@@ -10,7 +10,7 @@
 #   ./tests/per-language-benchmark.sh
 #
 # Requirements:
-#   - All 8 language toolchains installed
+#   - All 9 language toolchains installed
 #   - curl, gunzip (to download tarballs if not already cached)
 #   - ~2 GB disk in WORKDIR (two ~1 GB tarballs)
 #   - ~2.5 GB RAM (auto-sized hash tables for 871 MB kernel tarballs)
@@ -21,6 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKDIR="${WORKDIR:-/tmp/delta-kernel-test}"
 KERNEL_BASE="https://cdn.kernel.org/pub/linux/kernel/v5.x"
+HASKELL_BIN=""
 
 # ── Locate Java ───────────────────────────────────────────────────────────────
 
@@ -39,6 +40,12 @@ SCALA_LIB=$(grep 'SCALA_LIB\s*=' "$REPO_ROOT/src/scala/Makefile" | head -1 | sed
 if [[ ! -f "$SCALA_LIB" ]]; then
     echo "WARNING: Scala library not found at $SCALA_LIB — Scala will be skipped" >&2
     SCALA_LIB=""
+fi
+
+# ── Locate GHC / Haskell toolchain ───────────────────────────────────────────
+
+if ! command -v ghc >/dev/null 2>&1; then
+    echo "WARNING: ghc not found — Haskell will be skipped" >&2
 fi
 
 # ── Build all implementations ─────────────────────────────────────────────────
@@ -76,6 +83,13 @@ make -s 2>/dev/null
 echo "  Scala   — make"
 cd "$REPO_ROOT/src/scala"
 make -s
+
+if command -v ghc >/dev/null 2>&1; then
+    echo "  Haskell — make"
+    cd "$REPO_ROOT/src/haskell"
+    make -s
+    HASKELL_BIN="$REPO_ROOT/src/haskell/delta-hs"
+fi
 
 echo ""
 
@@ -160,6 +174,10 @@ if [[ -n "$JAVA" ]]; then
         run_lang "Scala" "$JAVA" \
             -cp "$REPO_ROOT/src/scala/delta.jar:$SCALA_LIB" delta.Delta encode
     fi
+fi
+
+if [[ -n "$HASKELL_BIN" && -x "$HASKELL_BIN" ]]; then
+    run_lang "Haskell" "$HASKELL_BIN" encode
 fi
 
 echo ""

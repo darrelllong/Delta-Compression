@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run all 8 language implementations through pilot-bench and emit a Markdown table.
+# Run all language implementations through pilot-bench and emit a Markdown table.
 # Columns: language, algorithm, MiB/s (throughput), ±CI (95%), runs-to-CI
 #
 # Workload: Shakespeare's complete works (~5.4 MB, ~5% byte mutations),
@@ -90,6 +90,14 @@ if [[ -x "$GO_BIN" ]]; then
     measure "Go-co"       Go      correcting
 else
     echo "# Go: skipped (binary not found: $GO_BIN)"
+fi
+
+HS_BIN="$REPO_ROOT/src/haskell/delta-hs"
+if [[ -x "$HS_BIN" ]]; then
+    measure "Haskell-op"  Haskell onepass
+    measure "Haskell-co"  Haskell correcting
+else
+    echo "# Haskell: skipped (binary not found: $HS_BIN)"
 fi
 
 measure "Python-op"   Python  onepass
