@@ -942,21 +942,21 @@ roughly 2 GB of RAM (~16 bytes per entry).
 
 ---
 
-## Just for fun: the Shakespeare authorship question
+## Stylometric side analysis: Shakespeare authorship
 
-Delta compression makes a reasonable (if tongue-in-cheek) stylometric probe.
+Delta compression can be used as a stylometric probe.
 If author A ghostwrote the works attributed to author B, their texts should
 share long, structured runs of vocabulary, phrasing, and syntactic idiom —
 exactly what the correcting algorithm is designed to find.  Short common-word
 matches (median ≤ 17 bytes, i.e. "of the", "in the") are noise; long matches
 (mean >> 100 bytes) are signal.
 
-We downloaded the complete works from Project Gutenberg and ran the
-correcting algorithm with Shakespeare as the reference.  All corpora were
+The complete works were collected from Project Gutenberg and compared with the
+correcting algorithm using Shakespeare as the reference.  All corpora were
 normalized before comparison: whitespace runs collapsed to a single space
 (`tr -s '[:space:]'`), eliminating OCR artefacts (extra spaces,
-mid-word hyphenation) that would otherwise suppress exact-match runs
-artificially.  Sizes below are post-normalization.
+mid-word hyphenation) that would otherwise suppress exact-match runs.
+Sizes below are post-normalization.
 
 | Corpus | Norm. size | Source |
 |--------|----------:|--------|
@@ -994,20 +994,21 @@ shortest mean copy (60.9 B), coverage barely above de Vere's.  Natural
 philosophy and moral essays share only function-word sequences with blank
 verse drama.
 
-**de Vere** is last among evaluable candidates.  Coverage is 5.6% but mean
+**de Vere** is last among evaluable candidates.  Coverage is 5.6% and mean
 copy length is only 36.1 B — just above the 16-byte detection floor,
 indistinguishable from common Elizabethan function phrases.  His
 authenticated corpus (~24 poems) is the smallest; the Oxfordian theory is
 essentially unfalsifiable by this method.
 
-The compression oracle says: Shakespeare wrote Shakespeare.
+Result summary: this experiment does not provide compression evidence for
+non-Shakespearean authorship.
 
 ### Burrows' Delta cross-check
 
 Delta compression measures literal byte-level reuse.  Stylometrics asks a
 different question: do the authors use the same function words in the same
 proportions, unconsciously?  Burrows' Delta (Argamon 2008 z-score formulation)
-is the standard tool.  We ran it on the same whitespace-normalized corpora
+is the standard tool.  It was run on the same whitespace-normalized corpora
 using `tests/burrows-delta.py` (stdlib-only Python, no external dependencies).
 
 Algorithm: top-N most frequent words across all corpora combined; per-corpus
