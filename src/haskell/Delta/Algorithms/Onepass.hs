@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE UnboxedTuples #-}
 
 module Delta.Algorithms.Onepass (diffOnepass) where
 
@@ -10,7 +11,8 @@ module Delta.Algorithms.Onepass (diffOnepass) where
 --   byte-compatible output with the other language implementations.
 
 import Control.Monad.ST (ST, runST)
-import Data.Array.ST (STUArray, newArray, readArray, writeArray)
+import Data.Array.Base (unsafeRead, unsafeWrite)
+import Data.Array.ST (STUArray, newArray)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.IntMap.Strict as IM
@@ -47,18 +49,27 @@ diffOnepassMutable r v opts = runST $ do
       qFloor = max 2 (optTableSize opts)
       numSeeds = max 0 (BS.length r - p + 1)
       q = nextPrime (max qFloor (numSeeds `div` max 1 p))
+      qW = fromIntegral q :: Word64
       vLen = BS.length v
       rLen = BS.length r
-
+      canV0 = vLen >= p
+      canR0 = rLen >= p
+      dummyRh = RollingHash 0 0 p
       rhV0
-        | vLen >= p = Just (initRollingHash v 0 p)
-        | otherwise = Nothing
+        | canV0 = initRollingHash v 0 p
+        | otherwise = dummyRh
       rhR0
-        | rLen >= p = Just (initRollingHash r 0 p)
-        | otherwise = Nothing
+        | canR0 = initRollingHash r 0 p
+        | otherwise = dummyRh
 
       sliceV a b = BS.take (b - a) (BS.drop a v)
       canAt bsLen pos = pos + p <= bsLen
+      -- WHAT:
+      --   Convert a fingerprint to its hash-table slot index.
+      -- WHY:
+      --   `unsafeRead`/`unsafeWrite` below are justified because `rem qW` keeps
+      --   all indices in [0, q-1] for q >= 2, matching array bounds exactly.
+      slotQ fp = fromIntegral (fp `rem` qW)
 
       finalize !vSFinal !acc
         | vSFinal < vLen = reverse (Add (sliceV vSFinal vLen) : acc)
@@ -73,85 +84,142 @@ diffOnepassMutable r v opts = runST $ do
   verR <- newArray (0, q - 1) (-1 :: Int) :: ST s (STUArray s Int Int)
 
   let putEntry !ver !fp !off fpArr offArr verArr = do
-        let !idx = slot q fp
-        curVer <- readArray verArr idx
+        let !idx = slotQ fp
+        -- WHAT:
+        --   Fast table probe on current slot generation.
+        -- WHY:
+        --   We use unsafe array access to remove per-op bounds checks in the
+        --   onepass hot loop; slotQ establishes the index invariant.
+        curVer <- unsafeRead verArr idx
         if curVer == ver
           then pure ()
           else do
             -- WHAT: retain-first per logical version.
             -- WHY: matches the paper's one-entry-per-slot behavior.
-            writeArray fpArr idx fp
-            writeArray offArr idx off
-            writeArray verArr idx ver
+            unsafeWrite fpArr idx fp
+            unsafeWrite offArr idx off
+            unsafeWrite verArr idx ver
 
-      getEntry !ver !fp fpArr offArr verArr = do
-        let !idx = slot q fp
-        curVer <- readArray verArr idx
+      getEntryOff !ver !fp fpArr offArr verArr = do
+        let !idx = slotQ fp
+        -- WHAT:
+        --   Fast slot lookup with version+fingerprint validation.
+        -- WHY:
+        --   Same safety argument as putEntry: idx is always in-range by slotQ.
+        curVer <- unsafeRead verArr idx
         if curVer /= ver
-          then pure Nothing
+          then pure (-1)
           else do
-            curFp <- readArray fpArr idx
+            curFp <- unsafeRead fpArr idx
             if curFp == fp
-              then Just <$> readArray offArr idx
-              else pure Nothing
+              then unsafeRead offArr idx
+              else pure (-1)
 
-      lookupFromV !ver !vC mFpV =
-        case mFpV of
-          Nothing -> pure Nothing
-          Just fpV' -> do
-            mr <- getEntry ver fpV' fpR offR verR
-            case mr of
-              Just rCand
-                | regionEquals v vC r rCand p -> pure (Just (rCand, vC))
-              _ -> pure Nothing
+      advanceFingerprint !bs !pos !rh !rhPos
+        | pos == rhPos = (# rhValue rh, rh, rhPos #)
+        | pos == rhPos + 1 =
+            let !oldB = fromIntegral (byteAt bs (pos - 1)) :: Word64
+                !newB = fromIntegral (byteAt bs (pos + p - 1)) :: Word64
+                !rh' = rollHash oldB newB rh
+             in (# rhValue rh', rh', pos #)
+        | otherwise =
+            -- WHAT: reinitialize rolling state after a non-adjacent jump.
+            -- WHY: jumps happen after accepted matches and keep state exact.
+            let !rh' = initRollingHash bs pos p
+             in (# rhValue rh', rh', pos #)
 
-      findMatch !ver !rC !vC mFpR mFpV =
-        case mFpR of
-          Just fpR' -> do
-            mv <- getEntry ver fpR' fpV offV verV
-            case mv of
-              Just vCand
-                | regionEquals r rC v vCand p -> pure (Just (rC, vCand))
-              _ -> lookupFromV ver vC mFpV
-          Nothing -> lookupFromV ver vC mFpV
-
-      loop !ver !rC !vC !vS !mRhV !mRhR !rhVPos !rhRPos !accRev = do
+      loop !ver !rC !vC !vS !rhV !rhR !rhVPos !rhRPos !accRev = do
         let !canV = canAt vLen vC
             !canR = canAt rLen rC
 
         if not canV && not canR
           then pure (finalize vS accRev)
           else do
-            let (!mV, !mRhV1, !rhVPos1) =
-                  if canV then calcFingerprint v p vC mRhV rhVPos else (Nothing, mRhV, rhVPos)
-                (!mR, !mRhR1, !rhRPos1) =
-                  if canR then calcFingerprint r p rC mRhR rhRPos else (Nothing, mRhR, rhRPos)
+            let (!fpVNow, !rhV1, !rhVPos1) =
+                  if canV
+                    then case advanceFingerprint v vC rhV rhVPos of
+                      (# !fp, !rh', !pos' #) -> (fp, rh', pos')
+                    else (0, rhV, rhVPos)
+                (!fpRNow, !rhR1, !rhRPos1) =
+                  if canR
+                    then case advanceFingerprint r rC rhR rhRPos of
+                      (# !fp, !rh', !pos' #) -> (fp, rh', pos')
+                    else (0, rhR, rhRPos)
 
-            case mV of
-              Just fp -> putEntry ver fp vC fpV offV verV
-              Nothing -> pure ()
-            case mR of
-              Just fp -> putEntry ver fp rC fpR offR verR
-              Nothing -> pure ()
+            if canV then putEntry ver fpVNow vC fpV offV verV else pure ()
+            if canR then putEntry ver fpRNow rC fpR offR verR else pure ()
 
-            mMatch <- findMatch ver rC vC mR mV
-            case mMatch of
-              Nothing ->
-                loop ver (rC + 1) (vC + 1) vS mRhV1 mRhR1 rhVPos1 rhRPos1 accRev
-              Just (!rM, !vM) -> do
-                let !ml = extendForward r v rM vM 0
-                if ml < p
-                  then loop ver (rC + 1) (vC + 1) vS mRhV1 mRhR1 rhVPos1 rhRPos1 accRev
+            -- WHAT:
+            --   Check candidate matches directly in the hot loop.
+            -- WHY:
+            --   This duplicated control flow intentionally avoids building
+            --   intermediate Maybe/pair values on every scan step.
+            if canR
+              then do
+                vCand <- getEntryOff ver fpRNow fpV offV verV
+                if vCand >= 0 && regionEquals r rC v vCand p
+                  then do
+                    let !rM = rC
+                        !vM = vCand
+                        !ml = extendForward r v rM vM 0
+                    if ml < p
+                      then loop ver (rC + 1) (vC + 1) vS rhV1 rhR1 rhVPos1 rhRPos1 accRev
+                      else
+                        let !accRev' =
+                              if vS < vM
+                                then Copy rM ml : Add (sliceV vS vM) : accRev
+                                else Copy rM ml : accRev
+                            !vNext = vM + ml
+                            !rNext = rM + ml
+                            -- WHAT: bump logical table version.
+                            -- WHY: O(1) "flush" with no physical clearing.
+                         in loop (ver + 1) rNext vNext vNext rhV1 rhR1 rhVPos1 rhRPos1 accRev'
                   else
-                    let !accRev' =
-                          if vS < vM
-                            then Copy rM ml : Add (sliceV vS vM) : accRev
-                            else Copy rM ml : accRev
-                        !vNext = vM + ml
-                        !rNext = rM + ml
-                        -- WHAT: bump logical table version.
-                        -- WHY: O(1) "flush" with no physical clearing.
-                     in loop (ver + 1) rNext vNext vNext mRhV1 mRhR1 rhVPos1 rhRPos1 accRev'
+                    if canV
+                      then do
+                        rCand <- getEntryOff ver fpVNow fpR offR verR
+                        if rCand >= 0 && regionEquals v vC r rCand p
+                          then do
+                            let !rM = rCand
+                                !vM = vC
+                                !ml = extendForward r v rM vM 0
+                            if ml < p
+                              then loop ver (rC + 1) (vC + 1) vS rhV1 rhR1 rhVPos1 rhRPos1 accRev
+                              else
+                                let !accRev' =
+                                      if vS < vM
+                                        then Copy rM ml : Add (sliceV vS vM) : accRev
+                                        else Copy rM ml : accRev
+                                    !vNext = vM + ml
+                                    !rNext = rM + ml
+                                    -- WHAT: bump logical table version.
+                                    -- WHY: O(1) "flush" with no physical clearing.
+                                 in loop (ver + 1) rNext vNext vNext rhV1 rhR1 rhVPos1 rhRPos1 accRev'
+                          else loop ver (rC + 1) (vC + 1) vS rhV1 rhR1 rhVPos1 rhRPos1 accRev
+                      else loop ver (rC + 1) (vC + 1) vS rhV1 rhR1 rhVPos1 rhRPos1 accRev
+              else
+                if canV
+                  then do
+                    rCand <- getEntryOff ver fpVNow fpR offR verR
+                    if rCand >= 0 && regionEquals v vC r rCand p
+                      then do
+                        let !rM = rCand
+                            !vM = vC
+                            !ml = extendForward r v rM vM 0
+                        if ml < p
+                          then loop ver (rC + 1) (vC + 1) vS rhV1 rhR1 rhVPos1 rhRPos1 accRev
+                          else
+                            let !accRev' =
+                                  if vS < vM
+                                    then Copy rM ml : Add (sliceV vS vM) : accRev
+                                    else Copy rM ml : accRev
+                                !vNext = vM + ml
+                                !rNext = rM + ml
+                                -- WHAT: bump logical table version.
+                                -- WHY: O(1) "flush" with no physical clearing.
+                             in loop (ver + 1) rNext vNext vNext rhV1 rhR1 rhVPos1 rhRPos1 accRev'
+                      else loop ver (rC + 1) (vC + 1) vS rhV1 rhR1 rhVPos1 rhRPos1 accRev
+                  else loop ver (rC + 1) (vC + 1) vS rhV1 rhR1 rhVPos1 rhRPos1 accRev
 
   loop 0 0 0 0 rhV0 rhR0 0 0 []
 

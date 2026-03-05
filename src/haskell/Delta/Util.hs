@@ -17,6 +17,11 @@ import Delta.Types
 import System.IO (hPutStrLn, stderr)
 
 byteAt :: ByteString -> Int -> Word8
+-- WHAT:
+--   Single-byte read primitive used in tight matching/hash loops.
+-- WHY:
+--   We intentionally use unsafe indexing to avoid repeated bounds checks in
+--   hot paths; all callers establish valid offsets before calling.
 byteAt = BSU.unsafeIndex
 
 regionEquals :: ByteString -> Int -> ByteString -> Int -> Int -> Bool
