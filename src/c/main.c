@@ -218,6 +218,336 @@ usage(void)
 	exit(1);
 }
 
+// ── Subcommand handlers ───────────────────────────────────────────────
+
+static void
+cmd_encode(int argc, char **argv)
+{
+	// encode <algo> <ref> <ver> <delta> [options]
+	if (argc < 6) { usage(); }
+
+	const char *algo_str  = argv[2];
+	const char *ref_path  = argv[3];
+	const char *ver_path  = argv[4];
+	const char *delta_path = argv[5];
+
+	delta_algorithm_t algo;
+	if (strcmp(algo_str, "greedy") == 0) {
+		algo = ALGO_GREEDY;
+	} else if (strcmp(algo_str, "onepass") == 0) {
+		algo = ALGO_ONEPASS;
+	} else if (strcmp(algo_str, "correcting") == 0) {
+		algo = ALGO_CORRECTING;
+	} else {
+		fprintf(stderr, "Unknown algorithm: %s\n", algo_str);
+		exit(1);
+	}
+
+	size_t seed_len   = DELTA_SEED_LEN;
+	size_t table_size = DELTA_TABLE_SIZE;
+	size_t max_table  = DELTA_MAX_TABLE_SIZE;
+	delta_flags_t flags = 0;
+	delta_cycle_policy_t policy = POLICY_LOCALMIN;
+	const char *policy_str = "localmin";
+
+	static struct option long_opts[] = {
+		{"seed-len",   required_argument, NULL, 's'},
+		{"table-size", required_argument, NULL, 't'},
+		{"max-table",  required_argument, NULL, 'x'},
+		{"inplace",    no_argument,       NULL, 'i'},
+		{"policy",     required_argument, NULL, 'p'},
+		{"verbose",    no_argument,       NULL, 'v'},
+		{"splay",      no_argument,       NULL, 'y'},
+		{NULL, 0, NULL, 0}
+	};
+
+	optind = 6;  // start parsing after positional args
+	int opt;
+	while ((opt = getopt_long(argc, argv, "", long_opts, NULL)) != -1) {
+		switch (opt) {
+		case 's': seed_len   = parse_size_suffix(optarg); break;
+		case 't': table_size = parse_size_suffix(optarg); break;
+		case 'x': max_table  = parse_size_suffix(optarg); break;
+		case 'i': flags = delta_flag_set(flags, DELTA_OPT_INPLACE); break;
+		case 'p':
+			policy_str = optarg;
+			policy = parse_policy(optarg);
+			break;
+		case 'v': flags = delta_flag_set(flags, DELTA_OPT_VERBOSE); break;
+		case 'y': flags = delta_flag_set(flags, DELTA_OPT_SPLAY); break;
+		default:  usage();
+		}
+	}
+
+	if (seed_len == 0) {
+		fprintf(stderr, "error: --seed-len must be >= 1\n");
+		exit(1);
+	}
+	if (table_size == 0) {
+		fprintf(stderr, "error: --table-size must be >= 1\n");
+		exit(1);
+	}
+
+	mapped_file_t r_file = map_file(ref_path);
+	mapped_file_t v_file = map_file(ver_path);
+
+	uint8_t src_crc[DELTA_CRC_SIZE];
+	uint8_t dst_crc[DELTA_CRC_SIZE];
+	delta_crc64_xz(r_file.data, r_file.size, src_crc);
+	delta_crc64_xz(v_file.data, v_file.size, dst_crc);
+
+	struct timespec t0, t1;
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+
+	delta_diff_options_t diff_opts = DELTA_DIFF_OPTIONS_DEFAULT;
+	diff_opts.p         = seed_len;
+	diff_opts.q         = table_size;
+	diff_opts.max_table = max_table;
+	diff_opts.flags     = flags;
+
+	bool inplace = delta_flag_get(flags, DELTA_OPT_INPLACE);
+	bool splay   = delta_flag_get(flags, DELTA_OPT_SPLAY);
+
+	delta_commands_t cmds = delta_diff(
+		algo, r_file.data, r_file.size,
+		v_file.data, v_file.size, &diff_opts);
+
+	delta_placed_commands_t placed;
+	if (inplace) {
+		placed = delta_make_inplace(r_file.data, r_file.size, &cmds, policy);
+	} else {
+		placed = delta_place_commands(&cmds);
+	}
+
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+	double elapsed = elapsed_sec(&t0, &t1);
+
+	delta_buffer_t delta_buf = delta_encode(&placed, inplace,
+	                                        v_file.size, src_crc, dst_crc);
+	write_file(delta_path, delta_buf.data, delta_buf.len);
+
+	delta_summary_t stats = delta_placed_summary(&placed);
+	double ratio = v_file.size == 0 ? 0.0
+	    : (double)delta_buf.len / v_file.size;
+
+	if (inplace) {
+		printf("Algorithm:    %s%s + in-place (%s)\n",
+		       algo_str, splay ? " [splay]" : "", policy_str);
+	} else {
+		printf("Algorithm:    %s%s\n",
+		       algo_str, splay ? " [splay]" : "");
+	}
+	printf("Reference:    %s (%zu bytes)\n", ref_path, r_file.size);
+	printf("Version:      %s (%zu bytes)\n", ver_path, v_file.size);
+	printf("Delta:        %s (%zu bytes)\n", delta_path, delta_buf.len);
+	printf("Compression:  %.4f (delta/version)\n", ratio);
+	printf("Commands:     %zu copies, %zu adds\n",
+	       stats.num_copies, stats.num_adds);
+	printf("Copy bytes:   %zu\n", stats.copy_bytes);
+	printf("Add bytes:    %zu\n", stats.add_bytes);
+	printf("Src CRC:      "); fprint_hex(stdout, src_crc, DELTA_CRC_SIZE); printf("\n");
+	printf("Dst CRC:      "); fprint_hex(stdout, dst_crc, DELTA_CRC_SIZE); printf("\n");
+	printf("Time:         %.3fs\n", elapsed);
+
+	delta_buffer_free(&delta_buf);
+	delta_placed_commands_free(&placed);
+	delta_commands_free(&cmds);
+	unmap_file(&r_file);
+	unmap_file(&v_file);
+}
+
+static void
+cmd_decode(int argc, char **argv)
+{
+	if (argc < 5) { usage(); }
+
+	const char *ref_path   = argv[2];
+	const char *delta_path = argv[3];
+	const char *out_path   = argv[4];
+
+	int ignore_hash = 0;
+	for (int a = 5; a < argc; a++) {
+		if (strcmp(argv[a], "--ignore-hash") == 0) {
+			ignore_hash = 1;
+		} else {
+			fprintf(stderr, "error: unknown decode option: %s\n", argv[a]);
+			exit(1);
+		}
+	}
+
+	mapped_file_t r_file = map_file(ref_path);
+	size_t delta_len;
+	uint8_t *delta_data = read_file(delta_path, &delta_len);
+
+	delta_decode_result_t dr = delta_decode(delta_data, delta_len);
+
+	// Pre-check: verify reference matches embedded src_crc.
+	{
+		uint8_t r_crc[DELTA_CRC_SIZE];
+		delta_crc64_xz(r_file.data, r_file.size, r_crc);
+		if (memcmp(r_crc, dr.src_crc, DELTA_CRC_SIZE) != 0) {
+			if (!ignore_hash) {
+				fprintf(stderr, "source file does not match delta: expected ");
+				fprint_hex(stderr, dr.src_crc, DELTA_CRC_SIZE);
+				fprintf(stderr, ", got ");
+				fprint_hex(stderr, r_crc, DELTA_CRC_SIZE);
+				fprintf(stderr, "\n");
+				exit(1);
+			}
+			fprintf(stderr, "warning: skipping source CRC check (--ignore-hash)\n");
+		}
+	}
+
+	delta_validate_placed_commands(&dr.commands, r_file.size,
+	                               dr.version_size, dr.inplace);
+
+	struct timespec t0, t1;
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+
+	delta_buffer_t out_buf;
+	if (dr.inplace) {
+		out_buf = delta_apply_delta_inplace(
+			r_file.data, r_file.size, &dr.commands, dr.version_size);
+	} else {
+		out_buf = delta_apply_placed(
+			r_file.data, &dr.commands, dr.version_size);
+	}
+
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+	double elapsed = elapsed_sec(&t0, &t1);
+
+	// Verify output before writing it to disk.
+	uint8_t out_crc[DELTA_CRC_SIZE];
+	delta_crc64_xz(out_buf.data, out_buf.len, out_crc);
+	if (memcmp(out_crc, dr.dst_crc, DELTA_CRC_SIZE) != 0) {
+		if (!ignore_hash) {
+			fprintf(stderr, "output integrity check failed\n");
+			exit(1);
+		}
+		fprintf(stderr, "warning: skipping output CRC check (--ignore-hash)\n");
+	}
+
+	write_file(out_path, out_buf.data, out_buf.len);
+
+	printf("Format:       %s\n", dr.inplace ? "in-place" : "standard");
+	printf("Reference:    %s (%zu bytes)\n", ref_path, r_file.size);
+	printf("Delta:        %s (%zu bytes)\n", delta_path, delta_len);
+	printf("Output:       %s (%zu bytes)\n", out_path, dr.version_size);
+	if (!ignore_hash) {
+		printf("Src CRC:      "); fprint_hex(stdout, dr.src_crc, DELTA_CRC_SIZE); printf("  OK\n");
+		printf("Dst CRC:      "); fprint_hex(stdout, dr.dst_crc, DELTA_CRC_SIZE); printf("  OK\n");
+	}
+	printf("Time:         %.3fs\n", elapsed);
+
+	delta_buffer_free(&out_buf);
+	delta_decode_result_free(&dr);
+	free(delta_data);
+	unmap_file(&r_file);
+}
+
+static void
+cmd_info(int argc, char **argv)
+{
+	if (argc < 3) { usage(); }
+
+	const char *delta_path = argv[2];
+	size_t delta_len;
+	uint8_t *delta_data = read_file(delta_path, &delta_len);
+
+	delta_decode_result_t dr    = delta_decode(delta_data, delta_len);
+	delta_summary_t       stats = delta_placed_summary(&dr.commands);
+
+	printf("Delta file:   %s (%zu bytes)\n", delta_path, delta_len);
+	printf("Format:       %s\n", dr.inplace ? "in-place" : "standard");
+	printf("Version size: %zu bytes\n", dr.version_size);
+	printf("Src CRC:      "); fprint_hex(stdout, dr.src_crc, DELTA_CRC_SIZE); printf("\n");
+	printf("Dst CRC:      "); fprint_hex(stdout, dr.dst_crc, DELTA_CRC_SIZE); printf("\n");
+	printf("Commands:     %zu\n", stats.num_commands);
+	printf("  Copies:     %zu (%zu bytes)\n", stats.num_copies, stats.copy_bytes);
+	printf("  Adds:       %zu (%zu bytes)\n", stats.num_adds,   stats.add_bytes);
+	printf("Output size:  %zu bytes\n", stats.total_output_bytes);
+
+	delta_decode_result_free(&dr);
+	free(delta_data);
+}
+
+static void
+cmd_inplace(int argc, char **argv)
+{
+	if (argc < 5) { usage(); }
+
+	const char *ref_path       = argv[2];
+	const char *delta_in_path  = argv[3];
+	const char *delta_out_path = argv[4];
+
+	delta_cycle_policy_t policy = POLICY_LOCALMIN;
+	const char *policy_str = "localmin";
+
+	for (int a = 5; a < argc; a++) {
+		if (strcmp(argv[a], "--policy") == 0) {
+			if (a + 1 >= argc) {
+				fprintf(stderr, "error: --policy: missing value\n");
+				exit(1);
+			}
+			policy_str = argv[++a];
+			policy = parse_policy(policy_str);
+		} else {
+			fprintf(stderr, "error: unknown inplace option: %s\n", argv[a]);
+			exit(1);
+		}
+	}
+
+	mapped_file_t r_file = map_file(ref_path);
+	size_t delta_len;
+	uint8_t *delta_data = read_file(delta_in_path, &delta_len);
+
+	delta_decode_result_t dr = delta_decode(delta_data, delta_len);
+	delta_validate_placed_commands(&dr.commands, r_file.size,
+	                               dr.version_size, dr.inplace);
+
+	if (dr.inplace) {
+		write_file(delta_out_path, delta_data, delta_len);
+		printf("Delta is already in-place format; copied unchanged.\n");
+		delta_decode_result_free(&dr);
+		free(delta_data);
+		unmap_file(&r_file);
+		return;
+	}
+
+	struct timespec t0, t1;
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+
+	delta_commands_t        cmds      = delta_unplace_commands(&dr.commands);
+	delta_placed_commands_t ip_placed = delta_make_inplace(
+		r_file.data, r_file.size, &cmds, policy);
+
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+	double elapsed = elapsed_sec(&t0, &t1);
+
+	delta_buffer_t ip_buf = delta_encode(&ip_placed, true,
+	                                     dr.version_size,
+	                                     dr.src_crc, dr.dst_crc);
+	write_file(delta_out_path, ip_buf.data, ip_buf.len);
+
+	delta_summary_t stats = delta_placed_summary(&ip_placed);
+	printf("Reference:    %s (%zu bytes)\n", ref_path, r_file.size);
+	printf("Input delta:  %s (%zu bytes)\n", delta_in_path, delta_len);
+	printf("Output delta: %s (%zu bytes)\n", delta_out_path, ip_buf.len);
+	printf("Format:       in-place (%s)\n", policy_str);
+	printf("Commands:     %zu copies, %zu adds\n",
+	       stats.num_copies, stats.num_adds);
+	printf("Copy bytes:   %zu\n", stats.copy_bytes);
+	printf("Add bytes:    %zu\n", stats.add_bytes);
+	printf("Time:         %.3fs\n", elapsed);
+
+	delta_buffer_free(&ip_buf);
+	delta_placed_commands_free(&ip_placed);
+	delta_commands_free(&cmds);
+	delta_decode_result_free(&dr);
+	free(delta_data);
+	unmap_file(&r_file);
+}
+
 // ── Main ──────────────────────────────────────────────────────────────
 
 int
@@ -225,340 +555,11 @@ main(int argc, char **argv)
 {
 	if (argc < 2) { usage(); }
 
-	if (strcmp(argv[1], "encode") == 0) {
-		// encode <algo> <ref> <ver> <delta> [options]
-		if (argc < 6) { usage(); }
-
-		const char *algo_str = argv[2];
-		const char *ref_path = argv[3];
-		const char *ver_path = argv[4];
-		const char *delta_path = argv[5];
-
-		delta_algorithm_t algo;
-		if (strcmp(algo_str, "greedy") == 0) {
-			algo = ALGO_GREEDY;
-		} else if (strcmp(algo_str, "onepass") == 0) {
-			algo = ALGO_ONEPASS;
-		} else if (strcmp(algo_str, "correcting") == 0) {
-			algo = ALGO_CORRECTING;
-		} else {
-			fprintf(stderr, "Unknown algorithm: %s\n", algo_str);
-			return 1;
-		}
-
-		size_t seed_len = DELTA_SEED_LEN;
-		size_t table_size = DELTA_TABLE_SIZE;
-		size_t max_table = DELTA_MAX_TABLE_SIZE;
-		delta_flags_t flags = 0;
-		delta_cycle_policy_t policy = POLICY_LOCALMIN;
-		const char *policy_str = "localmin";
-
-		// Parse options from argv[6..]
-		static struct option long_opts[] = {
-			{"seed-len",   required_argument, NULL, 's'},
-			{"table-size", required_argument, NULL, 't'},
-			{"max-table",  required_argument, NULL, 'x'},
-			{"inplace",    no_argument,       NULL, 'i'},
-			{"policy",     required_argument, NULL, 'p'},
-			{"verbose",    no_argument,       NULL, 'v'},
-			{"splay",      no_argument,       NULL, 'y'},
-			{NULL, 0, NULL, 0}
-		};
-
-		optind = 6;  // start parsing after positional args
-		int opt;
-		while ((opt = getopt_long(argc, argv, "", long_opts, NULL)) != -1) {
-			switch (opt) {
-			case 's': seed_len   = parse_size_suffix(optarg); break;
-			case 't': table_size = parse_size_suffix(optarg); break;
-			case 'x': max_table = parse_size_suffix(optarg); break;
-			case 'i': flags = delta_flag_set(flags, DELTA_OPT_INPLACE); break;
-			case 'p':
-				policy_str = optarg;
-				policy = parse_policy(optarg);
-				break;
-			case 'v': flags = delta_flag_set(flags, DELTA_OPT_VERBOSE); break;
-			case 'y': flags = delta_flag_set(flags, DELTA_OPT_SPLAY); break;
-			default: usage();
-			}
-		}
-
-		mapped_file_t r_file = map_file(ref_path);
-		mapped_file_t v_file = map_file(ver_path);
-
-		if (seed_len == 0) {
-			fprintf(stderr, "error: --seed-len must be >= 1\n");
-			exit(1);
-		}
-		if (table_size == 0) {
-			fprintf(stderr, "error: --table-size must be >= 1\n");
-			exit(1);
-		}
-
-		uint8_t src_crc[DELTA_CRC_SIZE];
-		uint8_t dst_crc[DELTA_CRC_SIZE];
-		delta_crc64_xz(r_file.data, r_file.size, src_crc);
-		delta_crc64_xz(v_file.data, v_file.size, dst_crc);
-
-		struct timespec t0, t1;
-		clock_gettime(CLOCK_MONOTONIC, &t0);
-
-		delta_diff_options_t diff_opts = DELTA_DIFF_OPTIONS_DEFAULT;
-		diff_opts.p = seed_len;
-		diff_opts.q = table_size;
-		diff_opts.max_table = max_table;
-		diff_opts.flags = flags;
-
-		bool inplace = delta_flag_get(flags, DELTA_OPT_INPLACE);
-		bool splay = delta_flag_get(flags, DELTA_OPT_SPLAY);
-
-		delta_commands_t cmds = delta_diff(
-			algo, r_file.data, r_file.size,
-			v_file.data, v_file.size, &diff_opts);
-
-		delta_placed_commands_t placed;
-		if (inplace) {
-			placed = delta_make_inplace(r_file.data, r_file.size,
-			                            &cmds, policy);
-		} else {
-			placed = delta_place_commands(&cmds);
-		}
-
-		clock_gettime(CLOCK_MONOTONIC, &t1);
-		double elapsed = elapsed_sec(&t0, &t1);
-
-		delta_buffer_t delta_buf = delta_encode(&placed, inplace,
-		                                        v_file.size,
-		                                        src_crc, dst_crc);
-		write_file(delta_path, delta_buf.data, delta_buf.len);
-
-		delta_summary_t stats = delta_placed_summary(&placed);
-		double ratio = v_file.size == 0 ? 0.0
-		    : (double)delta_buf.len / v_file.size;
-
-		if (inplace) {
-			printf("Algorithm:    %s%s + in-place (%s)\n",
-			       algo_str, splay ? " [splay]" : "", policy_str);
-		} else {
-			printf("Algorithm:    %s%s\n",
-			       algo_str, splay ? " [splay]" : "");
-		}
-		printf("Reference:    %s (%zu bytes)\n", ref_path, r_file.size);
-		printf("Version:      %s (%zu bytes)\n", ver_path, v_file.size);
-		printf("Delta:        %s (%zu bytes)\n", delta_path, delta_buf.len);
-		printf("Compression:  %.4f (delta/version)\n", ratio);
-		printf("Commands:     %zu copies, %zu adds\n",
-		       stats.num_copies, stats.num_adds);
-		printf("Copy bytes:   %zu\n", stats.copy_bytes);
-		printf("Add bytes:    %zu\n", stats.add_bytes);
-		printf("Src CRC:      "); fprint_hex(stdout, src_crc, DELTA_CRC_SIZE); printf("\n");
-		printf("Dst CRC:      "); fprint_hex(stdout, dst_crc, DELTA_CRC_SIZE); printf("\n");
-		printf("Time:         %.3fs\n", elapsed);
-
-		delta_buffer_free(&delta_buf);
-		delta_placed_commands_free(&placed);
-		delta_commands_free(&cmds);
-		unmap_file(&r_file);
-		unmap_file(&v_file);
-
-	} else if (strcmp(argv[1], "decode") == 0) {
-		if (argc < 5) { usage(); }
-
-		const char *ref_path = argv[2];
-		const char *delta_path = argv[3];
-		const char *out_path = argv[4];
-
-		int ignore_hash = 0;
-		for (int a = 5; a < argc; a++) {
-			if (strcmp(argv[a], "--ignore-hash") == 0) {
-				ignore_hash = 1;
-			} else {
-				fprintf(stderr, "error: unknown decode option: %s\n", argv[a]);
-				exit(1);
-			}
-		}
-
-		mapped_file_t r_file = map_file(ref_path);
-		size_t delta_len;
-		uint8_t *delta_data = read_file(delta_path, &delta_len);
-
-		delta_decode_result_t dr = delta_decode(delta_data, delta_len);
-
-		// Pre-check: verify reference matches embedded src_crc.
-		{
-			uint8_t r_crc[DELTA_CRC_SIZE];
-			delta_crc64_xz(r_file.data, r_file.size, r_crc);
-			if (memcmp(r_crc, dr.src_crc, DELTA_CRC_SIZE) != 0) {
-				if (!ignore_hash) {
-					fprintf(stderr,
-					    "source file does not match delta: "
-					    "expected "); fprint_hex(stderr, dr.src_crc, DELTA_CRC_SIZE);
-					fprintf(stderr, ", got "); fprint_hex(stderr, r_crc, DELTA_CRC_SIZE);
-					fprintf(stderr, "\n");
-					exit(1);
-				}
-				fprintf(stderr, "warning: skipping source CRC check (--ignore-hash)\n");
-			}
-		}
-
-		delta_validate_placed_commands(&dr.commands, r_file.size,
-		                               dr.version_size, dr.inplace);
-
-		struct timespec t0, t1;
-		clock_gettime(CLOCK_MONOTONIC, &t0);
-
-		delta_buffer_t out_buf;
-		if (dr.inplace) {
-			out_buf = delta_apply_delta_inplace(
-				r_file.data, r_file.size,
-				&dr.commands, dr.version_size);
-		} else {
-			out_buf = delta_apply_placed(
-				r_file.data, &dr.commands, dr.version_size);
-		}
-
-		clock_gettime(CLOCK_MONOTONIC, &t1);
-		double elapsed = elapsed_sec(&t0, &t1);
-
-		// Verify output before writing it to disk.
-		uint8_t out_crc[DELTA_CRC_SIZE];
-		delta_crc64_xz(out_buf.data, out_buf.len, out_crc);
-
-		if (memcmp(out_crc, dr.dst_crc, DELTA_CRC_SIZE) != 0) {
-			if (!ignore_hash) {
-				fprintf(stderr, "output integrity check failed\n");
-				exit(1);
-			}
-			fprintf(stderr, "warning: skipping output CRC check (--ignore-hash)\n");
-		}
-
-		write_file(out_path, out_buf.data, out_buf.len);
-
-		printf("Format:       %s\n", dr.inplace ? "in-place" : "standard");
-		printf("Reference:    %s (%zu bytes)\n", ref_path, r_file.size);
-		printf("Delta:        %s (%zu bytes)\n", delta_path, delta_len);
-		printf("Output:       %s (%zu bytes)\n", out_path, dr.version_size);
-		if (!ignore_hash) {
-			printf("Src CRC:      "); fprint_hex(stdout, dr.src_crc, DELTA_CRC_SIZE); printf("  OK\n");
-			printf("Dst CRC:      "); fprint_hex(stdout, dr.dst_crc, DELTA_CRC_SIZE); printf("  OK\n");
-		}
-		printf("Time:         %.3fs\n", elapsed);
-
-		delta_buffer_free(&out_buf);
-		delta_decode_result_free(&dr);
-		free(delta_data);
-		unmap_file(&r_file);
-
-	} else if (strcmp(argv[1], "info") == 0) {
-		if (argc < 3) { usage(); }
-
-		const char *delta_path = argv[2];
-		size_t delta_len;
-		uint8_t *delta_data = read_file(delta_path, &delta_len);
-
-		delta_decode_result_t dr = delta_decode(delta_data, delta_len);
-		delta_summary_t stats = delta_placed_summary(&dr.commands);
-
-		printf("Delta file:   %s (%zu bytes)\n", delta_path, delta_len);
-		printf("Format:       %s\n", dr.inplace ? "in-place" : "standard");
-		printf("Version size: %zu bytes\n", dr.version_size);
-		printf("Src CRC:      "); fprint_hex(stdout, dr.src_crc, DELTA_CRC_SIZE); printf("\n");
-		printf("Dst CRC:      "); fprint_hex(stdout, dr.dst_crc, DELTA_CRC_SIZE); printf("\n");
-		printf("Commands:     %zu\n", stats.num_commands);
-		printf("  Copies:     %zu (%zu bytes)\n",
-		       stats.num_copies, stats.copy_bytes);
-		printf("  Adds:       %zu (%zu bytes)\n",
-		       stats.num_adds, stats.add_bytes);
-		printf("Output size:  %zu bytes\n", stats.total_output_bytes);
-
-		delta_decode_result_free(&dr);
-		free(delta_data);
-
-	} else if (strcmp(argv[1], "inplace") == 0) {
-		if (argc < 5) { usage(); }
-
-		const char *ref_path = argv[2];
-		const char *delta_in_path = argv[3];
-		const char *delta_out_path = argv[4];
-
-		delta_cycle_policy_t policy = POLICY_LOCALMIN;
-		const char *policy_str = "localmin";
-
-		// Parse optional --policy
-		{
-			int a;
-			for (a = 5; a < argc; a++) {
-				if (strcmp(argv[a], "--policy") == 0) {
-					if (a + 1 >= argc) {
-						fprintf(stderr, "error: --policy: missing value\n");
-						exit(1);
-					}
-					policy_str = argv[++a];
-					policy = parse_policy(policy_str);
-				} else {
-					fprintf(stderr, "error: unknown inplace option: %s\n", argv[a]);
-					exit(1);
-				}
-			}
-		}
-
-		mapped_file_t r_file = map_file(ref_path);
-		size_t delta_len;
-			uint8_t *delta_data = read_file(delta_in_path, &delta_len);
-
-			delta_decode_result_t dr = delta_decode(delta_data, delta_len);
-			delta_validate_placed_commands(&dr.commands, r_file.size,
-			                               dr.version_size, dr.inplace);
-
-			if (dr.inplace) {
-				write_file(delta_out_path, delta_data, delta_len);
-			printf("Delta is already in-place format; "
-			       "copied unchanged.\n");
-			delta_decode_result_free(&dr);
-			free(delta_data);
-			unmap_file(&r_file);
-			return 0;
-		}
-
-		struct timespec t0, t1;
-		clock_gettime(CLOCK_MONOTONIC, &t0);
-
-		delta_commands_t cmds = delta_unplace_commands(&dr.commands);
-		delta_placed_commands_t ip_placed = delta_make_inplace(
-			r_file.data, r_file.size, &cmds, policy);
-
-		clock_gettime(CLOCK_MONOTONIC, &t1);
-		double elapsed = elapsed_sec(&t0, &t1);
-
-		delta_buffer_t ip_buf = delta_encode(&ip_placed, true,
-		                                     dr.version_size,
-		                                     dr.src_crc, dr.dst_crc);
-		write_file(delta_out_path, ip_buf.data, ip_buf.len);
-
-		delta_summary_t stats = delta_placed_summary(&ip_placed);
-		printf("Reference:    %s (%zu bytes)\n",
-		       ref_path, r_file.size);
-		printf("Input delta:  %s (%zu bytes)\n",
-		       delta_in_path, delta_len);
-		printf("Output delta: %s (%zu bytes)\n",
-		       delta_out_path, ip_buf.len);
-		printf("Format:       in-place (%s)\n", policy_str);
-		printf("Commands:     %zu copies, %zu adds\n",
-		       stats.num_copies, stats.num_adds);
-		printf("Copy bytes:   %zu\n", stats.copy_bytes);
-		printf("Add bytes:    %zu\n", stats.add_bytes);
-		printf("Time:         %.3fs\n", elapsed);
-
-		delta_buffer_free(&ip_buf);
-		delta_placed_commands_free(&ip_placed);
-		delta_commands_free(&cmds);
-		delta_decode_result_free(&dr);
-		free(delta_data);
-		unmap_file(&r_file);
-
-	} else {
-		usage();
-	}
+	if      (strcmp(argv[1], "encode")  == 0) { cmd_encode(argc, argv); }
+	else if (strcmp(argv[1], "decode")  == 0) { cmd_decode(argc, argv); }
+	else if (strcmp(argv[1], "info")    == 0) { cmd_info(argc, argv); }
+	else if (strcmp(argv[1], "inplace") == 0) { cmd_inplace(argc, argv); }
+	else                                       { usage(); }
 
 	return 0;
 }
