@@ -268,9 +268,9 @@ byte-identical delta files.  Python is excluded (see section header).
 | Rust           | 4.5s |
 | C++            | 4.5s |
 | Go             | 4.9s |
+| Haskell        | 5.1s |
 | Java           | 6.0s |
 | Kotlin         | 6.1s |
-| Haskell        | 6.2s |
 | Scala          | 6.2s |
 
 **correcting** (delta: 6.6 MB, ratio: 0.79%)
@@ -286,20 +286,20 @@ byte-identical delta files.  Python is excluded (see section header).
 | C              | 19.2s |
 | C++            | 19.4s |
 
-C leads on onepass; Rust dominates correcting by ~20%.  The JVM group
-(Java/Kotlin/Scala) clusters near the top on correcting — the JIT
-optimises the inner hash-probe loop well on a warm run.  Haskell (STUArray
-hot paths) lands just above the JVM group on onepass and just below C on
-correcting.  C and C++ are slower than the JVM on correcting; the hash
-table implementation has not been tuned as aggressively as in Rust.  These
+C leads on onepass; Rust dominates correcting by ~20%.  Haskell (STUArray
+hot paths with reduced heap churn) overtakes the entire JVM group on onepass,
+landing between Go and Java.  The JVM group (Java/Kotlin/Scala) clusters near
+the top on correcting — the JIT optimises the inner hash-probe loop well on a
+warm run.  C and C++ are slower than the JVM on correcting; the hash table
+implementation has not been tuned as aggressively as in Rust.  These
 are single-run measurements; use `bench_all.sh` for statistically rigorous CI.
 
 ```mermaid
 xychart-beta
     title "Per-language onepass encode time (s) — linux-5.1→5.1.1, Dyson M4"
-    x-axis ["C", "Rust", "C++", "Go", "Java", "Kotlin", "Haskell", "Scala"]
+    x-axis ["C", "Rust", "C++", "Go", "Haskell", "Java", "Kotlin", "Scala"]
     y-axis "seconds" 0 --> 22
-    bar [4.0, 4.5, 4.5, 4.9, 6.0, 6.1, 6.2, 6.2]
+    bar [4.0, 4.5, 4.5, 4.9, 5.1, 6.0, 6.1, 6.2]
 ```
 
 ```mermaid
@@ -329,10 +329,12 @@ byte-compatible output:
 - Interval-sweep CRWI edge construction (`O(n log n + E)`).
 
 Measured on linux-5.1 → linux-5.1.1 on Dyson (M4):
-Rust = 4.5s onepass / 9.9s correcting, Haskell = 6.2s onepass /
+Rust = 4.5s onepass / 9.9s correcting, Haskell = 5.1s onepass /
 17.5s correcting.  Earlier purely persistent versions were over 100s
 on correcting for the same pair, so local mutability was the primary
-performance lever.
+performance lever.  The onepass improvement from 6.2s to 5.1s (−18%)
+came from eliminating per-iteration heap allocation in the seed-table
+inner loop.
 
 ### Throughput with confidence intervals (pilot-bench, Shakespeare)
 
@@ -349,8 +351,8 @@ pilot-bench.  Dyson (Apple M4).
 | C        | 34.19 | ±2.18 |  30 |
 | C++      | 30.87 | ±2.21 |  30 |
 | Java     | 25.35 | ±0.93 |  42 |
+| Haskell  | 23.71 | ±0.79 |  37 |
 | Kotlin   | 21.93 | ±1.04 |  36 |
-| Haskell  | 19.40 | ±0.55 |  65 |
 | Scala    | 17.09 | ±0.56 |  30 |
 
 **correcting**
@@ -371,15 +373,15 @@ shifts vs. the 871 MB kernel tarball: Rust leads by a wide margin (LLVM
 vectorises the inner loop aggressively at small-file scale), Go sits second
 (GC adds less overhead than JVM startup), and the JVM languages spread out
 (Scala falls behind Java/Kotlin due to JIT warmup cost).  Haskell (STUArray
-hot paths) slots between Kotlin and Scala on onepass, and beats Kotlin while
-nearly matching Java on correcting.
+hot paths, reduced heap churn) now lands between Java and Kotlin on onepass,
+and beats Kotlin while nearly matching Java on correcting.
 
 ```mermaid
 xychart-beta
     title "Onepass throughput (MiB/s) — Shakespeare, pilot-bench, Dyson M4"
-    x-axis ["Rust", "Go", "C", "C++", "Java", "Kotlin", "Haskell", "Scala"]
+    x-axis ["Rust", "Go", "C", "C++", "Java", "Haskell", "Kotlin", "Scala"]
     y-axis "MiB/s" 0 --> 55
-    bar [49.33, 44.49, 34.19, 30.87, 25.35, 21.93, 19.40, 17.09]
+    bar [49.33, 44.49, 34.19, 30.87, 25.35, 23.71, 21.93, 17.09]
 ```
 
 ```mermaid
@@ -428,9 +430,9 @@ on compute-intensive paths.
 | Rust     | 4.5s | 5.7s |  6.4s |
 | C++      | 4.5s | 6.0s |  6.5s |
 | Go       | 4.9s | 7.0s |  7.7s |
+| Haskell  | 5.1s | 7.2s |  8.6s |
 | Java     | 6.0s | 8.9s | 10.6s |
 | Kotlin   | 6.1s | 8.9s | 10.6s |
-| Haskell  | 6.2s | 7.7s |  8.7s |
 | Scala    | 6.2s | 9.0s | 10.7s |
 
 **correcting**
@@ -457,8 +459,8 @@ on compute-intensive paths.
 | C        | 34.19 | 25.17 | 15.23 |
 | C++      | 30.87 | 23.47 | 15.14 |
 | Java     | 25.35 | 18.33 | 10.39 |
+| Haskell  | 23.71 | 14.09 |  7.96 |
 | Kotlin   | 21.93 | 16.34 |  8.10 |
-| Haskell  | 19.40 | 14.09 |  7.96 |
 | Scala    | 17.09 | 12.89 |  6.70 |
 
 **correcting**
@@ -484,9 +486,9 @@ optimisation being less sensitive to CPU generation than the JIT tier-up delay.
 ```mermaid
 xychart-beta
     title "Onepass throughput (MiB/s) — Shakespeare, three machines"
-    x-axis ["Rust", "Go", "C", "C++", "Java", "Kotlin", "Haskell", "Scala"]
+    x-axis ["Rust", "Go", "C", "C++", "Java", "Haskell", "Kotlin", "Scala"]
     y-axis "MiB/s" 0 --> 55
-    bar [49.33, 44.49, 34.19, 30.87, 25.35, 21.93, 19.40, 17.09]
+    bar [49.33, 44.49, 34.19, 30.87, 25.35, 23.71, 21.93, 17.09]
 ```
 
 ```mermaid
