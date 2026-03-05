@@ -12,6 +12,7 @@ import Delta.Diff
 import Delta.Encoding
 import Delta.Inplace
 import Delta.Types
+import Delta.Util (emitStats)
 import System.Environment (getArgs)
 import System.Exit (die)
 import System.IO (hPutStrLn, stderr)
@@ -58,6 +59,7 @@ runEncode args =
               else (placeCommands commands, 0)
           deltaBytes = encodeDelta placed (encInplace cfg) (BS.length v) srcCrc dstCrc
           stats = placedSummary placed
+      emitStats (encVerbose cfg) commands
       _ <- evaluate (BS.length deltaBytes)
       t1 <- getCurrentTime
 
@@ -268,9 +270,9 @@ parseSizeSuffix s0 =
         _ -> Left ("invalid number: '" <> numStr <> "'")
 
 trim :: String -> String
-trim = f . f
+trim = dropLeading . reverse . dropLeading . reverse
   where
-    f = reverse . dropWhile (`elem` [' ', '\t', '\n', '\r'])
+    dropLeading = dropWhile (`elem` [' ', '\t', '\n', '\r'])
 
 data EncodeCfg = EncodeCfg
   { encSeedLen :: !Int

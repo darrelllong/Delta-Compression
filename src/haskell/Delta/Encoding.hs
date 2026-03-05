@@ -121,28 +121,28 @@ isInplaceDelta dataBytes =
     && ((BS.index dataBytes 4 .&. deltaFlagInplace) /= 0)
 
 crc64XZ :: ByteString -> Word64
-crc64XZ = finalize . BS.foldl' step 0xFFFF_FFFF_FFFF_FFFF
+crc64XZ = finalize . BS.foldl' crcStep 0xFFFF_FFFF_FFFF_FFFF
   where
-    poly :: Word64
-    poly = 0xC96C_5795_D787_0F42
-
-    table :: UArray Int Word64
-    table = listArray (0, 255) [entry i | i <- [0 .. 255]]
-
-    entry :: Int -> Word64
-    entry i = iter 8 (fromIntegral i)
-      where
-        iter 0 c = c
-        iter n c
-          | c .&. 1 == 1 = iter (n - 1) ((c `shiftR` 1) `xor` poly)
-          | otherwise = iter (n - 1) (c `shiftR` 1)
-
-    step :: Word64 -> Word8 -> Word64
-    step crc b =
-      let idx = fromIntegral ((crc `xor` fromIntegral b) .&. 0xFF)
-       in (table ! idx) `xor` (crc `shiftR` 8)
-
     finalize crc = crc `xor` 0xFFFF_FFFF_FFFF_FFFF
+    crcStep crc b =
+      let idx = fromIntegral ((crc `xor` fromIntegral b) .&. 0xFF)
+       in (crc64Table ! idx) `xor` (crc `shiftR` 8)
+
+crc64Poly :: Word64
+crc64Poly = 0xC96C_5795_D787_0F42
+
+{-# NOINLINE crc64Table #-}
+crc64Table :: UArray Int Word64
+crc64Table = listArray (0, 255) [crc64Entry i | i <- [0 .. 255]]
+
+crc64Entry :: Int -> Word64
+crc64Entry i = iter 8 (fromIntegral i)
+  where
+    iter :: Int -> Word64 -> Word64
+    iter 0 c = c
+    iter n c
+      | c .&. 1 == 1 = iter (n - 1) ((c `shiftR` 1) `xor` crc64Poly)
+      | otherwise = iter (n - 1) (c `shiftR` 1)
 
 hexCrc64 :: Word64 -> String
 hexCrc64 w = pad16 (map toLower (showHex w ""))

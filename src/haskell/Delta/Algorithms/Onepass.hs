@@ -77,7 +77,7 @@ diffOnepassMutable r v opts = runST $ do
               then Just <$> readArray offArr idx
               else pure Nothing
 
-      lookupFromV !ver !rC !vC mFpV =
+      lookupFromV !ver !vC mFpV =
         case mFpV of
           Nothing -> pure Nothing
           Just fpV' -> do
@@ -94,8 +94,8 @@ diffOnepassMutable r v opts = runST $ do
             case mv of
               Just vCand
                 | regionEquals r rC v vCand p -> pure (Just (rC, vCand))
-              _ -> lookupFromV ver rC vC mFpV
-          Nothing -> lookupFromV ver rC vC mFpV
+              _ -> lookupFromV ver vC mFpV
+          Nothing -> lookupFromV ver vC mFpV
 
       loop !ver !rC !vC !vS !mRhV !mRhR !rhVPos !rhRPos !accRev = do
         let !canV = canAt vLen vC

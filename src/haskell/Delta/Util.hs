@@ -20,30 +20,43 @@ byteAt :: ByteString -> Int -> Word8
 byteAt = BSU.unsafeIndex
 
 regionEquals :: ByteString -> Int -> ByteString -> Int -> Int -> Bool
-regionEquals a aOff b bOff len = go 0
-  where
-    go !i
-      | i >= len = True
-      | byteAt a (aOff + i) /= byteAt b (bOff + i) = False
-      | otherwise = go (i + 1)
+regionEquals a aOff b bOff len
+  | len <= 0 = True
+  | otherwise =
+      BS.take len (BS.drop aOff a) == BS.take len (BS.drop bOff b)
+
+chunkSize :: Int
+chunkSize = 32
 
 extendForward :: ByteString -> ByteString -> Int -> Int -> Int -> Int
-extendForward r v rOff vOff start = go start
+extendForward r v rOff vOff start = goChunk start
   where
     maxN = min (BS.length v - vOff) (BS.length r - rOff)
-    go !n
+    goChunk !n
+      | n + chunkSize <= maxN
+      , regionEquals v (vOff + n) r (rOff + n) chunkSize =
+          goChunk (n + chunkSize)
+      | otherwise = goByte n
+
+    goByte !n
       | n >= maxN = n
       | byteAt v (vOff + n) /= byteAt r (rOff + n) = n
-      | otherwise = go (n + 1)
+      | otherwise = goByte (n + 1)
 
 extendBackward :: ByteString -> ByteString -> Int -> Int -> Int
-extendBackward r v rOff vOff = go 0
+extendBackward r v rOff vOff = goChunk 0
   where
     maxN = min vOff rOff
-    go !n
+    goChunk !n
+      | n + chunkSize <= maxN
+      , regionEquals v (vOff - n - chunkSize) r (rOff - n - chunkSize) chunkSize =
+          goChunk (n + chunkSize)
+      | otherwise = goByte n
+
+    goByte !n
       | n >= maxN = n
       | byteAt v (vOff - n - 1) /= byteAt r (rOff - n - 1) = n
-      | otherwise = go (n + 1)
+      | otherwise = goByte (n + 1)
 
 emitStats :: Bool -> [Command] -> IO ()
 emitStats False _ = pure ()

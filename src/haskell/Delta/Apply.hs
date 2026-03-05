@@ -65,11 +65,22 @@ applyPlaced ref versionSize cmds
 
     applyOne :: STUArray s Int Word8 -> PlacedCommand -> ST s ()
     applyOne out (PlacedCopy src dst len) =
-      forM_ [0 .. len - 1] $ \i ->
-        writeArray out (dst + i) (byteAt ref (src + i))
+      copyFromRef 0
+      where
+        copyFromRef !i
+          | i >= len = pure ()
+          | otherwise = do
+              writeArray out (dst + i) (byteAt ref (src + i))
+              copyFromRef (i + 1)
     applyOne out (PlacedAdd dst bytes) =
-      forM_ [0 .. BS.length bytes - 1] $ \i ->
-        writeArray out (dst + i) (byteAt bytes i)
+      copyBytes 0
+      where
+        !len = BS.length bytes
+        copyBytes !i
+          | i >= len = pure ()
+          | otherwise = do
+              writeArray out (dst + i) (byteAt bytes i)
+              copyBytes (i + 1)
 
 applyPlacedInplace :: ByteString -> Int -> [PlacedCommand] -> ByteString
 applyPlacedInplace ref versionSize cmds
@@ -81,25 +92,47 @@ applyPlacedInplace ref versionSize cmds
     arr :: UArray Int Word8
     arr = runSTUArray $ do
       out <- newArray (0, bufSize - 1) 0
-      forM_ [0 .. BS.length ref - 1] $ \i ->
-        writeArray out i (byteAt ref i)
+      copyRefPrefix out 0
       forM_ cmds (applyOne out)
       pure out
+
+    copyRefPrefix :: STUArray s Int Word8 -> Int -> ST s ()
+    copyRefPrefix out !i
+      | i >= BS.length ref = pure ()
+      | otherwise = do
+          writeArray out i (byteAt ref i)
+          copyRefPrefix out (i + 1)
 
     applyOne :: STUArray s Int Word8 -> PlacedCommand -> ST s ()
     applyOne out (PlacedCopy src dst len)
       | len <= 0 = pure ()
       | dst <= src || dst >= src + len =
-          forM_ [0 .. len - 1] $ \i -> do
-            b <- readArray out (src + i)
-            writeArray out (dst + i) b
+          copyForward 0
       | otherwise =
-          forM_ [len - 1, len - 2 .. 0] $ \i -> do
-            b <- readArray out (src + i)
-            writeArray out (dst + i) b
+          copyBackward (len - 1)
+      where
+        copyForward !i
+          | i >= len = pure ()
+          | otherwise = do
+              b <- readArray out (src + i)
+              writeArray out (dst + i) b
+              copyForward (i + 1)
+
+        copyBackward !i
+          | i < 0 = pure ()
+          | otherwise = do
+              b <- readArray out (src + i)
+              writeArray out (dst + i) b
+              copyBackward (i - 1)
     applyOne out (PlacedAdd dst bytes) =
-      forM_ [0 .. BS.length bytes - 1] $ \i ->
-        writeArray out (dst + i) (byteAt bytes i)
+      copyBytes 0
+      where
+        !len = BS.length bytes
+        copyBytes !i
+          | i >= len = pure ()
+          | otherwise = do
+              writeArray out (dst + i) (byteAt bytes i)
+              copyBytes (i + 1)
 
 validatePlacedCommands :: Int -> Int -> Bool -> [PlacedCommand] -> Either String ()
 validatePlacedCommands referenceSize versionSize inplace cmds =

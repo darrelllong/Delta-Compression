@@ -251,11 +251,11 @@ markRemoved v st =
 pickVictim :: CyclePolicy -> Int -> Array Int CopyInfo -> IM.IntMap [Int] -> IS.IntSet -> SccState -> (Int, SccState)
 pickVictim policy n copyArr adj removed st0 =
   case policy of
-    Constant -> (firstRemainingOrDefault, st0)
+    Constant -> (firstRemainingOrDie, st0)
     Localmin -> choose st0
   where
     choose st
-      | ssPtr st >= ssCount st = (firstRemainingOrDefault, st)
+      | ssPtr st >= ssCount st = (firstRemainingOrDie, st)
       | IM.findWithDefault 0 (ssPtr st) (ssActive st) == 0 =
           choose st {ssPtr = ssPtr st + 1, ssScan = 0}
       | otherwise =
@@ -268,12 +268,10 @@ pickVictim policy n copyArr adj removed st0 =
                 Just cycleNodes -> (minimumBy (comparing key) cycleNodes, st')
                 Nothing -> choose st' {ssPtr = sid + 1, ssScan = 0}
 
-    firstRemainingOrDefault =
+    firstRemainingOrDie =
       case firstRemaining of
         Just i -> i
-        -- Invariant fallback: runKahn only calls pickVictim when processed < n.
-        -- In that state there should always be an unremoved vertex.
-        Nothing -> 0
+        Nothing -> error "pickVictim: no remaining vertex while Kahn stalled"
 
     firstRemaining =
       let go !i

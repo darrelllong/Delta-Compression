@@ -10,6 +10,7 @@ import Data.Array.ST (STUArray, newArray, readArray, writeArray)
 import Data.Array.Unboxed (UArray, (!))
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import Data.Foldable (toList)
 import qualified Data.Map.Strict as M
 import Data.Sequence (Seq(..), ViewL(..), ViewR(..), (|>))
 import qualified Data.Sequence as Seq
@@ -38,7 +39,7 @@ diffCorrecting r v opts
   | otherwise =
       let (tblHash, tblSplay) = buildTables
           (outRev, buf, vSFinal) = scanV tblHash tblSplay
-          baseOut = reverse outRev ++ fmap beCmd (toListSeq buf)
+          baseOut = reverse outRev ++ map beCmd (toList buf)
           trailing
             | vSFinal < vLen = [Add (sliceV vSFinal vLen)]
             | otherwise = []
@@ -206,17 +207,17 @@ diffCorrecting r v opts
         go !effectiveStart b =
           case Seq.viewr b of
             EmptyR -> (effectiveStart, b)
-            rest :> tail
-              | beStart tail >= vM && beEnd tail <= matchEnd ->
-                  go (min effectiveStart (beStart tail)) rest
-              | beEnd tail > vM && beStart tail < vM ->
-                  case beCmd tail of
+            rest :> tailEntry
+              | beStart tailEntry >= vM && beEnd tailEntry <= matchEnd ->
+                  go (min effectiveStart (beStart tailEntry)) rest
+              | beEnd tailEntry > vM && beStart tailEntry < vM ->
+                  case beCmd tailEntry of
                     Add payload ->
-                      let keep = vM - beStart tail
+                      let keep = vM - beStart tailEntry
                           effective' = min effectiveStart vM
                        in if keep > 0
                             then
-                              let trimmed = BufEntry (beStart tail) vM (Add (BS.take keep payload))
+                              let trimmed = BufEntry (beStart tailEntry) vM (Add (BS.take keep payload))
                                in (effective', rest |> trimmed)
                             else (effective', rest)
                     Copy _ _ -> (effectiveStart, b)
@@ -229,9 +230,6 @@ emitBuf cap entry buf outRev
         EmptyL -> (Seq.singleton entry, outRev)
         oldest :< rest -> (rest |> entry, beCmd oldest : outRev)
   | otherwise = (buf |> entry, outRev)
-
-toListSeq :: Seq a -> [a]
-toListSeq = foldr (:) []
 
 lookupCheckpoint :: CheckpointHash -> Int -> Word64 -> Maybe Int
 lookupCheckpoint ht start fp = go start
