@@ -3,6 +3,16 @@
 
 module Delta.Algorithms.Correcting (diffCorrecting) where
 
+-- WHAT:
+--   Correcting differencing algorithm with checkpoint filtering and lookback
+--   tail-correction.
+-- WHY:
+--   Onepass can miss better matches after reordering; correcting adds a bounded
+--   buffer and retroactive correction to improve compression.
+--
+-- References:
+--   - Ajtai et al., JACM 2002, Section 5 (correcting) and Section 8 (checkpoints)
+
 import Control.Monad (when)
 import Control.Monad.ST (ST, runST)
 import Data.Array.MArray (freeze)
@@ -33,6 +43,12 @@ data CheckpointHash = CheckpointHash
 
 type CheckpointSplay = M.Map Word64 Int
 
+-- | WHAT:
+--   Build filtered seed tables over R, scan V for checkpoint-aligned matches,
+--   extend matches both directions, and emit through a fixed lookback buffer.
+-- WHY:
+--   The buffer allows replacing weaker recent decisions when a better overlap
+--   appears, matching Ajtai et al. Section 5.1 tail-correction.
 diffCorrecting :: ByteString -> ByteString -> DiffOptions -> [Command]
 diffCorrecting r v opts
   | BS.null v = []
@@ -80,6 +96,8 @@ diffCorrecting r v opts
       | useSplay = (Nothing, buildSplay 0 (initRollingHash r 0 p) M.empty)
       | otherwise = (Just buildHash, M.empty)
       where
+        -- WHAT: splay-table checkpoint index (fingerprint -> earliest offset).
+        -- WHY: optional parity with other implementations' tree mode.
         buildSplay !a !rh !tblSplay
           | a >= numSeeds = tblSplay
           | otherwise =
@@ -105,6 +123,8 @@ diffCorrecting r v opts
             offArr <- newArray (0, cap - 1) (-1 :: Int) :: ST s (STUArray s Int Int)
             let insertSlot !start !fp !off = probe start
                   where
+                    -- WHAT: linear-probing insert with retain-first policy.
+                    -- WHY: mirrors reference table semantics and collision rules.
                     probe !i = do
                       curOff <- readArray offArr i
                       if curOff == -1
@@ -192,6 +212,9 @@ diffCorrecting r v opts
                                               (!buf2, !out2) = emitBuf bufCap (BufEntry vM matchEnd (Copy rM ml)) buf1 out1
                                            in go matchEnd matchEnd rh' rhPos' buf2 out2
                                         else
+                                          -- WHAT: overlap with buffered output.
+                                          -- WHY: trim/cancel tail entries so the
+                                          -- final emitted stream keeps the better match.
                                           let (!effectiveStart, !buf1) = tailCorrect vM matchEnd vS buf
                                               !adj = effectiveStart - vM
                                               !newLen = matchEnd - effectiveStart
@@ -208,8 +231,13 @@ diffCorrecting r v opts
           case Seq.viewr b of
             EmptyR -> (effectiveStart, b)
             rest :> tailEntry
+              -- WHAT: drop fully covered buffered entry.
+              -- WHY: the new copy supersedes it completely.
               | beStart tailEntry >= vM && beEnd tailEntry <= matchEnd ->
                   go (min effectiveStart (beStart tailEntry)) rest
+              -- WHAT: partial overlap at buffer tail.
+              -- WHY: adds are shrinkable literals; overlapping copies remain
+              -- untouched to preserve placement semantics.
               | beEnd tailEntry > vM && beStart tailEntry < vM ->
                   case beCmd tailEntry of
                     Add payload ->
@@ -225,6 +253,9 @@ diffCorrecting r v opts
 
 emitBuf :: Int -> BufEntry -> Seq BufEntry -> [Command] -> (Seq BufEntry, [Command])
 emitBuf cap entry buf outRev
+  -- WHAT: bounded FIFO emit buffer.
+  -- WHY: tail-correction can only revise recent commands, so old entries are
+  -- committed as soon as capacity is exceeded.
   | Seq.length buf >= cap =
       case Seq.viewl buf of
         EmptyL -> (Seq.singleton entry, outRev)
@@ -247,5 +278,8 @@ lookupCheckpoint ht start fp = go start
                in if foundFp == fp
                     then Just off
                     else
+                      -- WHAT: continue linear probe.
+                      -- WHY: open addressing requires either a hit, empty slot,
+                      -- or wraparound to prove absence.
                       let i' = if i + 1 == cap then 0 else i + 1
                        in if i' == start then Nothing else go i'

@@ -23,6 +23,7 @@ regionEquals :: ByteString -> Int -> ByteString -> Int -> Int -> Bool
 regionEquals a aOff b bOff len
   | len <= 0 = True
   | otherwise =
+      -- ByteString equality delegates to a low-level memcmp path.
       BS.take len (BS.drop aOff a) == BS.take len (BS.drop bOff b)
 
 chunkSize :: Int
@@ -32,6 +33,7 @@ extendForward :: ByteString -> ByteString -> Int -> Int -> Int -> Int
 extendForward r v rOff vOff start = goChunk start
   where
     maxN = min (BS.length v - vOff) (BS.length r - rOff)
+    -- Fast-path fixed-size chunks, then finish byte-by-byte.
     goChunk !n
       | n + chunkSize <= maxN
       , regionEquals v (vOff + n) r (rOff + n) chunkSize =
@@ -47,6 +49,7 @@ extendBackward :: ByteString -> ByteString -> Int -> Int -> Int
 extendBackward r v rOff vOff = goChunk 0
   where
     maxN = min vOff rOff
+    -- Walk backwards in chunks from the current seed boundary.
     goChunk !n
       | n + chunkSize <= maxN
       , regionEquals v (vOff - n - chunkSize) r (rOff - n - chunkSize) chunkSize =

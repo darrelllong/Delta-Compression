@@ -3,6 +3,12 @@
 
 module Delta.Algorithms.Onepass (diffOnepass) where
 
+-- WHAT:
+--   One-pass differencing (Ajtai et al., JACM 2002, Section 4.1 / Figure 3).
+-- WHY:
+--   This is the default fast path: linear scan, constant working memory, and
+--   byte-compatible output with the other language implementations.
+
 import Control.Monad.ST (ST, runST)
 import Data.Array.ST (STUArray, newArray, readArray, writeArray)
 import Data.ByteString (ByteString)
@@ -18,13 +24,23 @@ type Entry = (Word64, Int, Int)
 type HashTable = IM.IntMap Entry
 type SplayTable = M.Map Word64 (Int, Int)
 
+-- | WHAT:
+--   Scan reference (R) and version (V) in lockstep, match on seed fingerprints,
+--   extend forward, emit Add/Copy, then logically flush lookup tables.
+-- WHY:
+--   Flushing after each accepted match enforces the "next-match policy"
+--   described in Ajtai et al. Figure 3.
 diffOnepass :: ByteString -> ByteString -> DiffOptions -> [Command]
 diffOnepass r v opts
   | BS.null v = []
   | optUseSplay opts = diffOnepassPure r v opts
   | otherwise = diffOnepassMutable r v opts
 
--- Mutable fast path (default): mirrors Rust direct-slot tables.
+-- WHAT:
+--   Mutable STUArray implementation of onepass hash tables.
+-- WHY:
+--   Direct-slot mutable arrays avoid persistent-map allocation overhead and
+--   match the reference C/Rust hot-path behavior.
 diffOnepassMutable :: ByteString -> ByteString -> DiffOptions -> [Command]
 diffOnepassMutable r v opts = runST $ do
   let p = optSeedLen opts
@@ -62,6 +78,8 @@ diffOnepassMutable r v opts = runST $ do
         if curVer == ver
           then pure ()
           else do
+            -- WHAT: retain-first per logical version.
+            -- WHY: matches the paper's one-entry-per-slot behavior.
             writeArray fpArr idx fp
             writeArray offArr idx off
             writeArray verArr idx ver
@@ -131,11 +149,17 @@ diffOnepassMutable r v opts = runST $ do
                             else Copy rM ml : accRev
                         !vNext = vM + ml
                         !rNext = rM + ml
+                        -- WHAT: bump logical table version.
+                        -- WHY: O(1) "flush" with no physical clearing.
                      in loop (ver + 1) rNext vNext vNext mRhV1 mRhR1 rhVPos1 rhRPos1 accRev'
 
   loop 0 0 0 0 rhV0 rhR0 0 0 []
 
--- Pure fallback for --splay behavior.
+-- WHAT:
+--   Pure fallback path used for --splay mode.
+-- WHY:
+--   Keeping this path pure simplifies behavior matching with tree-backed
+--   variants while the default mutable hash-table path targets throughput.
 diffOnepassPure :: ByteString -> ByteString -> DiffOptions -> [Command]
 diffOnepassPure r v opts
   | BS.null v = []
@@ -284,5 +308,7 @@ calcFingerprint bs p pos (Just rh) rhPos
           !rh' = rollHash oldB newB rh
        in (Just (rhValue rh'), Just rh', pos)
   | otherwise =
+      -- WHAT: reinitialize rolling state after a non-adjacent jump.
+      -- WHY: jumps happen after accepted matches and keep state exact.
       let !rh' = initRollingHash bs pos p
        in (Just (rhValue rh'), Just rh', pos)

@@ -10,6 +10,12 @@ module Delta.Apply
   , validatePlacedCommands
   ) where
 
+-- WHAT:
+--   Placement, apply, and validation for command streams.
+-- WHY:
+--   Encoding and decoding are defined over placed commands; this module is the
+--   canonical executor used by tests for cross-language byte compatibility.
+
 import Control.Monad (forM_)
 import Control.Monad.ST (ST)
 import Data.Array.ST (STUArray, newArray, readArray, runSTUArray, writeArray)
@@ -107,8 +113,12 @@ applyPlacedInplace ref versionSize cmds
     applyOne out (PlacedCopy src dst len)
       | len <= 0 = pure ()
       | dst <= src || dst >= src + len =
+          -- WHAT: non-overlapping or forward-safe copy.
+          -- WHY: forward traversal cannot clobber unread source bytes.
           copyForward 0
       | otherwise =
+          -- WHAT: overlapping move with destination inside source range.
+          -- WHY: reverse traversal preserves source bytes (memmove semantics).
           copyBackward (len - 1)
       where
         copyForward !i

@@ -8,6 +8,17 @@ module Delta.Hash
   , nextPrime
   ) where
 
+-- WHAT:
+--   Hash/fingerprint primitives shared by all differencing algorithms.
+-- WHY:
+--   Keeping rolling hash math centralized ensures every algorithm uses the
+--   same byte-compatible fingerprint behavior across language implementations.
+--
+-- References:
+--   - Karp & Rabin, 1987 (rolling fingerprints)
+--   - Ajtai et al., JACM 2002 (delta algorithms built on fingerprints)
+--   - Jaeschke 1993 bounds for deterministic Miller-Rabin witness sets
+
 import Data.Bits ((.&.), shiftR)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
@@ -32,6 +43,11 @@ initRollingHash bs off p =
 
 rollHash :: Word64 -> Word64 -> RollingHash -> RollingHash
 rollHash oldByte newByte rh =
+  -- Slide one byte:
+  --   h' = ((h - old*b^(p-1)) * b + new) mod M
+  -- WHY:
+  --   This keeps per-position fingerprint updates O(1), which is required by
+  --   onepass/correcting linear scans (Ajtai et al. Sections 4-5).
   rh {rhValue = addMod (mulMod stripped hashBase) newByte}
   where
     stripped = subMod (rhValue rh) (mulMod oldByte (rhBp rh))
@@ -52,6 +68,9 @@ mulMod !a !b =
   -- Split operands into 32-bit limbs:
   --   a = a0 + a1*2^32, b = b0 + b1*2^32
   -- Then reduce product using 2^61 == 1 (mod M).
+  -- WHY:
+  --   Integer-based modular multiply allocates heavily in hot loops; this keeps
+  --   fingerprinting predictable and close to C/Rust behavior.
   finalize t
   where
     !mask32 = 0xFFFF_FFFF
@@ -116,6 +135,8 @@ isPrime k
   where
     witnesses = takeWhile (< k) [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37]
 
+-- | Miller-Rabin witness check:
+-- returns True when @a@ proves compositeness of @n@.
 isWitness :: Int -> Int -> Bool
 isWitness a n =
   let (d, r) = factorTwos (n - 1)

@@ -2,6 +2,13 @@
 
 module Delta.Algorithms.Greedy (diffGreedy) where
 
+-- WHAT:
+--   Greedy differencing (Ajtai et al., Section 3): pick the longest match
+--   available at each scan point in V.
+-- WHY:
+--   Serves as the compression-quality reference implementation; slower than the
+--   linear-time algorithms but useful for small inputs.
+
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as M
@@ -68,7 +75,8 @@ buildIndex r p
       | a >= numSeeds = m
       | otherwise =
           let !fp = rhValue rh
-              -- Preserve ascending encounter order, matching other implementations.
+              -- WHAT: keep offsets in encounter order.
+              -- WHY: deterministic tie-breaking across implementations.
               !m' = M.insertWith (flip (++)) fp [a] m
            in if a + 1 >= numSeeds
                 then go (a + 1) rh m'

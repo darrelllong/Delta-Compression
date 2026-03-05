@@ -9,6 +9,7 @@ import Delta.Algorithms.Greedy
 import Delta.Algorithms.Onepass
 import Delta.Types
 
+-- | Dispatch to one algorithm implementation using shared options.
 diff :: Algorithm -> ByteString -> ByteString -> DiffOptions -> [Command]
 diff algo r v opts =
   case algo of
@@ -16,5 +17,6 @@ diff algo r v opts =
     Onepass -> diffOnepass r v opts
     Correcting -> diffCorrecting r v opts
 
+-- | Convenience entry point with project defaults.
 diffDefault :: Algorithm -> ByteString -> ByteString -> [Command]
 diffDefault algo r v = diff algo r v defaultDiffOptions

@@ -5,6 +5,17 @@ module Delta.Inplace
   , makeInplace
   ) where
 
+-- WHAT:
+--   Convert a standard command stream into in-place-safe execution order.
+-- WHY:
+--   In-place apply must avoid clobbering unread source bytes; this module builds
+--   and resolves CRWI dependencies.
+--
+-- References:
+--   - Burns, Long, Stockmeyer, TKDE 2003 (in-place reconstruction / CRWI graph)
+--   - Kahn 1962 (topological scheduling)
+--   - Tarjan 1972 (SCC decomposition / cycle handling)
+
 import Data.Array (Array, (!), accumArray, bounds, listArray)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
@@ -64,6 +75,9 @@ makeInplace ref commands policy
               , IM.findWithDefault 0 i indeg0 == 0
               ]
           (topoRev, addInfoFinal, stRun) =
+            -- WHAT: global Kahn pass over copy dependency graph.
+            -- WHY: emits maximal safe copy schedule; unresolved cycles are
+            -- broken on demand by copy->add conversion.
             runKahn ref n adj indeg0 copyArr copyLens initialHeap policy addInfo0
           topo = reverse topoRev
           placedCopies =
@@ -113,6 +127,10 @@ buildCrwiDigraph copyArr n =
           lo = lowerBound writeStarts n src
           hi = lowerBound writeStarts n readEnd
           back =
+            -- WHAT: scan left from insertion point for long writes that start
+            -- before @src@ but still overlap read interval.
+            -- WHY: lowerBound only finds starts >= src; overlapping earlier
+            -- writes are still true CRWI edges.
             if lo > 0
               then collectBack i src (lo - 1) []
               else []
@@ -179,6 +197,9 @@ runKahn ref n adj indeg0 copyArr copyLens heap0 policy addInfo0 =
                       (indeg', heap2) = relaxOutEdges v removed' indeg heap1
                    in go (processed + 1) removed' indeg' heap2 (v : topoRev) addInfo stats scc'
       | otherwise =
+          -- WHAT: heap stall means remaining active subgraph is cyclic.
+          -- WHY: one copy must be materialized as Add to break a cycle and let
+          -- Kahn continue (Burns et al. cycle-breaking step).
           let (victim, scc1) = pickVictim policy n copyArr adj removed scc
               ci = copyArr ! victim
               literal = BS.take (ciLen ci) (BS.drop (ciSrc ci) ref)
@@ -219,6 +240,8 @@ data SccState = SccState
 buildSccState :: Int -> IM.IntMap [Int] -> SccState
 buildSccState n adj =
   let sccsRaw = G.stronglyConnComp [(i, i, IM.findWithDefault [] i adj) | i <- [0 .. n - 1]]
+      -- WHAT: keep only SCCs with >1 node.
+      -- WHY: single-vertex SCCs are acyclic for this purpose.
       sccLists = [vs | G.CyclicSCC vs <- sccsRaw, length vs > 1]
       sccCount = length sccLists
       sccArr = listArray (0, sccCount - 1) (map toArray sccLists)
@@ -264,7 +287,9 @@ pickVictim policy n copyArr adj removed st0 =
               (mCycle, color', scan') =
                 findCycleInScc sid sccVerts (ssId st) adj removed (ssColor st) (ssScan st)
               st' = st {ssColor = color', ssScan = scan'}
-           in case mCycle of
+            in case mCycle of
+                -- WHAT: choose victim from discovered cycle.
+                -- WHY: Localmin minimizes added literal bytes.
                 Just cycleNodes -> (minimumBy (comparing key) cycleNodes, st')
                 Nothing -> choose st' {ssPtr = sid + 1, ssScan = 0}
 
@@ -321,6 +346,8 @@ findCycleInScc sid sccVerts sccId adj removed color0 scan0 = goScan scan0 color0
                         Just cyc -> (Just cyc, color')
                         Nothing -> walk ws color'
                 1 ->
+                  -- WHAT: back-edge into active DFS path.
+                  -- WHY: this is exactly a cycle witness in tri-color DFS.
                   let seg = takeWhile (/= w) path
                       color' = clearPath path color
                    in (Just (reverse (w : seg)), color')

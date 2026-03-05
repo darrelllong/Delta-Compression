@@ -10,6 +10,12 @@ module Delta.Encoding
   , hexCrc64
   ) where
 
+-- WHAT:
+--   Binary delta wire-format encoder/decoder plus CRC64/XZ helpers.
+-- WHY:
+--   The format must be byte-identical across all language implementations so
+--   any encoder output can be decoded by any decoder.
+
 import Control.Monad (unless)
 import Data.Array.Unboxed (UArray, (!), listArray)
 import Data.Binary.Get
@@ -123,6 +129,7 @@ isInplaceDelta dataBytes =
 crc64XZ :: ByteString -> Word64
 crc64XZ = finalize . BS.foldl' crcStep 0xFFFF_FFFF_FFFF_FFFF
   where
+    -- CRC64/XZ uses init/final xor with all-ones.
     finalize crc = crc `xor` 0xFFFF_FFFF_FFFF_FFFF
     crcStep crc b =
       let idx = fromIntegral ((crc `xor` fromIntegral b) .&. 0xFF)
@@ -131,6 +138,8 @@ crc64XZ = finalize . BS.foldl' crcStep 0xFFFF_FFFF_FFFF_FFFF
 crc64Poly :: Word64
 crc64Poly = 0xC96C_5795_D787_0F42
 
+-- WHAT: precomputed 256-entry CRC lookup table.
+-- WHY: keeps per-byte CRC updates O(1) with one table load.
 {-# NOINLINE crc64Table #-}
 crc64Table :: UArray Int Word64
 crc64Table = listArray (0, 255) [crc64Entry i | i <- [0 .. 255]]
