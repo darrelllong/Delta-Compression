@@ -11,7 +11,8 @@ module Delta.Algorithms.Onepass (diffOnepass) where
 --   byte-compatible output with the other language implementations.
 
 import Control.Monad.ST (ST, runST)
-import Data.Array.ST (STUArray, newArray, readArray, writeArray)
+import Data.Array.Base (unsafeRead, unsafeWrite)
+import Data.Array.ST (STUArray, newArray)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.IntMap.Strict as IM
@@ -74,7 +75,8 @@ diffOnepassMutable r v opts = runST $ do
       -- WHAT:
       --   Convert a fingerprint to its hash-table slot index.
       -- WHY:
-      --   `rem qW` keeps all indices in [0, q-1] for q >= 2.
+      --   `unsafeRead`/`unsafeWrite` below are justified because `rem qW` keeps
+      --   all indices in [0, q-1] for q >= 2, matching array bounds exactly.
       slotQ fp = slotWord qW fp
 
       finalize !vSFinal !acc
@@ -94,30 +96,31 @@ diffOnepassMutable r v opts = runST $ do
         -- WHAT:
         --   Fast table probe on current slot generation.
         -- WHY:
-        --   Generation tagging implements O(1) logical flush with no table clear.
-        curVer <- readArray verArr idx
+        --   We use unsafe array access to remove per-op bounds checks in the
+        --   onepass hot loop; slotQ establishes the index invariant.
+        curVer <- unsafeRead verArr idx
         if curVer == ver
           then pure ()
           else do
             -- WHAT: retain-first per logical version.
             -- WHY: matches the paper's one-entry-per-slot behavior.
-            writeArray fpArr idx fp
-            writeArray offArr idx off
-            writeArray verArr idx ver
+            unsafeWrite fpArr idx fp
+            unsafeWrite offArr idx off
+            unsafeWrite verArr idx ver
 
       getEntryOff !ver !fp fpArr offArr verArr = do
         let !idx = slotQ fp
         -- WHAT:
         --   Fast slot lookup with version+fingerprint validation.
         -- WHY:
-        --   Version + fingerprint checks preserve first-entry semantics.
-        curVer <- readArray verArr idx
+        --   Same safety argument as putEntry: idx is always in-range by slotQ.
+        curVer <- unsafeRead verArr idx
         if curVer /= ver
           then pure (-1)
           else do
-            curFp <- readArray fpArr idx
+            curFp <- unsafeRead fpArr idx
             if curFp == fp
-              then readArray offArr idx
+              then unsafeRead offArr idx
               else pure (-1)
 
       -- WHAT:
