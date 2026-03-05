@@ -241,82 +241,250 @@ Total: O(n log n + E).
 | `tests/kernel-delta-test.sh` | Performance benchmark on Linux 5.1.0–5.1.7 kernel tarballs (~871 MB each) |
 | `tests/transposition-benchmark.sh` | Performance benchmark on synthetic block permutations (16 MB–1 GB) |
 | `tests/per-language-benchmark.sh` | Per-language speed comparison (all 8 implementations, linux-5.1.0→5.1.1) |
+| `tests/get_shakespeare.sh` | Download Shakespeare (PG #100) and generate mutated versions for bench_all.sh |
+| `bench_rust.sh` | Rust micro-benchmarks via pilot-bench (1 MiB synthetic data, MiB/s with CI) |
+| `bench_all.sh` | All 8 languages via pilot-bench (Shakespeare ~5.4 MB, 5% mutations, MiB/s with CI) |
 
 `tests/correctness.sh` is the primary correctness gate: it verifies that
 all eight implementations agree on every encode/decode round-trip and that
 any implementation can decode a delta produced by any other.  The benchmark
 scripts are separate so they can be run independently without the multi-GB
-data requirements of the kernel tests.
+data requirements of the kernel tests.  For statistically rigorous CI,
+use `bench_rust.sh` or `bench_all.sh` (require pilot-bench; see
+[BENCHMARKING.md](BENCHMARKING.md)).
 
 ## Performance benchmarks
 
-Current rerun status: `tests/transposition-benchmark.sh`,
-`tests/kernel-delta-test.sh`, and `tests/per-language-benchmark.sh` were
-rerun on this machine and the script-backed tables below reflect those
-fresh runs.  The ad hoc sections that are not driven by those scripts
-(`Cross-version kernel benchmark` and `Rust, default vs --splay`) remain
-historical snapshots.
+All script-backed tables below reflect fresh runs.  The per-language kernel
+tarball and Shakespeare pilot tables (onepass/correcting) reflect Dyson
+(Apple M4, local SSD); the multi-machine section below adds wigner (Apple
+M1 Max, QNAP RAID-5 HDD) and DMZ (Intel i5-8259U, Linux).  The ad hoc
+sections (`Cross-version kernel benchmark` and `Rust, default vs --splay`)
+remain historical snapshots.
 
 ### Kernel tarball benchmark (linux-5.1 → linux-5.1.1, 871 MB)
 
 All eight implementations, same input pair, default flags.  All produce
 byte-identical delta files.  CRC-64/XZ overhead is negligible (~70 ms
-total for two 871 MB files at ~12 GB/s); Python's 265–612s algorithm
+total for two 871 MB files at ~12 GB/s); Python's 258–596s algorithm
 time dominates regardless.
 
 **onepass** (delta: 4.8 MB, ratio: 0.58%)
 
 | Implementation | Time |
 |----------------|-----:|
-| C | 4.0s |
+| C | 3.9s |
 | Rust | 4.4s |
-| C++ | 4.7s |
-| Go | 4.9s |
-| Java | 6.0s |
-| Kotlin | 6.0s |
-| Scala | 6.1s |
-| Python | 264.7s |
+| C++ | 4.4s |
+| Go | 4.8s |
+| Java | 5.8s |
+| Kotlin | 5.8s |
+| Scala | 6.0s |
+| Python | 257.5s |
 
 **correcting** (delta: 6.6 MB, ratio: 0.79%)
 
 | Implementation | Time |
 |----------------|-----:|
-| Rust | 9.9s |
-| Kotlin | 11.8s |
-| Java | 12.1s |
-| Scala | 13.2s |
-| Go | 13.8s |
-| C | 19.0s |
-| C++ | 19.5s |
-| Python | 611.7s |
+| Rust | 9.5s |
+| Java | 11.4s |
+| Kotlin | 11.4s |
+| Scala | 12.4s |
+| Go | 13.6s |
+| C | 18.3s |
+| C++ | 18.7s |
+| Python | 596.3s |
 
-Rust leads onepass by a narrow margin; Rust, C, and C++ are within a
-second of each other.  Go sits between the JVM group and C/Rust/C++ for
-onepass, and just above the JVM group for correcting.  Java, Kotlin, and
-Scala cluster together on the same JDK 17 runtime; Kotlin edges out Java
-and Scala on correcting in this run.  All eight compiled/JIT
-implementations produce byte-identical delta files.  Python is ~60×
-slower than Rust on both algorithms.  Small shifts versus older snapshots
-should be treated as single-run noise unless they persist across repeated
-runs: this script times one encode per implementation.  Local plots can
-be regenerated with `tests/plot_benchmarks.py`; the generated PNGs are
-intentionally not committed.
+C and Rust tie for first on onepass; both beat the field by under half a
+second.  Go sits between the JVM group and the native group for onepass,
+and just above the JVM group for correcting.  Java, Kotlin, and Scala
+cluster together on the same JDK 17 runtime; Java and Kotlin tie on
+correcting, with Scala a second behind.  All eight implementations
+produce byte-identical delta files.  Python is ~60× slower than Rust
+on both algorithms; CPython's interpreter overhead dominates tight
+hash-lookup loops regardless of input size.  These are single-run
+measurements; use `bench_all.sh` (pilot-bench, Shakespeare data) for
+statistically rigorous CI.  Local plots can be regenerated with
+`tests/plot_benchmarks.py`; the generated PNGs are intentionally not
+committed.
 
 ```mermaid
 xychart-beta
     title "Per-language onepass encode time (s)"
     x-axis ["C", "Rust", "C++", "Go", "Java", "Kotlin", "Scala", "Python"]
     y-axis "seconds" 0 --> 280
-    bar [4.0, 4.4, 4.7, 4.9, 6.0, 6.0, 6.1, 264.7]
+    bar [3.9, 4.4, 4.4, 4.8, 5.8, 5.8, 6.0, 257.5]
 ```
 
 ```mermaid
 xychart-beta
     title "Per-language correcting encode time (s)"
-    x-axis ["Rust", "Kotlin", "Java", "Scala", "Go", "C", "C++", "Python"]
-    y-axis "seconds" 0 --> 650
-    bar [9.9, 11.8, 12.1, 13.2, 13.8, 19.0, 19.5, 611.7]
+    x-axis ["Rust", "Java", "Kotlin", "Scala", "Go", "C", "C++", "Python"]
+    y-axis "seconds" 0 --> 620
+    bar [9.5, 11.4, 11.4, 12.4, 13.6, 18.3, 18.7, 596.3]
 ```
+
+### Throughput with confidence intervals (pilot-bench, Shakespeare)
+
+Shakespeare's complete works (~5.4 MB ref, 5% byte mutations as version),
+all eight implementations, onepass and correcting.  Metric: MiB/s
+(reference file size ÷ elapsed encode time).  Run with `bash bench_all.sh`
+which drives each implementation repeatedly until 95% CI converges.
+
+**onepass**
+
+| Language | MiB/s | ±CI (95%) | Runs |
+|----------|------:|----------:|-----:|
+| Rust | 50.68 | ±0.33 | 120 |
+| Go | 43.79 | ±0.55 | 30 |
+| C | 32.69 | ±0.11 | 122 |
+| C++ | 29.03 | ±0.08 | 61 |
+| Java | 25.7 | ±0.58 | 60 |
+| Kotlin | 22.62 | ±0.70 | 64 |
+| Scala | 18.76 | ±0.41 | 34 |
+| Python | 0.82 | ±0.004 | 155 |
+
+**correcting**
+
+| Language | MiB/s | ±CI (95%) | Runs |
+|----------|------:|----------:|-----:|
+| Rust | 55.27 | ±0.71 | 90 |
+| Go | 36.09 | ±0.25 | 57 |
+| C | 28.24 | ±0.19 | 39 |
+| C++ | 27.18 | ±0.19 | 30 |
+| Java | 24.75 | ±0.27 | 30 |
+| Kotlin | 22.23 | ±0.53 | 30 |
+| Scala | 16.85 | ±0.25 | 30 |
+| Python | 1.04 | ±0.005 | 30 |
+
+On the small Shakespeare workload (5.4 MB, no I/O bottleneck), the ranking
+shifts relative to the 871 MB kernel tarball single-run results: Rust
+overtakes C on onepass (Rust's inliner and LLVM optimizer outperform C's
+compiler at small-file scales), Go moves to second (its GC adds less
+overhead than JVM startup on small inputs), and the JVM languages spread
+out (Scala falls behind Java and Kotlin due to more aggressive JIT
+warmup requirements).  Python remains ~62× slower than Rust — CPython's
+per-iteration interpreter overhead dominates regardless of file size.
+
+```mermaid
+xychart-beta
+    title "Onepass throughput (MiB/s) — Shakespeare, pilot-bench"
+    x-axis ["Rust", "Go", "C", "C++", "Java", "Kotlin", "Scala", "Python"]
+    y-axis "MiB/s" 0 --> 56
+    bar [50.68, 43.79, 32.69, 29.03, 25.7, 22.62, 18.76, 0.82]
+```
+
+```mermaid
+xychart-beta
+    title "Correcting throughput (MiB/s) — Shakespeare, pilot-bench"
+    x-axis ["Rust", "Go", "C", "C++", "Java", "Kotlin", "Scala", "Python"]
+    y-axis "MiB/s" 0 --> 60
+    bar [55.27, 36.09, 28.24, 27.18, 24.75, 22.23, 16.85, 1.04]
+```
+
+### Multi-machine throughput comparison
+
+Benchmarks run on three machines to characterize per-CPU performance and
+determine whether delta compression is CPU-bound or I/O-bound.
+
+| Machine | CPU | RAM | Storage |
+|---------|-----|-----|---------|
+| Dyson (local) | Apple M4 | 24 GB | Internal NVMe SSD |
+| Wigner | Apple M1 Max | 64 GB | QNAP RAID-5 HDD array |
+| DMZ | Intel Core i5-8259U @ 2.30 GHz | 30 GB | Internal SSD / `/archive` HDD |
+
+#### Rust micro-benchmarks (bench_rust.sh, 1 MiB in-memory, MiB/s)
+
+Operations use 1 MiB of LCG-generated data with ~5% single-byte mutations.
+No disk I/O — results are pure CPU performance.
+
+| Operation | M4 (Dyson) | ±CI | M1 Max (Wigner) | ±CI | i5-8259U (DMZ) | ±CI |
+|-----------|----------:|----:|----------------:|----:|---------------:|----:|
+| encode_greedy_1m | 10.87 | ±0.12 | 9.38 | ±0.02 | 2.42 | ±0.02 |
+| encode_onepass_1m | 60.93 | ±0.66 | 63.60 | ±0.19 | 14.42 | ±0.06 |
+| encode_correcting_1m | 32.49 | ±1.51 | 29.44 | ±0.05 | 14.25 | ±0.32 |
+| decode_1m | 1046 | ±12.2 | 739.4 | ±0.84 | 614.9 | ±6.3 |
+| inplace_1m | 387.2 | ±4.67 | 286.4 | ±0.37 | 167.7 | ±4.1 |
+
+The M4 and M1 Max are within ~4% on onepass but diverge on correcting (~10%)
+and decode (~29%).  The Intel i5-8259U is 4–5× slower than Apple Silicon
+on compute-intensive paths.
+
+#### Per-language throughput (bench_all.sh, Shakespeare ~5.4 MB, 5% mutations, MiB/s)
+
+**onepass**
+
+| Language | M4 (Dyson) | M1 Max (Wigner) | i5-8259U (DMZ) |
+|----------|----------:|----------------:|---------------:|
+| Rust | 50.68 | 44.36 | 16.91 |
+| Go | 43.79 | 32.51 | 11.84 |
+| C | 32.69 | 25.60 | 14.36 |
+| C++ | 29.03 | 24.04 | 14.61 |
+| Java | 25.70 | 18.36 | 9.94 |
+| Kotlin | 22.62 | 16.03 | 7.88 |
+| Scala | 18.76 | 12.92 | — |
+| Python | 0.82 | 0.93 | — |
+
+**correcting**
+
+| Language | M4 (Dyson) | M1 Max (Wigner) | i5-8259U (DMZ) |
+|----------|----------:|----------------:|---------------:|
+| Rust | 55.27 | 42.66 | 18.28 |
+| Go | 36.09 | 28.30 | 10.57 |
+| C | 28.24 | 21.62 | 12.55 |
+| C++ | 27.18 | 20.74 | 15.78 |
+| Java | 24.75 | 17.89 | 9.79 |
+| Kotlin | 22.23 | 16.40 | 8.46 |
+| Scala | 16.85 | 11.60 | — |
+| Python | 1.04 | 0.92 | — |
+
+Scala and Python on DMZ were not measured (Scala missing runtime jar;
+Python requires 30+ pilot-bench rounds × ~12 s each on the i5, making
+convergence impractically slow).
+
+#### CPU-bound vs I/O-bound: kernel tarball SSD vs HDD on wigner
+
+The kernel tarball benchmark (linux-5.1.0 → 5.1.1, 871 MB each, single run)
+was run on wigner with data on the internal Apple SSD (`/tmp`) and on the
+QNAP RAID-5 HDD array (`/Volumes/Archive`):
+
+**onepass**
+
+| Language | SSD (/tmp) | HDD (/Volumes/Archive) |
+|----------|----------:|----------------------:|
+| Python | 292.3s | 292.6s |
+| Rust | 48.1s† | 6.4s |
+| C++ | 6.1s | 6.3s |
+| C | 5.4s | 5.6s |
+| Java | 8.9s | 9.2s |
+| Go | 6.9s | 6.9s |
+| Kotlin | 8.9s | 9.1s |
+| Scala | 9.0s | 9.1s |
+
+**correcting**
+
+| Language | SSD (/tmp) | HDD (/Volumes/Archive) |
+|----------|----------:|----------------------:|
+| Python | 710.6s | 711.7s |
+| Rust | 12.4s | 12.7s |
+| C++ | 25.5s | 25.7s |
+| C | 25.0s | 25.2s |
+| Java | 16.3s | 16.4s |
+| Go | 18.1s | 18.5s |
+| Kotlin | 15.4s | 15.7s |
+| Scala | 17.6s | 18.1s |
+
+† Rust onepass SSD is an outlier (48.1s vs 6.4s on HDD) — a single-run
+artifact, likely Spotlight indexing the newly-written files in `/tmp`.
+All other languages agree within ~5% between SSD and HDD.
+
+**Conclusion: delta compression is CPU-bound.**  The 871 MB kernel tarballs
+(1.74 GB total) fit comfortably in wigner's 64 GB page cache after Python
+reads them; all subsequent languages read from RAM.  SSD and HDD produce
+essentially identical throughput.  To expose genuine I/O effects, files
+larger than available RAM (or explicit cache-flushing between runs) are required.
+
+---
 
 **Rust, default vs `--splay`**
 

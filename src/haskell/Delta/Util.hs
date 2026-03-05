@@ -1,0 +1,97 @@
+{-# LANGUAGE BangPatterns #-}
+
+module Delta.Util
+  ( byteAt
+  , regionEquals
+  , extendForward
+  , extendBackward
+  , emitStats
+  ) where
+
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
+import Data.List (sort)
+import Data.Word (Word8)
+import Delta.Types
+import System.IO (hPutStrLn, stderr)
+
+byteAt :: ByteString -> Int -> Word8
+byteAt = BS.index
+
+regionEquals :: ByteString -> Int -> ByteString -> Int -> Int -> Bool
+regionEquals a aOff b bOff len =
+  BS.take len (BS.drop aOff a) == BS.take len (BS.drop bOff b)
+
+extendForward :: ByteString -> ByteString -> Int -> Int -> Int -> Int
+extendForward r v rOff vOff start = go start
+  where
+    rLen = BS.length r
+    vLen = BS.length v
+    go !n
+      | vOff + n >= vLen = n
+      | rOff + n >= rLen = n
+      | byteAt v (vOff + n) /= byteAt r (rOff + n) = n
+      | otherwise = go (n + 1)
+
+extendBackward :: ByteString -> ByteString -> Int -> Int -> Int
+extendBackward r v rOff vOff = go 0
+  where
+    go !n
+      | vOff - n - 1 < 0 = n
+      | rOff - n - 1 < 0 = n
+      | byteAt v (vOff - n - 1) /= byteAt r (rOff - n - 1) = n
+      | otherwise = go (n + 1)
+
+emitStats :: Bool -> [Command] -> IO ()
+emitStats False _ = pure ()
+emitStats True cmds = do
+  let copyLens = [len | Copy _ len <- cmds]
+      totalCopy = sum copyLens
+      addLens = [BS.length bytes | Add bytes <- cmds]
+      totalAdd = sum addLens
+      numCopies = length copyLens
+      numAdds = length addLens
+      totalOut = totalCopy + totalAdd
+      copyPct :: Double
+      copyPct
+        | totalOut == 0 = 0
+        | otherwise = fromIntegral totalCopy * 100.0 / fromIntegral totalOut
+  hPutStrLn stderr $
+    "  result: "
+      <> show numCopies
+      <> " copies ("
+      <> show totalCopy
+      <> " bytes), "
+      <> show numAdds
+      <> " adds ("
+      <> show totalAdd
+      <> " bytes)"
+  hPutStrLn stderr $
+    "  result: copy coverage "
+      <> showFF copyPct
+      <> "%, output "
+      <> show totalOut
+      <> " bytes"
+  case sort copyLens of
+    [] -> pure ()
+    sorted -> do
+      let mean :: Double
+          mean = fromIntegral totalCopy / fromIntegral (length sorted)
+          median = sorted !! (length sorted `div` 2)
+      hPutStrLn stderr $
+        "  copies: "
+          <> show (length sorted)
+          <> " regions, min="
+          <> show (head sorted)
+          <> " max="
+          <> show (last sorted)
+          <> " mean="
+          <> showFF mean
+          <> " median="
+          <> show median
+          <> " bytes"
+  where
+    showFF :: Double -> String
+    showFF x =
+      let rounded = fromIntegral (round (x * 10) :: Int) / 10.0 :: Double
+       in show rounded

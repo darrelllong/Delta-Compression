@@ -1,5 +1,5 @@
-JAVAC  = /opt/homebrew/opt/openjdk@17/bin/javac
-JAVA   = /opt/homebrew/opt/openjdk@17/bin/java
+JAVAC  ?= $(shell command -v javac 2>/dev/null || echo /opt/homebrew/opt/openjdk@17/bin/javac)
+JAVA   ?= $(shell command -v java  2>/dev/null || echo /opt/homebrew/opt/openjdk@17/bin/java)
 
 .PHONY: all test clean
 
