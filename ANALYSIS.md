@@ -293,6 +293,8 @@ the top on correcting — the JIT optimises the inner hash-probe loop well on a
 warm run.  C and C++ are slower than the JVM on correcting; the hash table
 implementation has not been tuned as aggressively as in Rust.  These
 are single-run measurements; use `bench_all.sh` for statistically rigorous CI.
+Radar views below use Mermaid `radar-beta` with the same underlying data
+(time-based plots are converted to normalized speed scores where faster=larger).
 
 ```mermaid
 xychart-beta
@@ -303,11 +305,25 @@ xychart-beta
 ```
 
 ```mermaid
+radar-beta
+    title "Onepass speed score (higher is better, fastest=100) — linux-5.1→5.1.1, Dyson M4"
+    axis C, Rust, Cpp, Go, Haskell, Java, Kotlin, Scala
+    curve speed{100.0, 88.9, 88.9, 81.6, 78.4, 66.7, 65.6, 64.5}
+```
+
+```mermaid
 xychart-beta
     title "Per-language correcting encode time (s) — linux-5.1→5.1.1, Dyson M4"
     x-axis ["Rust", "Java", "Scala", "Go", "Kotlin", "Haskell", "C", "C++"]
     y-axis "seconds" 0 --> 22
     bar [9.9, 12.3, 13.2, 14.1, 14.1, 17.5, 19.2, 19.4]
+```
+
+```mermaid
+radar-beta
+    title "Correcting speed score (higher is better, fastest=100) — linux-5.1→5.1.1, Dyson M4"
+    axis Rust, Java, Scala, Go, Kotlin, Haskell, C, Cpp
+    curve speed{100.0, 80.5, 75.0, 70.2, 70.2, 56.6, 51.6, 51.0}
 ```
 
 ### Haskell performance note: purity at the API, mutability in hot loops
@@ -385,11 +401,25 @@ xychart-beta
 ```
 
 ```mermaid
+radar-beta
+    title "Onepass throughput profile (MiB/s) — Shakespeare, pilot-bench, Dyson M4"
+    axis Rust, Go, C, Cpp, Java, Haskell, Kotlin, Scala
+    curve throughput{49.33, 44.49, 34.19, 30.87, 25.35, 23.71, 21.93, 17.09}
+```
+
+```mermaid
 xychart-beta
     title "Correcting throughput (MiB/s) — Shakespeare, pilot-bench, Dyson M4"
     x-axis ["Rust", "Go", "C", "C++", "Java", "Haskell", "Kotlin", "Scala"]
     y-axis "MiB/s" 0 --> 60
     bar [54.56, 37.12, 30.54, 29.09, 23.99, 23.11, 21.30, 16.00]
+```
+
+```mermaid
+radar-beta
+    title "Correcting throughput profile (MiB/s) — Shakespeare, pilot-bench, Dyson M4"
+    axis Rust, Go, C, Cpp, Java, Haskell, Kotlin, Scala
+    curve throughput{54.56, 37.12, 30.54, 29.09, 23.99, 23.11, 21.30, 16.00}
 ```
 
 ### Multi-machine throughput comparison
@@ -492,11 +522,29 @@ xychart-beta
 ```
 
 ```mermaid
+radar-beta
+    title "Onepass throughput profile by machine (MiB/s) — Shakespeare"
+    axis Rust, Go, C, Cpp, Java, Haskell, Kotlin, Scala
+    curve Dyson_M4{49.33, 44.49, 34.19, 30.87, 25.35, 23.71, 21.93, 17.09}
+    curve Wigner_M1Max{42.53, 32.30, 25.17, 23.47, 18.33, 14.09, 16.34, 12.89}
+    curve DMZ_i5{17.66, 11.97, 15.23, 15.14, 10.39, 7.96, 8.10, 6.70}
+```
+
+```mermaid
 xychart-beta
     title "Correcting throughput (MiB/s) — Shakespeare, three machines"
     x-axis ["Rust", "Go", "C", "C++", "Java", "Haskell", "Kotlin", "Scala"]
     y-axis "MiB/s" 0 --> 60
     bar [54.56, 37.12, 30.54, 29.09, 23.99, 23.11, 21.30, 16.00]
+```
+
+```mermaid
+radar-beta
+    title "Correcting throughput profile by machine (MiB/s) — Shakespeare"
+    axis Rust, Go, C, Cpp, Java, Haskell, Kotlin, Scala
+    curve Dyson_M4{54.56, 37.12, 30.54, 29.09, 23.99, 23.11, 21.30, 16.00}
+    curve Wigner_M1Max{42.22, 28.18, 21.28, 20.66, 18.47, 18.38, 16.43, 12.00}
+    curve DMZ_i5{19.71, 10.74, 15.92, 13.81, 9.80, 8.42, 8.68, 6.34}
 ```
 
 #### CPU-bound vs I/O-bound: kernel tarball SSD vs HDD on wigner
