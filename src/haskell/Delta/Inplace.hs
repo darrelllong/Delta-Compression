@@ -20,7 +20,7 @@ import Data.Array (Array, (!), accumArray, bounds, listArray)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Foldable (toList)
-import Data.List (minimumBy, sortBy)
+import Data.List (foldl', minimumBy, sortBy)
 import Data.Ord (comparing)
 import Data.Sequence (Seq, (|>))
 import qualified Data.Sequence as Seq
