@@ -41,7 +41,12 @@ fi
 
 SCALA_LIB=$(grep 'SCALA_LIB\s*=' "$REPO_ROOT/src/scala/Makefile" | head -1 | sed 's/.*= *//')
 if [[ ! -f "$SCALA_LIB" ]]; then
-    echo "WARNING: Scala library not found at $SCALA_LIB — Scala will be skipped" >&2
+    # Fall back to SDKMAN install (Linux)
+    SCALA_LIB=$(find "${HOME}/.sdkman/candidates/scala/current/lib" \
+                     -name "scala-library.jar" 2>/dev/null | head -1)
+fi
+if [[ -z "$SCALA_LIB" || ! -f "$SCALA_LIB" ]]; then
+    echo "WARNING: Scala library not found — Scala will be skipped" >&2
     SCALA_LIB=""
 fi
 

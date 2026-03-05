@@ -11,7 +11,7 @@ module Delta.Util
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Unsafe as BSU
-import Data.List (sort)
+import Data.List (foldl', sort)
 import Data.Word (Word8)
 import Delta.Types
 import System.IO (hPutStrLn, stderr)
