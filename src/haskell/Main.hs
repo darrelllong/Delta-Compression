@@ -4,7 +4,7 @@ module Main (main) where
 
 import qualified Data.ByteString as BS
 import Data.Char (toLower)
-import Data.List (stripPrefix)
+import Data.List (foldl', stripPrefix)
 import Data.Time.Clock (diffUTCTime, getCurrentTime)
 import Control.Exception (evaluate)
 import Delta.Apply

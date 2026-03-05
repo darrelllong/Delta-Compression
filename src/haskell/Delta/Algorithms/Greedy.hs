@@ -11,6 +11,7 @@ module Delta.Algorithms.Greedy (diffGreedy) where
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import Data.List (foldl')
 import qualified Data.Map.Strict as M
 import Data.Word (Word64)
 import Delta.Hash
