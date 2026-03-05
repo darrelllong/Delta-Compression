@@ -33,6 +33,15 @@ SCALA_LIB=""
 if [[ -f "$REPO_ROOT/src/scala/Makefile" ]]; then
     SCALA_LIB=$(grep 'SCALA_LIB\s*=' "$REPO_ROOT/src/scala/Makefile" | head -1 | sed 's/.*= *//')
 fi
+if [[ -z "$SCALA_LIB" || ! -f "$SCALA_LIB" ]]; then
+    # SDKMAN Scala 3 (Linux): two maven2 jars, not a single scala-library.jar
+    _SDKMAN_SCALA="${HOME}/.sdkman/candidates/scala/current/maven2/org/scala-lang"
+    _S3J=$(find "${_SDKMAN_SCALA}/scala3-library_3" -name "scala3-library_3-*.jar" 2>/dev/null | sort -V | tail -1)
+    _S2J=$(find "${_SDKMAN_SCALA}/scala-library"    -name "scala-library-*.jar"    2>/dev/null | sort -V | tail -1)
+    if [[ -f "$_S3J" && -f "$_S2J" ]]; then
+        SCALA_LIB="${_S3J}:${_S2J}"
+    fi
+fi
 
 # ── Measure helper ────────────────────────────────────────────────────────────
 
@@ -75,7 +84,7 @@ if [[ -n "$JAVA" && -x "$JAVA" ]]; then
     measure "Java-co"     Java    correcting
     measure "Kotlin-op"   Kotlin  onepass
     measure "Kotlin-co"   Kotlin  correcting
-    if [[ -n "$SCALA_LIB" && -f "$SCALA_LIB" ]]; then
+    if [[ -n "$SCALA_LIB" ]]; then
         measure "Scala-op"    Scala   onepass
         measure "Scala-co"    Scala   correcting
     fi
