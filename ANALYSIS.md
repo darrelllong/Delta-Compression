@@ -410,9 +410,9 @@ determine whether delta compression is CPU-bound or I/O-bound.
 
 | Machine | CPU | RAM | Storage |
 |---------|-----|-----|---------|
-| Dyson (local) | Apple M4 | 24 GB | Internal NVMe SSD |
+| Dyson (local) | Apple M4 | 64 GB | Internal NVMe SSD |
 | Wigner | Apple M1 Max | 64 GB | QNAP RAID-5 HDD array |
-| DMZ | Intel Core i5-8259U @ 2.30 GHz | 30 GB | Internal SSD / `/archive` HDD |
+| DMZ | Intel Core i5-8259U @ 2.30 GHz | 32 GB | Internal SSD / `/archive` HDD |
 
 #### Rust micro-benchmarks (bench_rust.sh, 1 MiB in-memory, MiB/s)
 
