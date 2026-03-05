@@ -272,13 +272,13 @@ main(int argc, char **argv)
 			case 's': seed_len = (size_t)atol(optarg); break;
 			case 't': table_size = (size_t)atol(optarg); break;
 			case 'x': max_table = parse_size_suffix(optarg); break;
-				case 'i': flags = delta_flag_set(flags, DELTA_OPT_INPLACE); break;
-				case 'p':
-					policy_str = optarg;
-					policy = parse_policy(optarg);
-					break;
-				case 'v': flags = delta_flag_set(flags, DELTA_OPT_VERBOSE); break;
-				case 'y': flags = delta_flag_set(flags, DELTA_OPT_SPLAY); break;
+			case 'i': flags = delta_flag_set(flags, DELTA_OPT_INPLACE); break;
+			case 'p':
+				policy_str = optarg;
+				policy = parse_policy(optarg);
+				break;
+			case 'v': flags = delta_flag_set(flags, DELTA_OPT_VERBOSE); break;
+			case 'y': flags = delta_flag_set(flags, DELTA_OPT_SPLAY); break;
 			default: usage();
 			}
 		}
@@ -390,13 +390,13 @@ main(int argc, char **argv)
 				}
 				fprintf(stderr, "warning: skipping source CRC check (--ignore-hash)\n");
 			}
-			}
+		}
 
-			delta_validate_placed_commands(&dr.commands, r_file.size,
-			                               dr.version_size, dr.inplace);
+		delta_validate_placed_commands(&dr.commands, r_file.size,
+		                               dr.version_size, dr.inplace);
 
-			struct timespec t0, t1;
-			clock_gettime(CLOCK_MONOTONIC, &t0);
+		struct timespec t0, t1;
+		clock_gettime(CLOCK_MONOTONIC, &t0);
 
 		delta_buffer_t out_buf;
 		if (dr.inplace) {
@@ -409,21 +409,21 @@ main(int argc, char **argv)
 		}
 
 		clock_gettime(CLOCK_MONOTONIC, &t1);
-			double elapsed = elapsed_sec(&t0, &t1);
+		double elapsed = elapsed_sec(&t0, &t1);
 
-			// Verify output before writing it to disk.
-			uint8_t out_crc[DELTA_CRC_SIZE];
-			delta_crc64_xz(out_buf.data, out_buf.len, out_crc);
+		// Verify output before writing it to disk.
+		uint8_t out_crc[DELTA_CRC_SIZE];
+		delta_crc64_xz(out_buf.data, out_buf.len, out_crc);
 
-			if (memcmp(out_crc, dr.dst_crc, DELTA_CRC_SIZE) != 0) {
-				if (!ignore_hash) {
-					fprintf(stderr, "output integrity check failed\n");
-					exit(1);
-				}
-				fprintf(stderr, "warning: skipping output CRC check (--ignore-hash)\n");
+		if (memcmp(out_crc, dr.dst_crc, DELTA_CRC_SIZE) != 0) {
+			if (!ignore_hash) {
+				fprintf(stderr, "output integrity check failed\n");
+				exit(1);
 			}
+			fprintf(stderr, "warning: skipping output CRC check (--ignore-hash)\n");
+		}
 
-			write_file(out_path, out_buf.data, out_buf.len);
+		write_file(out_path, out_buf.data, out_buf.len);
 
 		printf("Format:       %s\n", dr.inplace ? "in-place" : "standard");
 		printf("Reference:    %s (%zu bytes)\n", ref_path, r_file.size);
@@ -479,13 +479,13 @@ main(int argc, char **argv)
 		{
 			int a;
 			for (a = 5; a < argc; a++) {
-					if (strcmp(argv[a], "--policy") == 0 &&
-					    a + 1 < argc) {
-						policy_str = argv[++a];
-						policy = parse_policy(policy_str);
-					}
+				if (strcmp(argv[a], "--policy") == 0 &&
+				    a + 1 < argc) {
+					policy_str = argv[++a];
+					policy = parse_policy(policy_str);
 				}
 			}
+		}
 
 		mapped_file_t r_file = map_file(ref_path);
 		size_t delta_len;

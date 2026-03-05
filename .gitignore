@@ -22,5 +22,15 @@ src/cpp/build-release/
 src/go/delta/delta
 src/go/delta_bin
 
+# Haskell build artifacts
+src/haskell/*.o
+src/haskell/*.hi
+src/haskell/delta-hs
+src/haskell/Delta/**/*.o
+src/haskell/Delta/**/*.hi
+
+# Pilot benchmark output directories
+pilot_result_*/
+
 # Local tool caches
 .scala-build/

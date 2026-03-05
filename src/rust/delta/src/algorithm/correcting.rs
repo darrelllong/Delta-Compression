@@ -160,15 +160,14 @@ pub fn diff_correcting(
             // than modulo to avoid division in the hot path.
             let mut i = (f / m) as usize;
             let i0 = i;
-            loop {
-                let slot_fp = h_r_ht[i].fp;
-                if slot_fp == u64::MAX { break; }           // empty — store here
-                if slot_fp == fp { i = usize::MAX; break; } // same fp already stored — skip
+            let mut store = true;
+            while h_r_ht[i].fp != u64::MAX {
+                if h_r_ht[i].fp == fp { store = false; break; } // same fp already stored — skip
                 i += 1; if i == cap { i = 0; }
                 dbg_build_probes += 1;
-                if i == i0 { i = usize::MAX; break; }       // table full (safety)
+                if i == i0 { store = false; break; }             // table full (safety)
             }
-            if i != usize::MAX {
+            if store {
                 h_r_ht[i] = CSlot { fp, offset: a }; // first-found (Section 7 Step 1)
                 dbg_build_stored += 1;
             }
@@ -205,13 +204,12 @@ pub fn diff_correcting(
         } else {
             let mut i = (f_v / m) as usize;
             let i0 = i;
-            loop {
-                let slot = &h_r_ht[i];
-                if slot.fp == u64::MAX { return None; } // empty — end of chain
-                if slot.fp == fp_v { return Some((fp_v, slot.offset)); }
+            while h_r_ht[i].fp != u64::MAX {
+                if h_r_ht[i].fp == fp_v { return Some((fp_v, h_r_ht[i].offset)); }
                 i += 1; if i == cap { i = 0; }
                 if i == i0 { return None; } // full table — not found
             }
+            None
         }
     };
 
@@ -235,11 +233,8 @@ pub fn diff_correcting(
     let mut rh_v = if v_seeds > 0 { Some(RollingHash::new(v, 0, p)) } else { None };
     let mut rh_v_pos: usize = 0;
 
-    loop {
-        // Step (3): check for end of V
-        if v_c + p > v.len() {
-            break;
-        }
+    while v_c + p <= v.len() {
+        // Step (3): condition in while header.
 
         // Step (4): generate footprint at v_c, apply checkpoint test.
         let fp_v = if let Some(ref mut rh) = rh_v {

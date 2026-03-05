@@ -191,14 +191,14 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 			} else {
 				size_t i = (size_t)(f / m);
 				size_t i0 = i;
-				for (;;) {
-					if (h_r_ht[i].fp == CORR_EMPTY_FP) { break; }  // empty — store here
-					if (h_r_ht[i].fp == fp) { i = (size_t)-1; break; } // dup fp — skip
+				bool store = true;
+				while (h_r_ht[i].fp != CORR_EMPTY_FP) {
+					if (h_r_ht[i].fp == fp) { store = false; break; } // dup fp — skip
 					if (++i == cap) { i = 0; }
 					dbg_build_probes++;
-					if (i == i0) { i = (size_t)-1; break; }  // table full
+					if (i == i0) { store = false; break; }  // table full
 				}
-				if (i != (size_t)-1) {
+				if (store) {
 					h_r_ht[i].fp = fp;
 					h_r_ht[i].offset = a;
 					dbg_build_stored++;
@@ -235,14 +235,11 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 		rh_v_pos = 0;
 	}
 
-	for (;;) {
+	while (v_c + p <= v_len) {
 		uint64_t fp_v, f_v;
 		size_t r_offset;
 		size_t fwd, bwd, v_m_val, r_m, ml, match_end;
 		bool found;
-
-		// Step (3): check for end of V
-		if (v_c + p > v_len) { break; }
 
 		// Step (4): generate fingerprint, apply checkpoint test
 		fp_v = delta_rh_advance(&rh_v, &rh_v_valid, &rh_v_pos,
@@ -277,8 +274,7 @@ delta_diff_correcting(const uint8_t *r, size_t r_len,
 		} else {
 			size_t i = (size_t)(f_v / m);
 			size_t i0 = i;
-			for (;;) {
-				if (h_r_ht[i].fp == CORR_EMPTY_FP) { break; }  // empty — chain ends
+			while (h_r_ht[i].fp != CORR_EMPTY_FP) {
 				if (h_r_ht[i].fp == fp_v) {
 					if (memcmp(&r[h_r_ht[i].offset],
 					           &v[v_c], p) != 0) {

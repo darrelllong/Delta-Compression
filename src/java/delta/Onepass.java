@@ -63,11 +63,10 @@ public final class Onepass {
         Hash.RollingHash rhR = r.length >= p ? new Hash.RollingHash(r, 0, p) : null;
         int rhVPos = 0, rhRPos = 0;
 
-        while (true) {
-            // Step (3): check for end of V and R
+        while (vC + p <= v.length || rC + p <= r.length) {
+            // Step (3): which streams still have seeds?
             boolean canV = vC + p <= v.length;
             boolean canR = rC + p <= r.length;
-            if (!canV && !canR) break;
 
             long fpV = -1, fpR = -1;
             boolean hasFpV = false, hasFpR = false;

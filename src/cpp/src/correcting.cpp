@@ -110,14 +110,14 @@ std::vector<Command> diff_correcting(
         } else {
             size_t i = static_cast<size_t>(f / m);
             const size_t i0 = i;
-            for (;;) {
-                if (h_r_ht[i].fp == EMPTY_FP) { break; }           // empty — store here
-                if (h_r_ht[i].fp == fp) { i = SIZE_MAX; break; }    // dup fp — skip
+            bool store = true;
+            while (h_r_ht[i].fp != EMPTY_FP) {
+                if (h_r_ht[i].fp == fp) { store = false; break; }   // dup fp — skip
                 if (++i == cap) { i = 0; }
                 ++dbg_build_probes;
-                if (i == i0) { i = SIZE_MAX; break; }               // table full
+                if (i == i0) { store = false; break; }              // table full
             }
-            if (i != SIZE_MAX) {
+            if (store) {
                 h_r_ht[i] = CSlot{fp, a}; // linear probing (Section 7 Step 1)
                 ++dbg_build_stored;
             }
@@ -150,14 +150,14 @@ std::vector<Command> diff_correcting(
         } else {
             size_t i = static_cast<size_t>(f_v / m);
             const size_t i0 = i;
-            for (;;) {
-                if (h_r_ht[i].fp == EMPTY_FP) { return std::nullopt; } // empty — chain ends
+            while (h_r_ht[i].fp != EMPTY_FP) {
                 if (h_r_ht[i].fp == fp_v) {
                     return std::make_pair(h_r_ht[i].fp, h_r_ht[i].offset);
                 }
                 if (++i == cap) { i = 0; }
                 if (i == i0) { return std::nullopt; }               // full table
             }
+            return std::nullopt;
         }
     };
 
@@ -182,9 +182,8 @@ std::vector<Command> diff_correcting(
     size_t rh_v_pos = 0;
     if (v.size() >= p) { rh_v_scan.emplace(v, 0, p); rh_v_pos = 0; }
 
-    for (;;) {
-        // Step (3): check for end of V
-        if (v_c + p > v.size()) { break; }
+    while (v_c + p <= v.size()) {
+        // Step (3): check for end of V (condition in while header)
 
         // Step (4): generate footprint at v_c, apply checkpoint test.
         uint64_t fp_v;

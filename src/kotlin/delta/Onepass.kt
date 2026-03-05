@@ -55,11 +55,10 @@ fun diffOnepass(r: ByteArray, v: ByteArray, opts: DiffOptions): List<Command> {
     var rhVPos = 0
     var rhRPos = 0
 
-    while (true) {
-        // Step (3): check for end of V and R
+    while (vC + p <= v.size || rC + p <= r.size) {
+        // Step (3): which streams still have seeds?
         val canV = vC + p <= v.size
         val canR = rC + p <= r.size
-        if (!canV && !canR) break
 
         var fpV = -1L; var hasFpV = false
         var fpR = -1L; var hasFpR = false

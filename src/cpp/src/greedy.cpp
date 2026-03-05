@@ -63,9 +63,7 @@ std::vector<Command> diff_greedy(
     size_t rh_v_pos = 0;
     if (v.size() >= p) { rh_v_scan.emplace(v, 0, p); rh_v_pos = 0; }
 
-    for (;;) {
-        // Step (3): check for end of V
-        if (v_c + p > v.size()) { break; }
+    while (v_c + p <= v.size()) {
 
         uint64_t fp_v;
         if (v_c == rh_v_pos) {

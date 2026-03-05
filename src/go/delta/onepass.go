@@ -98,13 +98,10 @@ func diffOnepass(r, v []byte, opts DiffOptions) []Command {
 
 	var commands []Command
 
-	for {
-		// Step (3): check for end of V and R.
+	for vC+p <= len(v) || rC+p <= len(r) {
+		// Step (3): which streams still have seeds?
 		canV := vC+p <= len(v)
 		canR := rC+p <= len(r)
-		if !canV && !canR {
-			break
-		}
 
 		fpV := int64(-1)
 		fpR := int64(-1)

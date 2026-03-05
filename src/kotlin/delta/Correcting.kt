@@ -87,13 +87,13 @@ fun diffCorrecting(r: ByteArray, v: ByteArray, opts: DiffOptions): List<Command>
         } else {
             var i = (f / m).toInt()
             val i0 = i
-            while (true) {
-                if (htFp!![i] == -1L) { break }               // empty — store here
-                if (htFp!![i] == fp) { i = -1; break }        // dup fp — skip
+            var store = true
+            while (htFp!![i] != -1L) {
+                if (htFp!![i] == fp) { store = false; break } // dup fp — skip
                 if (++i == cap) { i = 0 }
-                if (i == i0) { i = -1; break }                 // table full
+                if (i == i0) { store = false; break }          // table full
             }
-            if (i >= 0) { htFp!![i] = fp; htOff!![i] = a }
+            if (store) { htFp!![i] = fp; htOff!![i] = a }
         }
     }
 
@@ -134,15 +134,12 @@ fun diffCorrecting(r: ByteArray, v: ByteArray, opts: DiffOptions): List<Command>
         } else {
             var i = (fV / m).toInt()
             val i0 = i
-            var found = -1
-            while (true) {
-                if (htFp!![i] == -1L) { break }               // empty — chain ends
-                if (htFp!![i] == fpV) { found = i; break }
+            while (htFp!![i] != -1L && htFp!![i] != fpV) {
                 if (++i == cap) { i = 0 }
                 if (i == i0) { break }                         // full table — not found
             }
-            if (found < 0) { vC++; continue }
-            storedFp = htFp!![found]; rOffset = htOff!![found]
+            if (htFp!![i] != fpV) { vC++; continue }
+            storedFp = htFp!![i]; rOffset = htOff!![i]
         }
 
         if (storedFp != fpV) { vC++; continue }

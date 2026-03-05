@@ -89,17 +89,16 @@ delta_diff_onepass(const uint8_t *r, size_t r_len,
 		rh_r_valid = 1; rh_r_pos = 0;
 	}
 
-	for (;;) {
+	while (v_c + p <= v_len || r_c + p <= r_len) {
 		bool can_v, can_r;
 		uint64_t fp_v = 0, fp_r = 0;
 		int have_fp_v = 0, have_fp_r = 0;
 		bool match_found = false;
 		size_t r_m = 0, v_m = 0;
 
-		// Step (3): check for end of V and R
+		// Step (3): which streams still have seeds?
 		can_v = (v_c + p <= v_len);
 		can_r = (r_c + p <= r_len);
-		if (!can_v && !can_r) { break; }
 		dbg_positions++;
 
 		// Compute fingerprints

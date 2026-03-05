@@ -101,11 +101,10 @@ std::vector<Command> diff_onepass(
     if (v.size() >= p) { rh_v.emplace(v, 0, p); rh_v_pos = 0; }
     if (r.size() >= p) { rh_r.emplace(r, 0, p); rh_r_pos = 0; }
 
-    for (;;) {
-        // Step (3): check for end of V and R
+    while (v_c + p <= v.size() || r_c + p <= r.size()) {
+        // Step (3): which streams still have seeds?
         bool can_v = (v_c + p <= v.size());
         bool can_r = (r_c + p <= r.size());
-        if (!can_v && !can_r) { break; }
         ++dbg_positions;
 
         std::optional<uint64_t> fp_v, fp_r;

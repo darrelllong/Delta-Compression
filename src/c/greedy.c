@@ -157,12 +157,9 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 		rh_v_pos = 0;
 	}
 
-	for (;;) {
+	while (v_c + p <= v_len) {
 		uint64_t fp_v;
 		size_t best_len = 0, best_rm = 0;
-
-		// Step (3): check for end of V
-		if (v_c + p > v_len) { break; }
 
 		// Compute V fingerprint at v_c
 		fp_v = delta_rh_advance(&rh_v, &rh_v_valid, &rh_v_pos,
