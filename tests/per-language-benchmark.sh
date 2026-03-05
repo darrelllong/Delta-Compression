@@ -38,25 +38,35 @@ if [[ -z "$JAVA" || ! -x "$JAVA" ]]; then
 fi
 
 # ── Locate Scala library ──────────────────────────────────────────────────────
-# Homebrew (macOS): scala.jar lives under libexec/lib/.
-# SDKMAN Scala 3 (Linux): runtime is split across two maven2 jars.  Build a
-#   colon-separated SCALA_LIB from both so -cp works with either install.
+# Try (1) the Makefile path, then (2) derive from wherever scalac lives.
 
-SCALA_LIB=$(grep 'SCALA_LIB\s*=' "$REPO_ROOT/src/scala/Makefile" | head -1 | sed 's/.*= *//')
-if [[ ! -f "$SCALA_LIB" ]]; then
-    # Try SDKMAN Scala 3 layout (scala3-library + scala2-compat)
-    _SDKMAN_SCALA="${HOME}/.sdkman/candidates/scala/current/maven2/org/scala-lang"
-    _S3="${_SDKMAN_SCALA}/scala3-library_3"
-    _S2="${_SDKMAN_SCALA}/scala-library"
-    _S3J=$(find "$_S3" -name "scala3-library_3-*.jar" 2>/dev/null | sort -V | tail -1)
-    _S2J=$(find "$_S2" -name "scala-library-*.jar"    2>/dev/null | sort -V | tail -1)
-    if [[ -f "$_S3J" && -f "$_S2J" ]]; then
-        SCALA_LIB="${_S3J}:${_S2J}"
-    fi
-fi
+_find_scala_lib() {
+    local mk_lib; mk_lib=$(grep 'SCALA_LIB\s*=' "$REPO_ROOT/src/scala/Makefile" \
+                           | head -1 | sed 's/.*= *//')
+    [[ -f "$mk_lib" ]] && { echo "$mk_lib"; return; }
+
+    local scalac; scalac=$(command -v scalac 2>/dev/null) || return 1
+    local real; real=$(readlink -f "$scalac" 2>/dev/null || echo "$scalac")
+    local scala_home; scala_home=$(dirname "$(dirname "$real")")
+
+    # Scala 3 layout: runtime split across two maven2 jars
+    local s3j s2j
+    s3j=$(find "$scala_home/maven2/org/scala-lang/scala3-library_3" \
+               -name "scala3-library_3-*.jar" 2>/dev/null | sort -V | tail -1)
+    s2j=$(find "$scala_home/maven2/org/scala-lang/scala-library" \
+               -name "scala-library-*.jar" 2>/dev/null | sort -V | tail -1)
+    [[ -f "$s3j" && -f "$s2j" ]] && { echo "${s3j}:${s2j}"; return; }
+
+    # Scala 2 / Homebrew layout: single scala.jar
+    local d; for d in "$scala_home/libexec/lib" "$scala_home/lib"; do
+        [[ -f "$d/scala.jar" ]] && { echo "$d/scala.jar"; return; }
+    done
+    return 1
+}
+
+SCALA_LIB=$(_find_scala_lib 2>/dev/null || true)
 if [[ -z "$SCALA_LIB" ]]; then
     echo "WARNING: Scala library not found — Scala will be skipped" >&2
-    SCALA_LIB=""
 fi
 
 # ── Locate GHC / Haskell toolchain ───────────────────────────────────────────

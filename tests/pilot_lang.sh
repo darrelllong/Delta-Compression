@@ -42,20 +42,33 @@ fi
 JAVA=$(command -v java 2>/dev/null || true)
 
 # ── Locate Scala library ──────────────────────────────────────────────────────
+# Try (1) the Makefile path, then (2) derive from wherever scalac lives.
 
-SCALA_LIB=""
-if [[ -f "$REPO_ROOT/src/scala/Makefile" ]]; then
-    SCALA_LIB=$(grep 'SCALA_LIB\s*=' "$REPO_ROOT/src/scala/Makefile" | head -1 | sed 's/.*= *//')
-fi
-if [[ -z "$SCALA_LIB" || ! -f "$SCALA_LIB" ]]; then
-    # SDKMAN Scala 3 (Linux): runtime is split across two maven2 jars
-    _SDKMAN_SCALA="${HOME}/.sdkman/candidates/scala/current/maven2/org/scala-lang"
-    _S3J=$(find "${_SDKMAN_SCALA}/scala3-library_3" -name "scala3-library_3-*.jar" 2>/dev/null | sort -V | tail -1)
-    _S2J=$(find "${_SDKMAN_SCALA}/scala-library"    -name "scala-library-*.jar"    2>/dev/null | sort -V | tail -1)
-    if [[ -f "$_S3J" && -f "$_S2J" ]]; then
-        SCALA_LIB="${_S3J}:${_S2J}"
-    fi
-fi
+_find_scala_lib() {
+    local mk_lib; mk_lib=$(grep 'SCALA_LIB\s*=' "$REPO_ROOT/src/scala/Makefile" \
+                           | head -1 | sed 's/.*= *//')
+    [[ -f "$mk_lib" ]] && { echo "$mk_lib"; return; }
+
+    local scalac; scalac=$(command -v scalac 2>/dev/null) || return 1
+    local real; real=$(readlink -f "$scalac" 2>/dev/null || echo "$scalac")
+    local scala_home; scala_home=$(dirname "$(dirname "$real")")
+
+    # Scala 3: runtime split across two maven2 jars
+    local s3j s2j
+    s3j=$(find "$scala_home/maven2/org/scala-lang/scala3-library_3" \
+               -name "scala3-library_3-*.jar" 2>/dev/null | sort -V | tail -1)
+    s2j=$(find "$scala_home/maven2/org/scala-lang/scala-library" \
+               -name "scala-library-*.jar" 2>/dev/null | sort -V | tail -1)
+    [[ -f "$s3j" && -f "$s2j" ]] && { echo "${s3j}:${s2j}"; return; }
+
+    # Scala 2 / Homebrew: single scala.jar
+    local d; for d in "$scala_home/libexec/lib" "$scala_home/lib"; do
+        [[ -f "$d/scala.jar" ]] && { echo "$d/scala.jar"; return; }
+    done
+    return 1
+}
+
+SCALA_LIB=$(_find_scala_lib 2>/dev/null || true)
 
 # ── Resolve command ───────────────────────────────────────────────────────────
 
