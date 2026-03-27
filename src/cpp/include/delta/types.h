@@ -33,7 +33,6 @@ inline constexpr uint8_t DELTA_FLAG_INPLACE = 0x01;
 inline constexpr uint8_t DELTA_CMD_END  = 0;
 inline constexpr uint8_t DELTA_CMD_COPY = 1;
 inline constexpr uint8_t DELTA_CMD_ADD  = 2;
-inline constexpr size_t  DELTA_HASH_SIZE = 16;   // SHAKE128 output length (bytes)
 inline constexpr size_t  DELTA_CRC_SIZE = 8;     // CRC-64/XZ digest
 inline constexpr size_t  DELTA_HEADER_SIZE = 25; // magic(4) + flags(1) + version_size(4) + src_crc(8) + dst_crc(8)
 inline constexpr size_t  DELTA_U32_SIZE = 4;
