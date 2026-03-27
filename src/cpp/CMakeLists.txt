@@ -26,6 +26,7 @@ add_library(delta_lib STATIC
     src/onepass.cpp
     src/correcting.cpp
     src/inplace.cpp
+    src/sha3.cpp
 )
 target_include_directories(delta_lib PUBLIC include)
 
