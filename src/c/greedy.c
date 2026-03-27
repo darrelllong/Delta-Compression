@@ -34,6 +34,7 @@ ght_insert(greedy_htable_t *ht, uint64_t fp, size_t offset)
 {
 	size_t idx = (size_t)(fp % (uint64_t)ht->nbuckets);
 	greedy_entry_t *e = delta_malloc(sizeof(*e));
+	if (!e) { return; }
 	e->fp = fp;
 	e->offset = offset;
 	e->next = ht->buckets[idx];

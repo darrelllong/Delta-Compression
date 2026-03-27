@@ -22,6 +22,7 @@ delta_commands_push(delta_commands_t *c, delta_command_t cmd)
 	if (c->len == c->cap) {
 		c->cap = c->cap ? c->cap * 2 : 16;
 		c->data = delta_realloc(c->data, c->cap * sizeof(*c->data));
+		if (!c->data) { return; }
 	}
 	c->data[c->len++] = cmd;
 }
@@ -55,6 +56,7 @@ delta_placed_commands_push(delta_placed_commands_t *c,
 	if (c->len == c->cap) {
 		c->cap = c->cap ? c->cap * 2 : 16;
 		c->data = delta_realloc(c->data, c->cap * sizeof(*c->data));
+		if (!c->data) { return; }
 	}
 	c->data[c->len++] = cmd;
 }

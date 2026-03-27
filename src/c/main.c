@@ -313,6 +313,7 @@ cmd_encode(int argc, char **argv)
 		v_file.data, v_file.size, &diff_opts);
 
 	delta_placed_commands_t placed;
+	delta_placed_commands_init(&placed);
 	if (inplace) {
 		placed = delta_make_inplace(r_file.data, r_file.size, &cmds, policy);
 	} else {
@@ -405,6 +406,7 @@ cmd_decode(int argc, char **argv)
 	clock_gettime(CLOCK_MONOTONIC, &t0);
 
 	delta_buffer_t out_buf;
+	delta_buffer_init(&out_buf);
 	if (dr.inplace) {
 		out_buf = delta_apply_delta_inplace(
 			r_file.data, r_file.size, &dr.commands, dr.version_size);
