@@ -93,7 +93,8 @@ public final class Apply {
                 validateRange(a.dst(), a.data().length, versionSize, "add destination");
             } else if (cmd instanceof PlacedMove m) {
                 validateRange(m.dst(), m.length(), versionSize, "move destination");
-                if (m.src() + m.length() > m.dst())
+                // Use compareUnsigned to avoid signed int overflow in src+length.
+                if (Integer.compareUnsigned(m.src() + m.length(), m.dst()) > 0)
                     throw new IllegalArgumentException(
                         "MOVE src+length > dst: encoder ordering constraint violated");
             }
