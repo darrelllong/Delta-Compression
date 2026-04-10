@@ -117,6 +117,101 @@ the effect is visible: common boilerplate dominates the fingerprint
 distribution, limiting the practical slowdown to ~7.5× algorithm-only
 rather than what an adversarial access pattern would produce.
 
+## Binary delta format specification
+
+This section is the normative wire format definition.  All eight
+implementations must conform exactly; any deviation is a bug.
+
+### Header (25 bytes, fixed)
+
+```
+Offset  Size  Field          Encoding
+------  ----  -----          --------
+0       4     magic          bytes 0x44 0x4C 0x54 0x03  ("DLT\x03")
+4       1     flags          u8 bitmask:
+                               bit 0 = INPLACE (0x01)
+                               bits 1–7 reserved, must be 0 on write,
+                               ignored on read
+5       4     version_size   u32 big-endian — byte length of the
+                               reconstructed version file
+9       8     src_crc        CRC-64/XZ of the reference file, big-endian
+17      8     dst_crc        CRC-64/XZ of the version file, big-endian
+```
+
+Total header size: 4 + 1 + 4 + 8 + 8 = **25 bytes**.
+
+### Command stream (immediately follows header)
+
+Commands are emitted in order and terminated by an END record.
+All multi-byte integers are **big-endian**.
+
+**COPY command** (13 bytes total)
+
+```
+Offset  Size  Field    Encoding
+------  ----  -----    --------
+0       1     type     u8 = 0x01
+1       4     src      u32 BE — byte offset in reference file
+5       4     dst      u32 BE — byte offset in output buffer
+9       4     length   u32 BE — number of bytes to copy
+```
+
+Constraint: `src + length ≤ len(reference)`, `dst + length ≤ version_size`.
+All values must fit in u32 (max 4,294,967,295); larger inputs are rejected.
+
+**ADD command** (9 + length bytes total)
+
+```
+Offset  Size    Field    Encoding
+------  ------  -----    --------
+0       1       type     u8 = 0x02
+1       4       dst      u32 BE — byte offset in output buffer
+5       4       length   u32 BE — number of literal bytes that follow
+9       length  data     raw bytes to write at dst
+```
+
+Constraint: `dst + length ≤ version_size`.
+
+**END record** (1 byte)
+
+```
+Offset  Size  Field  Encoding
+------  ----  -----  --------
+0       1     type   u8 = 0x00
+```
+
+Must appear exactly once, as the last record.  Decoders must reject
+files that lack an END record or contain records after it.
+
+### In-place vs standard format
+
+The INPLACE flag (bit 0 of `flags`) indicates that copy `src` ranges may
+overlap with `dst` ranges in the same buffer.  Commands are ordered so
+they can be applied sequentially without a separate output buffer.  The
+flag does not change the encoding of any command; only the semantics of
+application differ.
+
+### Constraints summary
+
+| Field | Max value | Error on violation |
+|-------|----------:|-------------------|
+| `version_size` | 2³²−1 (4 GiB − 1) | encode rejects; decode truncates/errors |
+| `copy.src` | 2³²−1 | encode rejects |
+| `copy.dst` | 2³²−1 | encode rejects |
+| `copy.length` | 2³²−1 | encode rejects |
+| `add.dst` | 2³²−1 | encode rejects |
+| `add.length` (data) | 2³²−1 | encode rejects |
+
+### Version history
+
+| Magic | Change |
+|-------|--------|
+| `DLT\x01` | Original format (no integrity hashes) |
+| `DLT\x02` | Added 16-byte SHAKE-128 src/dst hashes (header: 41 bytes) |
+| `DLT\x03` | Replaced SHAKE-128 with 8-byte CRC-64/XZ (header: 25 bytes) — current |
+
+Decoders must reject files with unknown magic bytes.
+
 ## Delta integrity verification
 
 Every delta file embeds two 8-byte CRC-64/XZ checksums in its header:
