@@ -254,10 +254,48 @@ validate_range(delta_decode_result_t *result, size_t dst, size_t length,
 	}
 }
 
-// ── Decode V3 command loop ────────────────────────────────────────────
+// consume_copy_u32 / consume_add_u32: shared between V3 and V4 loops.
+
+static size_t
+consume_copy_u32(delta_decode_result_t *result,
+                 const uint8_t *data, size_t len, size_t pos,
+                 delta_placed_command_t *cmd)
+{
+	if (pos + DELTA_COPY_PAYLOAD > len)
+		decode_fail(result, "truncated COPY");
+	cmd->tag = PCMD_COPY;
+	cmd->copy.src    = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
+	cmd->copy.dst    = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
+	cmd->copy.length = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
+	validate_range(result, cmd->copy.dst, cmd->copy.length,
+	               result->version_size, "COPY");
+	return pos;
+}
+
+static size_t
+consume_add_u32(delta_decode_result_t *result,
+                const uint8_t *data, size_t len, size_t pos,
+                delta_placed_command_t *cmd)
+{
+	size_t dlen;
+	if (pos + DELTA_ADD_HEADER > len)
+		decode_fail(result, "truncated ADD");
+	cmd->tag     = PCMD_ADD;
+	cmd->add.dst = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
+	dlen         = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
+	cmd->add.length = dlen;
+	validate_range(result, cmd->add.dst, dlen, result->version_size, "ADD");
+	if (pos + dlen > len)
+		decode_fail(result, "truncated ADD data");
+	cmd->add.data = delta_malloc(dlen);
+	if (dlen > 0) memcpy(cmd->add.data, &data[pos], dlen);
+	return pos + dlen;
+}
+
+// ── Decode small (u32-only) command loop — DLT\x03 ───────────────────
 
 static void
-decode_commands_v3(delta_decode_result_t *result,
+decode_commands_small(delta_decode_result_t *result,
                    const uint8_t *data, size_t len, size_t pos)
 {
 	while (pos < len) {
@@ -272,33 +310,12 @@ decode_commands_v3(delta_decode_result_t *result,
 		}
 
 		if (t == DELTA_CMD_COPY) {
-			if (pos + DELTA_COPY_PAYLOAD > len)
-				decode_fail(result, "truncated COPY");
-			cmd.tag = PCMD_COPY;
-			cmd.copy.src    = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-			cmd.copy.dst    = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-			cmd.copy.length = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-			validate_range(result, cmd.copy.dst, cmd.copy.length,
-			               result->version_size, "COPY");
+			pos = consume_copy_u32(result, data, len, pos, &cmd);
 		} else if (t == DELTA_CMD_ADD) {
-			size_t dlen;
-			if (pos + DELTA_ADD_HEADER > len)
-				decode_fail(result, "truncated ADD");
-			cmd.tag     = PCMD_ADD;
-			cmd.add.dst = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-			dlen        = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-			cmd.add.length = dlen;
-			validate_range(result, cmd.add.dst, dlen,
-			               result->version_size, "ADD");
-			if (pos + dlen > len)
-				decode_fail(result, "truncated ADD data");
-			cmd.add.data = delta_malloc(dlen);
-			if (dlen > 0) memcpy(cmd.add.data, &data[pos], dlen);
-			pos += dlen;
+			pos = consume_add_u32(result, data, len, pos, &cmd);
 		} else if (t == DELTA_CMD_BIGCOPY || t == DELTA_CMD_BIGADD ||
 		           t == DELTA_CMD_MOVE    || t == DELTA_CMD_BIGMOVE) {
-			decode_fail(result,
-			            "command type requires DLT\\x04 format");
+			decode_fail(result, "command type requires DLT\\x04 format");
 		} else {
 			decode_fail(result, "unknown command type");
 		}
@@ -308,10 +325,10 @@ decode_commands_v3(delta_decode_result_t *result,
 	decode_fail(result, "missing END");
 }
 
-// ── Decode V4 command loop ────────────────────────────────────────────
+// ── Decode large (u32+u64+MOVE) command loop — DLT\x04 ───────────────
 
 static void
-decode_commands_v4(delta_decode_result_t *result,
+decode_commands_large(delta_decode_result_t *result,
                    const uint8_t *data, size_t len, size_t pos)
 {
 	while (pos < len) {
@@ -326,29 +343,9 @@ decode_commands_v4(delta_decode_result_t *result,
 		}
 
 		if (t == DELTA_CMD_COPY) {
-			if (pos + DELTA_COPY_PAYLOAD > len)
-				decode_fail(result, "truncated COPY");
-			cmd.tag = PCMD_COPY;
-			cmd.copy.src    = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-			cmd.copy.dst    = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-			cmd.copy.length = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-			validate_range(result, cmd.copy.dst, cmd.copy.length,
-			               result->version_size, "COPY");
+			pos = consume_copy_u32(result, data, len, pos, &cmd);
 		} else if (t == DELTA_CMD_ADD) {
-			size_t dlen;
-			if (pos + DELTA_ADD_HEADER > len)
-				decode_fail(result, "truncated ADD");
-			cmd.tag     = PCMD_ADD;
-			cmd.add.dst = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-			dlen        = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-			cmd.add.length = dlen;
-			validate_range(result, cmd.add.dst, dlen,
-			               result->version_size, "ADD");
-			if (pos + dlen > len)
-				decode_fail(result, "truncated ADD data");
-			cmd.add.data = delta_malloc(dlen);
-			if (dlen > 0) memcpy(cmd.add.data, &data[pos], dlen);
-			pos += dlen;
+			pos = consume_add_u32(result, data, len, pos, &cmd);
 		} else if (t == DELTA_CMD_BIGCOPY) {
 			if (pos + DELTA_BIGCOPY_PAYLOAD > len)
 				decode_fail(result, "truncated BIGCOPY");
@@ -423,7 +420,7 @@ delta_decode(const uint8_t *data, size_t len)
 		result.version_size = read_u32_be(&data[5]);
 		memcpy(result.src_crc, &data[9],                   DELTA_CRC_SIZE);
 		memcpy(result.dst_crc, &data[9 + DELTA_CRC_SIZE],  DELTA_CRC_SIZE);
-		decode_commands_v3(&result, data, len, DELTA_HEADER_SIZE);
+		decode_commands_small(&result, data, len, DELTA_HEADER_SIZE);
 	} else if (memcmp(data, DELTA_MAGIC_V4, 4) == 0) {
 		// DLT\x04
 		if (len < DELTA_HEADER_SIZE_V4) {
@@ -434,7 +431,7 @@ delta_decode(const uint8_t *data, size_t len)
 		result.version_size = (size_t)read_u64_be(&data[5]);
 		memcpy(result.src_crc, &data[13],                   DELTA_CRC_SIZE);
 		memcpy(result.dst_crc, &data[13 + DELTA_CRC_SIZE],  DELTA_CRC_SIZE);
-		decode_commands_v4(&result, data, len, DELTA_HEADER_SIZE_V4);
+		decode_commands_large(&result, data, len, DELTA_HEADER_SIZE_V4);
 	} else {
 		fprintf(stderr, "delta_decode: not a delta file\n");
 		exit(1);
