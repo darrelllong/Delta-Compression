@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstring>
+#include <limits>
 #include <string>
 
 namespace delta {
@@ -16,6 +17,14 @@ static void check_u32(size_t val, const char* field) {
     if (val > UINT32_MAX) {
         throw DeltaError(std::string(field) + " exceeds 4 GiB (32-bit format limit)");
     }
+}
+
+// Guard against uint64_t → size_t truncation on 32-bit platforms.
+static size_t check_u64_fits(uint64_t val, const char* field) {
+    if (val > std::numeric_limits<size_t>::max()) {
+        throw DeltaError(std::string(field) + " overflows size_t on this platform");
+    }
+    return static_cast<size_t>(val);
 }
 
 // ── Big-endian I/O helpers ────────────────────────────────────────────────
@@ -237,7 +246,7 @@ static DecodeResult decode_delta_large(std::span<const uint8_t> data) {
         throw DeltaError("not a delta file");
 
     bool inplace = (data[DELTA_MAGIC_SIZE] & DELTA_FLAG_INPLACE) != 0;
-    size_t version_size = static_cast<size_t>(read_u64_be(&data[DELTA_MAGIC_SIZE + 1]));
+    size_t version_size = check_u64_fits(read_u64_be(&data[DELTA_MAGIC_SIZE + 1]), "version_size");
 
     const size_t crc_offset = DELTA_MAGIC_SIZE + 1 + DELTA_U64_SIZE;
     std::array<uint8_t, DELTA_CRC_SIZE> src_crc{}, dst_crc{};
@@ -263,9 +272,9 @@ static DecodeResult decode_delta_large(std::span<const uint8_t> data) {
         case DELTA_CMD_BIGCOPY: {
             if (pos + DELTA_BIGCOPY_PAYLOAD > data.size())
                 throw DeltaError("unexpected end of delta data");
-            size_t src    = static_cast<size_t>(read_u64_be(&data[pos])); pos += DELTA_U64_SIZE;
-            size_t dst    = static_cast<size_t>(read_u64_be(&data[pos])); pos += DELTA_U64_SIZE;
-            size_t length = static_cast<size_t>(read_u64_be(&data[pos])); pos += DELTA_U64_SIZE;
+            size_t src    = check_u64_fits(read_u64_be(&data[pos]), "bigcopy src");    pos += DELTA_U64_SIZE;
+            size_t dst    = check_u64_fits(read_u64_be(&data[pos]), "bigcopy dst");    pos += DELTA_U64_SIZE;
+            size_t length = check_u64_fits(read_u64_be(&data[pos]), "bigcopy length"); pos += DELTA_U64_SIZE;
             validate_placed_range(dst, length, version_size, "bigcopy");
             commands.emplace_back(PlacedCopy{src, dst, length});
             break;
@@ -273,8 +282,8 @@ static DecodeResult decode_delta_large(std::span<const uint8_t> data) {
         case DELTA_CMD_BIGADD: {
             if (pos + DELTA_BIGADD_HEADER > data.size())
                 throw DeltaError("unexpected end of delta data");
-            size_t dst    = static_cast<size_t>(read_u64_be(&data[pos])); pos += DELTA_U64_SIZE;
-            size_t length = static_cast<size_t>(read_u64_be(&data[pos])); pos += DELTA_U64_SIZE;
+            size_t dst    = check_u64_fits(read_u64_be(&data[pos]), "bigadd dst");    pos += DELTA_U64_SIZE;
+            size_t length = check_u64_fits(read_u64_be(&data[pos]), "bigadd length"); pos += DELTA_U64_SIZE;
             if (pos + length > data.size())
                 throw DeltaError("unexpected end of delta data");
             validate_placed_range(dst, length, version_size, "bigadd");
@@ -298,9 +307,9 @@ static DecodeResult decode_delta_large(std::span<const uint8_t> data) {
         case DELTA_CMD_BIGMOVE: {
             if (pos + DELTA_BIGCOPY_PAYLOAD > data.size())
                 throw DeltaError("unexpected end of delta data");
-            size_t src    = static_cast<size_t>(read_u64_be(&data[pos])); pos += DELTA_U64_SIZE;
-            size_t dst    = static_cast<size_t>(read_u64_be(&data[pos])); pos += DELTA_U64_SIZE;
-            size_t length = static_cast<size_t>(read_u64_be(&data[pos])); pos += DELTA_U64_SIZE;
+            size_t src    = check_u64_fits(read_u64_be(&data[pos]), "bigmove src");    pos += DELTA_U64_SIZE;
+            size_t dst    = check_u64_fits(read_u64_be(&data[pos]), "bigmove dst");    pos += DELTA_U64_SIZE;
+            size_t length = check_u64_fits(read_u64_be(&data[pos]), "bigmove length"); pos += DELTA_U64_SIZE;
             validate_placed_range(dst, length, version_size, "bigmove");
             if (src + length > dst)
                 throw DeltaError("bigmove src+length > dst: encoder ordering constraint violated");
