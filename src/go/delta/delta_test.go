@@ -1506,3 +1506,18 @@ func TestLargeAlgoRoundtripCorrecting(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, v)
 	}
 }
+
+// TestLargeU64TruncationGuard crafts a DLT\x04 stream whose version_size
+// field is 2^63 (top bit set). On a 64-bit platform this value exceeds
+// math.MaxInt64 so getU64BE rejects it; on a 32-bit platform it would be
+// caught even earlier. Either way, DecodeDelta must return a non-nil error.
+func TestLargeU64TruncationGuard(t *testing.T) {
+	buf := make([]byte, DeltaHeaderSizeLarge+1)
+	copy(buf, DeltaMagicLarge)
+	buf[5] = 0x80 // version_size = 2^63 (top bit set)
+	buf[DeltaHeaderSizeLarge] = DeltaCmdEnd
+	_, err := DecodeDelta(buf)
+	if err == nil {
+		t.Fatal("expected error for version_size with top bit set, got nil")
+	}
+}

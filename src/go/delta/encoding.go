@@ -1,6 +1,9 @@
 package delta
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 // Unified binary delta format (Section 2.1.1).
 //
@@ -276,7 +279,10 @@ func decodeDeltaLarge(data []byte) (DecodeResult, error) {
 		return DecodeResult{}, fmt.Errorf("not a delta file")
 	}
 	inplace := (data[4] & DeltaFlagInplace) != 0
-	versionSize := getU64BE(data, 5)
+	versionSize, err := getU64BE(data, 5)
+	if err != nil {
+		return DecodeResult{}, fmt.Errorf("version_size: %w", err)
+	}
 	crcOff := 13 // 4 + 1 + 8
 	var srcCrc, dstCrc [8]byte
 	copy(srcCrc[:], data[crcOff:crcOff+DeltaCrcSize])
@@ -324,9 +330,18 @@ func decodeDeltaLarge(data []byte) (DecodeResult, error) {
 			if pos+DeltaBigCopyPayload > len(data) {
 				return DecodeResult{}, fmt.Errorf("unexpected EOF")
 			}
-			src := getU64BE(data, pos); pos += DeltaU64Size
-			dst := getU64BE(data, pos); pos += DeltaU64Size
-			length := getU64BE(data, pos); pos += DeltaU64Size
+			src, err := getU64BE(data, pos); pos += DeltaU64Size
+			if err != nil {
+				return DecodeResult{}, fmt.Errorf("bigcopy src: %w", err)
+			}
+			dst, err := getU64BE(data, pos); pos += DeltaU64Size
+			if err != nil {
+				return DecodeResult{}, fmt.Errorf("bigcopy dst: %w", err)
+			}
+			length, err := getU64BE(data, pos); pos += DeltaU64Size
+			if err != nil {
+				return DecodeResult{}, fmt.Errorf("bigcopy length: %w", err)
+			}
 			if err := validatePlacedRange(dst, length, versionSize, "bigcopy"); err != nil {
 				return DecodeResult{}, err
 			}
@@ -335,8 +350,14 @@ func decodeDeltaLarge(data []byte) (DecodeResult, error) {
 			if pos+DeltaBigAddHeader > len(data) {
 				return DecodeResult{}, fmt.Errorf("unexpected EOF")
 			}
-			dst := getU64BE(data, pos); pos += DeltaU64Size
-			length := getU64BE(data, pos); pos += DeltaU64Size
+			dst, err := getU64BE(data, pos); pos += DeltaU64Size
+			if err != nil {
+				return DecodeResult{}, fmt.Errorf("bigadd dst: %w", err)
+			}
+			length, err := getU64BE(data, pos); pos += DeltaU64Size
+			if err != nil {
+				return DecodeResult{}, fmt.Errorf("bigadd length: %w", err)
+			}
 			if pos+length > len(data) {
 				return DecodeResult{}, fmt.Errorf("unexpected EOF")
 			}
@@ -365,9 +386,18 @@ func decodeDeltaLarge(data []byte) (DecodeResult, error) {
 			if pos+DeltaBigCopyPayload > len(data) {
 				return DecodeResult{}, fmt.Errorf("unexpected EOF")
 			}
-			src := getU64BE(data, pos); pos += DeltaU64Size
-			dst := getU64BE(data, pos); pos += DeltaU64Size
-			length := getU64BE(data, pos); pos += DeltaU64Size
+			src, err := getU64BE(data, pos); pos += DeltaU64Size
+			if err != nil {
+				return DecodeResult{}, fmt.Errorf("bigmove src: %w", err)
+			}
+			dst, err := getU64BE(data, pos); pos += DeltaU64Size
+			if err != nil {
+				return DecodeResult{}, fmt.Errorf("bigmove dst: %w", err)
+			}
+			length, err := getU64BE(data, pos); pos += DeltaU64Size
+			if err != nil {
+				return DecodeResult{}, fmt.Errorf("bigmove length: %w", err)
+			}
 			if err := validatePlacedRange(dst, length, versionSize, "bigmove"); err != nil {
 				return DecodeResult{}, err
 			}
@@ -435,9 +465,14 @@ func putU64BE(buf []byte, off, value int) {
 }
 
 // getU64BE reads a 64-bit unsigned integer in big-endian byte order.
-func getU64BE(buf []byte, off int) int {
-	return int(buf[off])<<56 | int(buf[off+1])<<48 | int(buf[off+2])<<40 | int(buf[off+3])<<32 |
-		int(buf[off+4])<<24 | int(buf[off+5])<<16 | int(buf[off+6])<<8 | int(buf[off+7])
+// Returns an error if the value exceeds math.MaxInt (truncation on 32-bit platforms).
+func getU64BE(buf []byte, off int) (int, error) {
+	v := uint64(buf[off])<<56 | uint64(buf[off+1])<<48 | uint64(buf[off+2])<<40 | uint64(buf[off+3])<<32 |
+		uint64(buf[off+4])<<24 | uint64(buf[off+5])<<16 | uint64(buf[off+6])<<8 | uint64(buf[off+7])
+	if v > math.MaxInt {
+		return 0, fmt.Errorf("delta field %d overflows int on this platform", v)
+	}
+	return int(v), nil
 }
 
 func validatePlacedRange(dst, length, versionSize int, kind string) error {
