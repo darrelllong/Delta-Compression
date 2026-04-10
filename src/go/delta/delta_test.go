@@ -338,7 +338,7 @@ func TestRealDataRoundtrip(t *testing.T) {
 	}
 }
 
-func TestLargeCopyRoundtrip(t *testing.T) {
+func TestBigPayloadCopyRoundtrip(t *testing.T) {
 	placed := []PlacedCommand{PlacedCopy{Src: 100_000, DstOff: 0, Length: 50_000}}
 	encoded := mustEncode(t, placed, false, 50_000, zeroHash, zeroHash)
 	res, _ := DecodeDelta(encoded)
@@ -351,7 +351,7 @@ func TestLargeCopyRoundtrip(t *testing.T) {
 	}
 }
 
-func TestLargeAddRoundtrip(t *testing.T) {
+func TestBigPayloadAddRoundtrip(t *testing.T) {
 	bigData := make([]byte, 256*4)
 	for i := range bigData {
 		bigData[i] = byte(i & 0xFF)
@@ -1282,5 +1282,227 @@ func TestEncodeDeltaRejectsAddDstOverflow(t *testing.T) {
 	_, err := EncodeDelta([]PlacedCommand{cmd}, false, 1, zeroHash, zeroHash)
 	if err == nil {
 		t.Fatal("expected error for add dst > uint32 max, got nil")
+	}
+}
+
+// ── DLT\x04 (large format) tests ─────────────────────────────────────────────
+
+func TestLargeHeaderMagic(t *testing.T) {
+	out := EncodeDeltaLarge(nil, false, 0, zeroHash, zeroHash)
+	if string(out[:4]) != DeltaMagicLarge {
+		t.Fatalf("expected magic %q, got %q", DeltaMagicLarge, string(out[:4]))
+	}
+}
+
+func TestLargeHeaderSize(t *testing.T) {
+	// Empty delta: 29-byte header + 1-byte END = 30 bytes.
+	out := EncodeDeltaLarge(nil, false, 0, zeroHash, zeroHash)
+	if len(out) != DeltaHeaderSizeLarge+1 {
+		t.Fatalf("expected %d bytes, got %d", DeltaHeaderSizeLarge+1, len(out))
+	}
+}
+
+func TestLargeHeaderVersionSizeU64(t *testing.T) {
+	big := 1<<32 + 999
+	out := EncodeDeltaLarge(nil, false, big, zeroHash, zeroHash)
+	res, err := DecodeDelta(out)
+	if err != nil {
+		t.Fatalf("DecodeDelta: %v", err)
+	}
+	if res.VersionSize != big {
+		t.Fatalf("version_size: got %d, want %d", res.VersionSize, big)
+	}
+}
+
+func TestLargeInplaceFlag(t *testing.T) {
+	out := EncodeDeltaLarge(nil, true, 0, zeroHash, zeroHash)
+	if !IsInplaceDelta(out) {
+		t.Fatal("inplace flag not detected")
+	}
+	out2 := EncodeDeltaLarge(nil, false, 0, zeroHash, zeroHash)
+	if IsInplaceDelta(out2) {
+		t.Fatal("inplace flag falsely detected")
+	}
+}
+
+func TestLargeCopySmallRoundtrip(t *testing.T) {
+	r := b("ABCDEFGH")
+	cmds := []PlacedCommand{PlacedCopy{Src: 0, DstOff: 0, Length: 8}}
+	out := EncodeDeltaLarge(cmds, false, 8, zeroHash, zeroHash)
+	res, err := DecodeDelta(out)
+	if err != nil {
+		t.Fatalf("DecodeDelta: %v", err)
+	}
+	got := make([]byte, res.VersionSize)
+	ApplyPlacedTo(r, res.Commands, got)
+	if !bytes.Equal(got, r) {
+		t.Fatalf("got %q, want %q", got, r)
+	}
+}
+
+func TestLargeBigCopyCommandByte(t *testing.T) {
+	// src > U32_MAX forces BIGCOPY; verify command byte = 3.
+	bigSrc := math.MaxUint32 + 1
+	cmds := []PlacedCommand{PlacedCopy{Src: bigSrc, DstOff: 0, Length: 1}}
+	out := EncodeDeltaLarge(cmds, false, 1, zeroHash, zeroHash)
+	if out[DeltaHeaderSizeLarge] != DeltaCmdBigCopy {
+		t.Fatalf("expected BIGCOPY(3), got %d", out[DeltaHeaderSizeLarge])
+	}
+}
+
+func TestLargeAddRoundtrip(t *testing.T) {
+	cmds := []PlacedCommand{PlacedAdd{DstOff: 0, Data: b("hello")}}
+	out := EncodeDeltaLarge(cmds, false, 5, zeroHash, zeroHash)
+	res, err := DecodeDelta(out)
+	if err != nil {
+		t.Fatalf("DecodeDelta: %v", err)
+	}
+	got := make([]byte, res.VersionSize)
+	ApplyPlacedTo(nil, res.Commands, got)
+	if !bytes.Equal(got, b("hello")) {
+		t.Fatalf("got %q, want %q", got, b("hello"))
+	}
+}
+
+func TestLargeBigAddCommandByte(t *testing.T) {
+	bigDst := math.MaxUint32 + 1
+	cmds := []PlacedCommand{PlacedAdd{DstOff: bigDst, Data: b("x")}}
+	out := EncodeDeltaLarge(cmds, false, bigDst+1, zeroHash, zeroHash)
+	if out[DeltaHeaderSizeLarge] != DeltaCmdBigAdd {
+		t.Fatalf("expected BIGADD(4), got %d", out[DeltaHeaderSizeLarge])
+	}
+}
+
+func TestLargeMoveRoundtrip(t *testing.T) {
+	// ADD "ABC" at 0, MOVE src=0 dst=3 len=3 → "ABCABC"
+	cmds := []PlacedCommand{
+		PlacedAdd{DstOff: 0, Data: b("ABC")},
+		PlacedMove{Src: 0, DstOff: 3, Length: 3},
+	}
+	out := EncodeDeltaLarge(cmds, false, 6, zeroHash, zeroHash)
+	res, err := DecodeDelta(out)
+	if err != nil {
+		t.Fatalf("DecodeDelta: %v", err)
+	}
+	got := make([]byte, res.VersionSize)
+	ApplyPlacedTo(nil, res.Commands, got)
+	if !bytes.Equal(got, b("ABCABC")) {
+		t.Fatalf("got %q, want %q", got, b("ABCABC"))
+	}
+}
+
+func TestLargeMoveCommandByte(t *testing.T) {
+	cmds := []PlacedCommand{PlacedMove{Src: 0, DstOff: 3, Length: 3}}
+	out := EncodeDeltaLarge(cmds, false, 6, zeroHash, zeroHash)
+	if out[DeltaHeaderSizeLarge] != DeltaCmdMove {
+		t.Fatalf("expected MOVE(5), got %d", out[DeltaHeaderSizeLarge])
+	}
+}
+
+func TestLargeBigMoveCommandByte(t *testing.T) {
+	bigDst := math.MaxUint32 + 1
+	cmds := []PlacedCommand{PlacedMove{Src: 0, DstOff: bigDst, Length: 1}}
+	out := EncodeDeltaLarge(cmds, false, bigDst+1, zeroHash, zeroHash)
+	if out[DeltaHeaderSizeLarge] != DeltaCmdBigMove {
+		t.Fatalf("expected BIGMOVE(6), got %d", out[DeltaHeaderSizeLarge])
+	}
+}
+
+func TestLargeMoveOverlapRejected(t *testing.T) {
+	// Construct a hand-crafted delta with MOVE src+length > dst — must be rejected.
+	import_struct := func(vsz, src, dst, length int) []byte {
+		hdr := append([]byte(DeltaMagicLarge), 0)
+		hdr = append(hdr, 0, 0, 0, 0, 0, 0, 0, byte(vsz)) // u64 BE version_size
+		hdr = append(hdr, make([]byte, 16)...)              // crcs
+		// MOVE src dst len (u32)
+		body := []byte{DeltaCmdMove,
+			byte(src >> 24), byte(src >> 16), byte(src >> 8), byte(src),
+			byte(dst >> 24), byte(dst >> 16), byte(dst >> 8), byte(dst),
+			byte(length >> 24), byte(length >> 16), byte(length >> 8), byte(length),
+			DeltaCmdEnd,
+		}
+		return append(hdr, body...)
+	}
+	data := import_struct(10, 5, 7, 4) // src+length=9 > dst=7
+	_, err := DecodeDelta(data)
+	if err == nil {
+		t.Fatal("expected error for MOVE src+length > dst")
+	}
+}
+
+func TestSmallRejectsLargeCommandBytes(t *testing.T) {
+	// Hand-craft a DLT\x03 file containing a BIGCOPY byte — must be rejected.
+	hdr := append([]byte(DeltaMagic), 0)
+	hdr = append(hdr, 0, 0, 0, 10) // u32 BE version_size = 10
+	hdr = append(hdr, make([]byte, 16)...)
+	body := []byte{DeltaCmdBigCopy,
+		0, 0, 0, 0, 0, 0, 0, 0, // src u64
+		0, 0, 0, 0, 0, 0, 0, 0, // dst u64
+		0, 0, 0, 0, 0, 0, 0, 5, // len u64 = 5
+		DeltaCmdEnd,
+	}
+	_, err := DecodeDelta(append(hdr, body...))
+	if err == nil {
+		t.Fatal("expected error for BIGCOPY in DLT\\x03 stream")
+	}
+}
+
+func TestUnknownMagicRejected(t *testing.T) {
+	bad := append([]byte("DLT\x99"), make([]byte, 30)...)
+	_, err := DecodeDelta(bad)
+	if err == nil {
+		t.Fatal("expected error for unknown magic")
+	}
+}
+
+func TestLargeAlgoRoundtripGreedy(t *testing.T) {
+	r, v := b("hello world"), b("hello earth")
+	cmds := Diff(AlgorithmGreedy, r, v, opts(4))
+	placed := PlaceCommands(cmds)
+	delta := EncodeDeltaLarge(placed, false, len(v), zeroHash, zeroHash)
+	if string(delta[:4]) != DeltaMagicLarge {
+		t.Fatal("expected DLT\\x04 magic")
+	}
+	res, err := DecodeDelta(delta)
+	if err != nil {
+		t.Fatalf("DecodeDelta: %v", err)
+	}
+	got := make([]byte, res.VersionSize)
+	ApplyPlacedTo(r, res.Commands, got)
+	if !bytes.Equal(got, v) {
+		t.Fatalf("got %q, want %q", got, v)
+	}
+}
+
+func TestLargeAlgoRoundtripOnepass(t *testing.T) {
+	r := repeat(b("abcdefgh"), 10)
+	v := append(repeat(b("abcdefgh"), 5), repeat(b("XXXXXXXX"), 5)...)
+	cmds := Diff(AlgorithmOnepass, r, v, opts(4))
+	placed := PlaceCommands(cmds)
+	delta := EncodeDeltaLarge(placed, false, len(v), zeroHash, zeroHash)
+	res, err := DecodeDelta(delta)
+	if err != nil {
+		t.Fatalf("DecodeDelta: %v", err)
+	}
+	got := make([]byte, res.VersionSize)
+	ApplyPlacedTo(r, res.Commands, got)
+	if !bytes.Equal(got, v) {
+		t.Fatalf("got %q, want %q", got, v)
+	}
+}
+
+func TestLargeAlgoRoundtripCorrecting(t *testing.T) {
+	r, v := b("the quick brown fox"), b("the slow brown fox")
+	cmds := Diff(AlgorithmCorrecting, r, v, opts(4))
+	placed := PlaceCommands(cmds)
+	delta := EncodeDeltaLarge(placed, false, len(v), zeroHash, zeroHash)
+	res, err := DecodeDelta(delta)
+	if err != nil {
+		t.Fatalf("DecodeDelta: %v", err)
+	}
+	got := make([]byte, res.VersionSize)
+	ApplyPlacedTo(r, res.Commands, got)
+	if !bytes.Equal(got, v) {
+		t.Fatalf("got %q, want %q", got, v)
 	}
 }

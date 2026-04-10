@@ -113,22 +113,111 @@ func EncodeDelta(commands []PlacedCommand, inplace bool, versionSize int,
 	return out[:pos], nil
 }
 
-// DecodeDelta parses the unified binary delta format.
-func DecodeDelta(data []byte) (DecodeResult, error) {
-	if len(data) < DeltaHeaderSize {
-		return DecodeResult{}, fmt.Errorf("not a delta file")
+// EncodeDeltaLarge serializes placed commands to the DLT\x04 binary delta format.
+//
+// Per-command size selection: COPY/BIGCOPY, ADD/BIGADD, MOVE/BIGMOVE chosen
+// based on whether all fields fit in u32. This function is infallible: on
+// 64-bit platforms int ≤ 63 bits, which always fits in u64.
+func EncodeDeltaLarge(commands []PlacedCommand, inplace bool, versionSize int,
+	srcCrc, dstCrc [8]byte) []byte {
+
+	// Worst-case estimate: V4 header + BIGCOPY/BIGMOVE per cmd + END.
+	est := DeltaHeaderSizeLarge + 1
+	for _, cmd := range commands {
+		switch c := cmd.(type) {
+		case PlacedCopy:
+			est += 1 + DeltaBigCopyPayload
+		case PlacedAdd:
+			est += 1 + DeltaBigAddHeader + len(c.Data)
+		case PlacedMove:
+			est += 1 + DeltaBigCopyPayload
+		}
 	}
-	for i := 0; i < 4; i++ {
-		if data[i] != DeltaMagic[i] {
-			return DecodeResult{}, fmt.Errorf("not a delta file")
+	out := make([]byte, est)
+	pos := 0
+
+	// V4 header: magic(4) + flags(1) + version_size(u64 BE) + crcs(16).
+	copy(out[pos:], DeltaMagicLarge)
+	pos += 4
+	if inplace {
+		out[pos] = DeltaFlagInplace
+	}
+	pos++
+	putU64BE(out, pos, versionSize)
+	pos += DeltaU64Size
+	copy(out[pos:], srcCrc[:])
+	pos += DeltaCrcSize
+	copy(out[pos:], dstCrc[:])
+	pos += DeltaCrcSize
+
+	for _, cmd := range commands {
+		switch c := cmd.(type) {
+		case PlacedCopy:
+			if c.Src <= maxU32 && c.DstOff <= maxU32 && c.Length <= maxU32 {
+				out[pos] = DeltaCmdCopy; pos++
+				putU32BE(out, pos, c.Src); pos += DeltaU32Size
+				putU32BE(out, pos, c.DstOff); pos += DeltaU32Size
+				putU32BE(out, pos, c.Length); pos += DeltaU32Size
+			} else {
+				out[pos] = DeltaCmdBigCopy; pos++
+				putU64BE(out, pos, c.Src); pos += DeltaU64Size
+				putU64BE(out, pos, c.DstOff); pos += DeltaU64Size
+				putU64BE(out, pos, c.Length); pos += DeltaU64Size
+			}
+		case PlacedAdd:
+			if c.DstOff <= maxU32 && len(c.Data) <= maxU32 {
+				out[pos] = DeltaCmdAdd; pos++
+				putU32BE(out, pos, c.DstOff); pos += DeltaU32Size
+				putU32BE(out, pos, len(c.Data)); pos += DeltaU32Size
+			} else {
+				out[pos] = DeltaCmdBigAdd; pos++
+				putU64BE(out, pos, c.DstOff); pos += DeltaU64Size
+				putU64BE(out, pos, len(c.Data)); pos += DeltaU64Size
+			}
+			copy(out[pos:], c.Data)
+			pos += len(c.Data)
+		case PlacedMove:
+			if c.Src <= maxU32 && c.DstOff <= maxU32 && c.Length <= maxU32 {
+				out[pos] = DeltaCmdMove; pos++
+				putU32BE(out, pos, c.Src); pos += DeltaU32Size
+				putU32BE(out, pos, c.DstOff); pos += DeltaU32Size
+				putU32BE(out, pos, c.Length); pos += DeltaU32Size
+			} else {
+				out[pos] = DeltaCmdBigMove; pos++
+				putU64BE(out, pos, c.Src); pos += DeltaU64Size
+				putU64BE(out, pos, c.DstOff); pos += DeltaU64Size
+				putU64BE(out, pos, c.Length); pos += DeltaU64Size
+			}
 		}
 	}
 
+	out[pos] = DeltaCmdEnd
+	pos++
+	return out[:pos]
+}
+
+// DecodeDelta parses a binary delta (DLT\x03 or DLT\x04).
+func DecodeDelta(data []byte) (DecodeResult, error) {
+	if len(data) < 4 {
+		return DecodeResult{}, fmt.Errorf("not a delta file")
+	}
+	switch string(data[:4]) {
+	case DeltaMagic:
+		return decodeDeltaSmall(data)
+	case DeltaMagicLarge:
+		return decodeDeltaLarge(data)
+	default:
+		return DecodeResult{}, fmt.Errorf("not a delta file")
+	}
+}
+
+// decodeDeltaSmall parses DLT\x03 format (u32 fields; no MOVE or big variants).
+func decodeDeltaSmall(data []byte) (DecodeResult, error) {
+	if len(data) < DeltaHeaderSize {
+		return DecodeResult{}, fmt.Errorf("not a delta file")
+	}
 	inplace := (data[4] & DeltaFlagInplace) != 0
 	versionSize := getU32BE(data, 5)
-	if versionSize < 0 {
-		return DecodeResult{}, fmt.Errorf("invalid version size")
-	}
 	crcOff := 9
 	var srcCrc, dstCrc [8]byte
 	copy(srcCrc[:], data[crcOff:crcOff+DeltaCrcSize])
@@ -149,27 +238,19 @@ func DecodeDelta(data []byte) (DecodeResult, error) {
 			if pos+DeltaCopyPayload > len(data) {
 				return DecodeResult{}, fmt.Errorf("unexpected EOF")
 			}
-			src := getU32BE(data, pos)
-			pos += DeltaU32Size
-			dst := getU32BE(data, pos)
-			pos += DeltaU32Size
-			length := getU32BE(data, pos)
-			pos += DeltaU32Size
+			src := getU32BE(data, pos); pos += DeltaU32Size
+			dst := getU32BE(data, pos); pos += DeltaU32Size
+			length := getU32BE(data, pos); pos += DeltaU32Size
 			if err := validatePlacedRange(dst, length, versionSize, "copy"); err != nil {
 				return DecodeResult{}, err
-			}
-			if src < 0 {
-				return DecodeResult{}, fmt.Errorf("copy src out of range")
 			}
 			commands = append(commands, PlacedCopy{Src: src, DstOff: dst, Length: length})
 		case DeltaCmdAdd:
 			if pos+DeltaAddHeader > len(data) {
 				return DecodeResult{}, fmt.Errorf("unexpected EOF")
 			}
-			dst := getU32BE(data, pos)
-			pos += DeltaU32Size
-			length := getU32BE(data, pos)
-			pos += DeltaU32Size
+			dst := getU32BE(data, pos); pos += DeltaU32Size
+			length := getU32BE(data, pos); pos += DeltaU32Size
 			if pos+length > len(data) {
 				return DecodeResult{}, fmt.Errorf("unexpected EOF")
 			}
@@ -180,17 +261,135 @@ func DecodeDelta(data []byte) (DecodeResult, error) {
 			copy(payload, data[pos:pos+length])
 			pos += length
 			commands = append(commands, PlacedAdd{DstOff: dst, Data: payload})
+		case DeltaCmdBigCopy, DeltaCmdBigAdd, DeltaCmdMove, DeltaCmdBigMove:
+			return DecodeResult{}, fmt.Errorf("command type %d requires DLT\\x04 format", t)
 		default:
 			return DecodeResult{}, fmt.Errorf("unknown command type: %d", t)
 		}
 	}
+	return finishDecode(commands, sawEnd, pos, len(data), inplace, versionSize, srcCrc, dstCrc)
+}
+
+// decodeDeltaLarge parses DLT\x04 format (u32+u64 fields, MOVE/BIGMOVE).
+func decodeDeltaLarge(data []byte) (DecodeResult, error) {
+	if len(data) < DeltaHeaderSizeLarge {
+		return DecodeResult{}, fmt.Errorf("not a delta file")
+	}
+	inplace := (data[4] & DeltaFlagInplace) != 0
+	versionSize := getU64BE(data, 5)
+	crcOff := 13 // 4 + 1 + 8
+	var srcCrc, dstCrc [8]byte
+	copy(srcCrc[:], data[crcOff:crcOff+DeltaCrcSize])
+	copy(dstCrc[:], data[crcOff+DeltaCrcSize:crcOff+2*DeltaCrcSize])
+	pos := DeltaHeaderSizeLarge
+
+	var commands []PlacedCommand
+	sawEnd := false
+	for pos < len(data) {
+		t := int(data[pos] & 0xFF)
+		pos++
+		if t == DeltaCmdEnd {
+			sawEnd = true
+			break
+		}
+		switch t {
+		case DeltaCmdCopy:
+			if pos+DeltaCopyPayload > len(data) {
+				return DecodeResult{}, fmt.Errorf("unexpected EOF")
+			}
+			src := getU32BE(data, pos); pos += DeltaU32Size
+			dst := getU32BE(data, pos); pos += DeltaU32Size
+			length := getU32BE(data, pos); pos += DeltaU32Size
+			if err := validatePlacedRange(dst, length, versionSize, "copy"); err != nil {
+				return DecodeResult{}, err
+			}
+			commands = append(commands, PlacedCopy{Src: src, DstOff: dst, Length: length})
+		case DeltaCmdAdd:
+			if pos+DeltaAddHeader > len(data) {
+				return DecodeResult{}, fmt.Errorf("unexpected EOF")
+			}
+			dst := getU32BE(data, pos); pos += DeltaU32Size
+			length := getU32BE(data, pos); pos += DeltaU32Size
+			if pos+length > len(data) {
+				return DecodeResult{}, fmt.Errorf("unexpected EOF")
+			}
+			if err := validatePlacedRange(dst, length, versionSize, "add"); err != nil {
+				return DecodeResult{}, err
+			}
+			payload := make([]byte, length)
+			copy(payload, data[pos:pos+length])
+			pos += length
+			commands = append(commands, PlacedAdd{DstOff: dst, Data: payload})
+		case DeltaCmdBigCopy:
+			if pos+DeltaBigCopyPayload > len(data) {
+				return DecodeResult{}, fmt.Errorf("unexpected EOF")
+			}
+			src := getU64BE(data, pos); pos += DeltaU64Size
+			dst := getU64BE(data, pos); pos += DeltaU64Size
+			length := getU64BE(data, pos); pos += DeltaU64Size
+			if err := validatePlacedRange(dst, length, versionSize, "bigcopy"); err != nil {
+				return DecodeResult{}, err
+			}
+			commands = append(commands, PlacedCopy{Src: src, DstOff: dst, Length: length})
+		case DeltaCmdBigAdd:
+			if pos+DeltaBigAddHeader > len(data) {
+				return DecodeResult{}, fmt.Errorf("unexpected EOF")
+			}
+			dst := getU64BE(data, pos); pos += DeltaU64Size
+			length := getU64BE(data, pos); pos += DeltaU64Size
+			if pos+length > len(data) {
+				return DecodeResult{}, fmt.Errorf("unexpected EOF")
+			}
+			if err := validatePlacedRange(dst, length, versionSize, "bigadd"); err != nil {
+				return DecodeResult{}, err
+			}
+			payload := make([]byte, length)
+			copy(payload, data[pos:pos+length])
+			pos += length
+			commands = append(commands, PlacedAdd{DstOff: dst, Data: payload})
+		case DeltaCmdMove:
+			if pos+DeltaCopyPayload > len(data) {
+				return DecodeResult{}, fmt.Errorf("unexpected EOF")
+			}
+			src := getU32BE(data, pos); pos += DeltaU32Size
+			dst := getU32BE(data, pos); pos += DeltaU32Size
+			length := getU32BE(data, pos); pos += DeltaU32Size
+			if err := validatePlacedRange(dst, length, versionSize, "move"); err != nil {
+				return DecodeResult{}, err
+			}
+			if src+length > dst {
+				return DecodeResult{}, fmt.Errorf("move src+length > dst: encoder ordering constraint violated")
+			}
+			commands = append(commands, PlacedMove{Src: src, DstOff: dst, Length: length})
+		case DeltaCmdBigMove:
+			if pos+DeltaBigCopyPayload > len(data) {
+				return DecodeResult{}, fmt.Errorf("unexpected EOF")
+			}
+			src := getU64BE(data, pos); pos += DeltaU64Size
+			dst := getU64BE(data, pos); pos += DeltaU64Size
+			length := getU64BE(data, pos); pos += DeltaU64Size
+			if err := validatePlacedRange(dst, length, versionSize, "bigmove"); err != nil {
+				return DecodeResult{}, err
+			}
+			if src+length > dst {
+				return DecodeResult{}, fmt.Errorf("bigmove src+length > dst: encoder ordering constraint violated")
+			}
+			commands = append(commands, PlacedMove{Src: src, DstOff: dst, Length: length})
+		default:
+			return DecodeResult{}, fmt.Errorf("unknown command type: %d", t)
+		}
+	}
+	return finishDecode(commands, sawEnd, pos, len(data), inplace, versionSize, srcCrc, dstCrc)
+}
+
+func finishDecode(commands []PlacedCommand, sawEnd bool, pos, dataLen int,
+	inplace bool, versionSize int, srcCrc, dstCrc [8]byte) (DecodeResult, error) {
 	if !sawEnd {
 		return DecodeResult{}, fmt.Errorf("missing END command")
 	}
-	if pos != len(data) {
+	if pos != dataLen {
 		return DecodeResult{}, fmt.Errorf("trailing data after END")
 	}
-
 	return DecodeResult{
 		Commands:    commands,
 		Inplace:     inplace,
@@ -200,17 +399,14 @@ func DecodeDelta(data []byte) (DecodeResult, error) {
 	}, nil
 }
 
-// IsInplaceDelta reports whether data is an in-place delta file.
+// IsInplaceDelta reports whether data is an in-place delta (DLT\x03 or DLT\x04).
 func IsInplaceDelta(data []byte) bool {
 	if len(data) < 5 {
 		return false
 	}
-	for i := 0; i < 4; i++ {
-		if data[i] != DeltaMagic[i] {
-			return false
-		}
-	}
-	return (data[4] & DeltaFlagInplace) != 0
+	magic := string(data[:4])
+	return (magic == DeltaMagic || magic == DeltaMagicLarge) &&
+		(data[4]&DeltaFlagInplace) != 0
 }
 
 // putU32BE writes value as a 32-bit unsigned integer in big-endian byte order.
@@ -224,6 +420,24 @@ func putU32BE(buf []byte, off, value int) {
 // getU32BE reads a 32-bit unsigned integer in big-endian byte order.
 func getU32BE(buf []byte, off int) int {
 	return int(buf[off])<<24 | int(buf[off+1])<<16 | int(buf[off+2])<<8 | int(buf[off+3])
+}
+
+// putU64BE writes value as a 64-bit unsigned integer in big-endian byte order.
+func putU64BE(buf []byte, off, value int) {
+	buf[off]   = byte(value >> 56)
+	buf[off+1] = byte(value >> 48)
+	buf[off+2] = byte(value >> 40)
+	buf[off+3] = byte(value >> 32)
+	buf[off+4] = byte(value >> 24)
+	buf[off+5] = byte(value >> 16)
+	buf[off+6] = byte(value >> 8)
+	buf[off+7] = byte(value)
+}
+
+// getU64BE reads a 64-bit unsigned integer in big-endian byte order.
+func getU64BE(buf []byte, off int) int {
+	return int(buf[off])<<56 | int(buf[off+1])<<48 | int(buf[off+2])<<40 | int(buf[off+3])<<32 |
+		int(buf[off+4])<<24 | int(buf[off+5])<<16 | int(buf[off+6])<<8 | int(buf[off+7])
 }
 
 func validatePlacedRange(dst, length, versionSize int, kind string) error {

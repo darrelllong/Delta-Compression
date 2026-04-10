@@ -10,17 +10,26 @@ const (
 	HashMod      = (1 << 61) - 1 // Mersenne prime 2^61-1
 
 	// Binary delta format constants.
-	DeltaMagic       = "DLT\x03"
-	DeltaFlagInplace = byte(0x01)
-	DeltaCmdEnd      = 0
-	DeltaCmdCopy     = 1
-	DeltaCmdAdd      = 2
-	DeltaCrcSize     = 8  // CRC-64/XZ digest bytes
-	DeltaHeaderSize  = 25 // magic(4)+flags(1)+version_size(4)+src_crc(8)+dst_crc(8)
-	DeltaU32Size     = 4
-	DeltaCopyPayload = 12 // src(4)+dst(4)+len(4)
-	DeltaAddHeader   = 8  // dst(4)+len(4)
-	DeltaBufCap      = 256
+	DeltaMagic            = "DLT\x03"
+	DeltaMagicLarge       = "DLT\x04"
+	DeltaFlagInplace      = byte(0x01)
+	DeltaCmdEnd           = 0
+	DeltaCmdCopy          = 1
+	DeltaCmdAdd           = 2
+	DeltaCmdBigCopy       = 3  // DLT\x04: COPY with u64 fields
+	DeltaCmdBigAdd        = 4  // DLT\x04: ADD with u64 dst/len header
+	DeltaCmdMove          = 5  // DLT\x04: copy from already-written output (u32 fields)
+	DeltaCmdBigMove       = 6  // DLT\x04: MOVE with u64 fields
+	DeltaCrcSize          = 8  // CRC-64/XZ digest bytes
+	DeltaHeaderSize       = 25 // magic(4)+flags(1)+version_size(4)+src_crc(8)+dst_crc(8)
+	DeltaHeaderSizeLarge  = 29 // magic(4)+flags(1)+version_size(8)+src_crc(8)+dst_crc(8)
+	DeltaU32Size          = 4
+	DeltaU64Size          = 8
+	DeltaCopyPayload      = 12 // src(4)+dst(4)+len(4)
+	DeltaAddHeader        = 8  // dst(4)+len(4)
+	DeltaBigCopyPayload   = 24 // src(8)+dst(8)+len(8)
+	DeltaBigAddHeader     = 16 // dst(8)+len(8)
+	DeltaBufCap           = 256
 )
 
 // Algorithm selects the differencing algorithm.
@@ -119,6 +128,18 @@ type PlacedAdd struct {
 
 func (PlacedAdd) isPlacedCommand() {}
 func (a PlacedAdd) Dst() int       { return a.DstOff }
+
+// PlacedMove copies Length bytes from Src in the already-written output to DstOff.
+// The encoder guarantees Src+Length <= DstOff (source is written before it is read).
+// Only valid in DLT\x04 format; use EncodeDeltaLarge to encode PlacedMove commands.
+type PlacedMove struct {
+	Src    int // Source byte offset in the already-written output buffer.
+	DstOff int // Destination byte offset in the output.
+	Length int // Number of bytes to copy.
+}
+
+func (PlacedMove) isPlacedCommand() {}
+func (m PlacedMove) Dst() int       { return m.DstOff }
 
 // ── Diff options ──
 

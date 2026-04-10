@@ -43,6 +43,7 @@ func PlaceCommands(commands []Command) []PlacedCommand {
 }
 
 // ApplyPlacedTo applies placed commands in standard mode: read from r, write to out.
+// MOVE commands read from the already-written region of out (LZ77-style).
 func ApplyPlacedTo(r []byte, commands []PlacedCommand, out []byte) int {
 	maxWritten := 0
 	for _, cmd := range commands {
@@ -55,6 +56,12 @@ func ApplyPlacedTo(r []byte, commands []PlacedCommand, out []byte) int {
 		case PlacedAdd:
 			copy(out[c.DstOff:], c.Data)
 			if end := c.DstOff + len(c.Data); end > maxWritten {
+				maxWritten = end
+			}
+		case PlacedMove:
+			// Encoder invariant: Src+Length <= DstOff, so source is fully written.
+			copy(out[c.DstOff:], out[c.Src:c.Src+c.Length])
+			if end := c.DstOff + c.Length; end > maxWritten {
 				maxWritten = end
 			}
 		}
@@ -71,6 +78,8 @@ func ApplyPlacedInplaceTo(commands []PlacedCommand, buf []byte) {
 			copy(buf[c.DstOff:], buf[c.Src:c.Src+c.Length])
 		case PlacedAdd:
 			copy(buf[c.DstOff:], c.Data)
+		case PlacedMove:
+			copy(buf[c.DstOff:], buf[c.Src:c.Src+c.Length])
 		}
 	}
 }
@@ -97,6 +106,16 @@ func ValidatePlacedCommands(commands []PlacedCommand, referenceSize, versionSize
 		case PlacedAdd:
 			if err := validateApplyRange(c.DstOff, len(c.Data), versionSize, "add destination"); err != nil {
 				return err
+			}
+		case PlacedMove:
+			if err := validateApplyRange(c.DstOff, c.Length, versionSize, "move destination"); err != nil {
+				return err
+			}
+			if err := validateApplyRange(c.Src, c.Length, versionSize, "move source"); err != nil {
+				return err
+			}
+			if c.Src+c.Length > c.DstOff {
+				return fmt.Errorf("move src+length > dst: encoder ordering constraint violated")
 			}
 		}
 	}
@@ -160,6 +179,8 @@ func UnplaceCommands(placed []PlacedCommand) []Command {
 			commands[i] = CopyCmd{Offset: c.Src, Length: c.Length}
 		case PlacedAdd:
 			commands[i] = AddCmd{Data: c.Data}
+		case PlacedMove:
+			panic("PlacedMove has no algorithm-level equivalent; DLT\\x04-only")
 		}
 	}
 	return commands
@@ -573,6 +594,9 @@ func PlacedSummaryOf(commands []PlacedCommand) PlacedSummary {
 		case PlacedAdd:
 			numAdds++
 			addBytes += int64(len(c.Data))
+		case PlacedMove:
+			numCopies++ // MOVE copies from already-written output; count with copies.
+			copyBytes += int64(c.Length)
 		}
 	}
 	return PlacedSummary{
