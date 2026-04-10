@@ -70,6 +70,11 @@ pub fn encode_delta(
 /// Commands: per-command size selection — COPY(1)/BIGCOPY(3), ADD(2)/BIGADD(4),
 /// MOVE(5)/BIGMOVE(6).  Small variants use u32 fields; big variants use u64 fields.
 /// Fields ≤ U32_MAX get the small variant; larger fields get the big variant.
+///
+/// This function is **infallible**: `usize → u64` is a widening conversion on all
+/// platforms Rust supports (Rust guarantees `usize` ≤ 64 bits), so no field can
+/// overflow a u64.  Contrast with `encode_delta` (DLT\x03), which returns `Result`
+/// because `usize → u32` truncates on 64-bit platforms.
 pub fn encode_delta_v4(
     commands: &[PlacedCommand],
     inplace: bool,
