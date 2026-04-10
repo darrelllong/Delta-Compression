@@ -1476,30 +1476,20 @@ fn test_v4_bigcopy_roundtrip() {
 }
 
 #[test]
-fn test_v4_bigadd_roundtrip() {
-    // We can't actually allocate 4 GiB of data in a test, so we verify the
-    // BIGADD path by patching the encoded bytes rather than creating real data.
-    // Build a normal V4 ADD first, then manually rewrite the command byte to
-    // BIGADD (4) and expand the header fields from u32 to u64.
+fn test_v4_bigadd_encoder_path() {
+    // Trigger the BIGADD encoder branch via a large dst (no 4 GiB allocation).
+    // The encoder selects BIGADD when dst > U32_MAX OR data.len() > U32_MAX;
+    // using dst = 2^32 with a 5-byte payload exercises the encoder path and
+    // round-trips through the BIGADD decoder without allocating huge memory.
     let z = [0u8; 8];
-    let data = b"bigadd_test".to_vec();
-    let len = data.len();
-    // Manually construct a BIGADD packet.
-    let mut pkt = encode_delta_v4(&[], false, len, &z, &z); // header + END
-    pkt.pop(); // remove END
-    pkt.push(4); // DELTA_CMD_BIGADD
-    pkt.extend_from_slice(&0u64.to_be_bytes()); // dst = 0
-    pkt.extend_from_slice(&(len as u64).to_be_bytes()); // length
-    pkt.extend_from_slice(&data);
-    pkt.push(0); // END
-    let (cmds, _, _, _, _) = decode_delta(&pkt).unwrap();
-    assert_eq!(cmds.len(), 1);
-    if let PlacedCommand::Add { dst, data: got } = &cmds[0] {
-        assert_eq!(*dst, 0);
-        assert_eq!(got, &data);
-    } else {
-        panic!("expected Add, got {:?}", cmds[0]);
-    }
+    let big_dst = (u32::MAX as usize) + 1;
+    let data = b"hello".to_vec();
+    let cmd = PlacedCommand::Add { dst: big_dst, data: data.clone() };
+    let version_size = big_dst + data.len();
+    let bytes = encode_delta_v4(&[cmd.clone()], false, version_size, &z, &z);
+    assert_eq!(bytes[DELTA_HEADER_SIZE_V4], 4, "expected DELTA_CMD_BIGADD=4");
+    let (cmds, _, _, _, _) = decode_delta(&bytes).unwrap();
+    assert_eq!(cmds, vec![cmd]);
 }
 
 #[test]
