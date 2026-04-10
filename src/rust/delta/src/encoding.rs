@@ -92,48 +92,46 @@ pub fn encode_delta_v4(
     for cmd in commands {
         match cmd {
             PlacedCommand::Copy { src, dst, length } => {
-                if *src <= U32_MAX && *dst <= U32_MAX && *length <= U32_MAX {
-                    out.push(DELTA_CMD_COPY);
-                    out.extend_from_slice(&(*src    as u32).to_be_bytes());
-                    out.extend_from_slice(&(*dst    as u32).to_be_bytes());
-                    out.extend_from_slice(&(*length as u32).to_be_bytes());
-                } else {
-                    out.push(DELTA_CMD_BIGCOPY);
-                    out.extend_from_slice(&(*src    as u64).to_be_bytes());
-                    out.extend_from_slice(&(*dst    as u64).to_be_bytes());
-                    out.extend_from_slice(&(*length as u64).to_be_bytes());
-                }
+                encode_3field(&mut out, DELTA_CMD_COPY, DELTA_CMD_BIGCOPY, *src, *dst, *length);
             }
             PlacedCommand::Add { dst, data } => {
                 if *dst <= U32_MAX && data.len() <= U32_MAX {
                     out.push(DELTA_CMD_ADD);
-                    out.extend_from_slice(&(*dst        as u32).to_be_bytes());
-                    out.extend_from_slice(&(data.len()  as u32).to_be_bytes());
+                    out.extend_from_slice(&(*dst       as u32).to_be_bytes());
+                    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
                 } else {
                     out.push(DELTA_CMD_BIGADD);
-                    out.extend_from_slice(&(*dst        as u64).to_be_bytes());
-                    out.extend_from_slice(&(data.len()  as u64).to_be_bytes());
+                    out.extend_from_slice(&(*dst       as u64).to_be_bytes());
+                    out.extend_from_slice(&(data.len() as u64).to_be_bytes());
                 }
                 out.extend_from_slice(data);
             }
             PlacedCommand::Move { src, dst, length } => {
-                if *src <= U32_MAX && *dst <= U32_MAX && *length <= U32_MAX {
-                    out.push(DELTA_CMD_MOVE);
-                    out.extend_from_slice(&(*src    as u32).to_be_bytes());
-                    out.extend_from_slice(&(*dst    as u32).to_be_bytes());
-                    out.extend_from_slice(&(*length as u32).to_be_bytes());
-                } else {
-                    out.push(DELTA_CMD_BIGMOVE);
-                    out.extend_from_slice(&(*src    as u64).to_be_bytes());
-                    out.extend_from_slice(&(*dst    as u64).to_be_bytes());
-                    out.extend_from_slice(&(*length as u64).to_be_bytes());
-                }
+                encode_3field(&mut out, DELTA_CMD_MOVE, DELTA_CMD_BIGMOVE, *src, *dst, *length);
             }
         }
     }
 
     out.push(DELTA_CMD_END);
     out
+}
+
+/// Emit a 3-field command (src, dst, length) using small (u32) or big (u64) variant.
+///
+/// Used for COPY/BIGCOPY and MOVE/BIGMOVE, which share identical wire shapes.
+#[inline]
+fn encode_3field(out: &mut Vec<u8>, small: u8, big: u8, a: usize, b: usize, c: usize) {
+    if a <= U32_MAX && b <= U32_MAX && c <= U32_MAX {
+        out.push(small);
+        out.extend_from_slice(&(a as u32).to_be_bytes());
+        out.extend_from_slice(&(b as u32).to_be_bytes());
+        out.extend_from_slice(&(c as u32).to_be_bytes());
+    } else {
+        out.push(big);
+        out.extend_from_slice(&(a as u64).to_be_bytes());
+        out.extend_from_slice(&(b as u64).to_be_bytes());
+        out.extend_from_slice(&(c as u64).to_be_bytes());
+    }
 }
 
 // ── Decoding ─────────────────────────────────────────────────────────────────
