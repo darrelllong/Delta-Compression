@@ -102,10 +102,21 @@ delta encode onepass old.bin new.bin delta.bin
 
 ### correcting
 
-Near-optimal 1.5-pass algorithm.  Better than onepass when blocks
-have been rearranged or moved (e.g., function reordering in a binary).
-Uses checkpointing (Section 8) with an auto-sized hash table.
-`--table-size` acts as a floor; the table scales up for large inputs.
+Near-linear 1.5-pass algorithm using checkpointing (Section 8) with
+an auto-sized hash table.  `--table-size` acts as a floor; the table
+scales up for large inputs.
+
+**When correcting wins:** files where large blocks (≥ ~512 B) have
+been wholesale transposed or moved.  The checkpoint filter finds these
+efficiently regardless of how far apart the blocks are in the file.
+See the transposition benchmark in ANALYSIS.md.
+
+**When onepass wins:** typical incremental changes (source code patches,
+kernel version deltas).  On linux-5.1.x pairs, onepass achieves
+0.47–0.73% ratio vs correcting's 0.77–1.04%.  Correcting's checkpoint
+filter (stride m ≈ seed_len = 16) misses short matches at non-checkpoint
+positions, which dominate incremental diffs.  For these inputs onepass
+is both faster (4–5×) and produces a smaller delta.
 
 ```bash
 delta encode correcting old.bin new.bin delta.bin

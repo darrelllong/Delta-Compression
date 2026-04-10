@@ -73,7 +73,7 @@ Miller-Rabin primality test with the fixed witness set {2, 3, 5, 7, 11,
 3,317,044,064,679,887,385,961,981 ($> 2^{81}$), far exceeding any table
 size that arises in practice (Jaeschke, Math. Comp. 61(204), 1993).
 No random number generator is required: the result is deterministic and
-identical across all nine language implementations.
+identical across all eight language implementations.
 
 ## Splay tree: design and tradeoffs
 
@@ -133,7 +133,7 @@ CRC-64/XZ (ECMA-182 reflected, polynomial `0x42F0E1EBA9EA3693`)
 was chosen for speed: software implementations run at ~12 GB/s, making
 the overhead negligible even on multi-gigabyte kernel tarballs.  The
 8-byte output gives a $2^{-64}$ probability of an undetected random error,
-sufficient for accidental-error detection in delta workflows.  All nine
+sufficient for accidental-error detection in delta workflows.  All eight
 implementations use the same table-driven algorithm (reflected polynomial
 `0xC96C5795D7870F42`, init = xorout = `0xFFFFFFFFFFFFFFFF`), verified
 against the standard check value `crc64_xz(b"123456789") =
@@ -237,17 +237,16 @@ Total: $O(n \log n + E)$.
 
 | Script | Purpose |
 |--------|---------|
-| `tests/correctness.sh` | Builds all nine implementations and runs unit tests + cross-language compatibility (208/56/64/45/52/52/52/52 unit tests + Haskell build/smoke) |
+| `tests/correctness.sh` | Builds all eight implementations and runs unit tests + cross-language compatibility (208/66/75/91/57/63/57/57 unit tests) |
 | `tests/kernel-delta-test.sh` | Performance benchmark on Linux 5.1.0–5.1.7 kernel tarballs (~871 MB each) |
 | `tests/transposition-benchmark.sh` | Performance benchmark on synthetic block permutations (16 MB–1 GB) |
-| `tests/per-language-benchmark.sh` | Per-language speed comparison (all 9 implementations, linux-5.1.0→5.1.1) |
+| `tests/per-language-benchmark.sh` | Per-language speed comparison (all 8 implementations, linux-5.1.0→5.1.1) |
 | `tests/get_shakespeare.sh` | Download Shakespeare (PG #100) and generate mutated versions for bench_all.sh |
 | `bench_rust.sh` | Rust micro-benchmarks via pilot-bench (1 MiB synthetic data, MiB/s with CI) |
-| `bench_all.sh` | All 9 languages via pilot-bench (Shakespeare ~5.4 MB, 5% mutations, MiB/s with CI) |
+| `bench_all.sh` | All 8 languages via pilot-bench (Shakespeare ~5.4 MB, 5% mutations, MiB/s with CI) |
 
 `tests/correctness.sh` is the primary correctness gate: it runs all unit
-suites, executes Haskell build/smoke checks, and verifies cross-language
-compatibility (including Haskell lanes when `delta-hs` is present).  The
+suites and verifies cross-language byte-identical compatibility.  The
 benchmark scripts are separate so they can be run independently without
 the multi-GB data requirements of the kernel tests.  For statistically
 rigorous CI, use `bench_rust.sh` or `bench_all.sh` (require pilot-bench;
