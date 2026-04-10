@@ -273,6 +273,15 @@ public final class Delta {
             return;
         }
 
+        // Verify reference matches the delta's embedded source CRC before converting.
+        byte[] rCrc = Hash.Crc64.hash8(r);
+        if (!Arrays.equals(rCrc, result.srcCrc())) {
+            System.err.printf("source file does not match delta: expected %s, got %s%n",
+                HEX.formatHex(result.srcCrc()), HEX.formatHex(rCrc));
+            System.exit(1);
+        }
+        Apply.validatePlacedCommands(result.commands(), r.length, result.versionSize(), false);
+
         long t0 = System.nanoTime();
         List<Command> commands = Apply.unplaceCommands(result.commands());
         List<PlacedCommand> ipPlaced = Apply.makeInplace(r, commands, policy);

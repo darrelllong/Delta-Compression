@@ -21,6 +21,17 @@ decode_fail(delta_decode_result_t *result, const char *message)
 	exit(1);
 }
 
+// ── 32-bit overflow guard ─────────────────────────────────────────────
+
+static void
+check_u32(size_t val, const char *field)
+{
+	if (val > UINT32_MAX) {
+		fprintf(stderr, "delta_encode: %s exceeds 4 GiB (32-bit format limit)\n", field);
+		exit(1);
+	}
+}
+
 // ── Big-endian u32 helpers ────────────────────────────────────────────
 
 static void
@@ -71,14 +82,20 @@ delta_encode(const delta_placed_commands_t *cmds, bool inplace,
 	memcpy(p, dst_crc, DELTA_CRC_SIZE); p += DELTA_CRC_SIZE;
 
 	// Commands
+	check_u32(version_size, "version_size");
 	for (i = 0; i < cmds->len; i++) {
 		const delta_placed_command_t *cmd = &cmds->data[i];
 		if (cmd->tag == PCMD_COPY) {
+			check_u32(cmd->copy.src,    "copy src offset");
+			check_u32(cmd->copy.dst,    "copy dst offset");
+			check_u32(cmd->copy.length, "copy length");
 			*p++ = DELTA_CMD_COPY;
 			write_u32_be(&p, (uint32_t)cmd->copy.src);
 			write_u32_be(&p, (uint32_t)cmd->copy.dst);
 			write_u32_be(&p, (uint32_t)cmd->copy.length);
 		} else {
+			check_u32(cmd->add.dst,    "add dst offset");
+			check_u32(cmd->add.length, "add length");
 			*p++ = DELTA_CMD_ADD;
 			write_u32_be(&p, (uint32_t)cmd->add.dst);
 			write_u32_be(&p, (uint32_t)cmd->add.length);

@@ -13,17 +13,22 @@ use crate::types::{
 ///     END:  type=0
 ///     COPY: type=1, src:u32, dst:u32, len:u32
 ///     ADD:  type=2, dst:u32, len:u32, data
+fn check_u32(val: usize, field: &str) -> Result<u32, DeltaError> {
+    u32::try_from(val)
+        .map_err(|_| DeltaError::InvalidFormat(format!("{field} exceeds 4 GiB (32-bit format limit)")))
+}
+
 pub fn encode_delta(
     commands: &[PlacedCommand],
     inplace: bool,
     version_size: usize,
     src_crc: &[u8; DELTA_CRC_SIZE],
     dst_crc: &[u8; DELTA_CRC_SIZE],
-) -> Vec<u8> {
+) -> Result<Vec<u8>, DeltaError> {
     let mut out = Vec::new();
     out.extend_from_slice(DELTA_MAGIC);
     out.push(if inplace { DELTA_FLAG_INPLACE } else { 0 });
-    out.extend_from_slice(&(version_size as u32).to_be_bytes());
+    out.extend_from_slice(&check_u32(version_size, "version_size")?.to_be_bytes());
     out.extend_from_slice(src_crc);
     out.extend_from_slice(dst_crc);
 
@@ -31,21 +36,21 @@ pub fn encode_delta(
         match cmd {
             PlacedCommand::Copy { src, dst, length } => {
                 out.push(DELTA_CMD_COPY);
-                out.extend_from_slice(&(*src as u32).to_be_bytes());
-                out.extend_from_slice(&(*dst as u32).to_be_bytes());
-                out.extend_from_slice(&(*length as u32).to_be_bytes());
+                out.extend_from_slice(&check_u32(*src,    "copy src offset")?.to_be_bytes());
+                out.extend_from_slice(&check_u32(*dst,    "copy dst offset")?.to_be_bytes());
+                out.extend_from_slice(&check_u32(*length, "copy length")?.to_be_bytes());
             }
             PlacedCommand::Add { dst, data } => {
                 out.push(DELTA_CMD_ADD);
-                out.extend_from_slice(&(*dst as u32).to_be_bytes());
-                out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+                out.extend_from_slice(&check_u32(*dst,       "add dst offset")?.to_be_bytes());
+                out.extend_from_slice(&check_u32(data.len(), "add length")?.to_be_bytes());
                 out.extend_from_slice(data);
             }
         }
     }
 
     out.push(DELTA_CMD_END);
-    out
+    Ok(out)
 }
 
 /// Decode the unified binary delta format.

@@ -2,6 +2,7 @@ package delta
 
 import (
 	"bytes"
+	"math"
 	"math/rand"
 	"os"
 	"testing"
@@ -13,6 +14,17 @@ var allAlgos = []Algorithm{AlgorithmGreedy, AlgorithmOnepass, AlgorithmCorrectin
 var allPolicies = []CyclePolicy{CyclePolicyLocalmin, CyclePolicyConstant}
 
 var zeroHash [8]byte
+
+// mustEncode calls EncodeDelta and panics on error. Test inputs are always
+// well below the 4 GiB format limit, so errors here indicate a code bug.
+func mustEncode(t *testing.T, commands []PlacedCommand, inplace bool, versionSize int, srcCrc, dstCrc [8]byte) []byte {
+	t.Helper()
+	out, err := EncodeDelta(commands, inplace, versionSize, srcCrc, dstCrc)
+	if err != nil {
+		t.Fatalf("EncodeDelta: %v", err)
+	}
+	return out
+}
 
 func opts(p int) DiffOptions {
 	o := DefaultDiffOptions()
@@ -47,7 +59,7 @@ func roundtrip(t *testing.T, algo Algorithm, r, v []byte, p int) []byte {
 	t.Helper()
 	cmds := Diff(algo, r, v, opts(p))
 	placed := PlaceCommands(cmds)
-	delta := EncodeDelta(placed, false, OutputSize(cmds), zeroHash, zeroHash)
+	delta := mustEncode(t, placed, false, OutputSize(cmds), zeroHash, zeroHash)
 	res, err := DecodeDelta(delta)
 	if err != nil {
 		t.Fatalf("DecodeDelta: %v", err)
@@ -70,7 +82,7 @@ func inplaceBinaryRoundtrip(t *testing.T, algo Algorithm, r, v []byte, pol Cycle
 	t.Helper()
 	cmds := Diff(algo, r, v, opts(p))
 	ip := MakeInplace(r, cmds, pol)
-	delta := EncodeDelta(ip, true, len(v), zeroHash, zeroHash)
+	delta := mustEncode(t, ip, true, len(v), zeroHash, zeroHash)
 	res, err := DecodeDelta(delta)
 	if err != nil {
 		t.Fatalf("DecodeDelta: %v", err)
@@ -83,7 +95,7 @@ func viaInplaceSubcommand(t *testing.T, algo Algorithm, r, v []byte, pol CyclePo
 	t.Helper()
 	cmds := Diff(algo, r, v, opts(p))
 	placed := PlaceCommands(cmds)
-	standard := EncodeDelta(placed, false, len(v), zeroHash, zeroHash)
+	standard := mustEncode(t, placed, false, len(v), zeroHash, zeroHash)
 	res, err := DecodeDelta(standard)
 	if err != nil {
 		t.Fatalf("DecodeDelta: %v", err)
@@ -93,7 +105,7 @@ func viaInplaceSubcommand(t *testing.T, algo Algorithm, r, v []byte, pol CyclePo
 	}
 	cmds2 := UnplaceCommands(res.Commands)
 	ip := MakeInplace(r, cmds2, pol)
-	return EncodeDelta(ip, true, res.VersionSize, zeroHash, zeroHash)
+	return mustEncode(t, ip, true, res.VersionSize, zeroHash, zeroHash)
 }
 
 // makeBlocks returns eight variable-length blocks with deterministic byte patterns.
@@ -215,7 +227,7 @@ func TestBinaryEncodingRoundtrip(t *testing.T) {
 		PlacedAdd{DstOff: 0, Data: []byte{100, 101, 102}},
 		PlacedCopy{Src: 888, DstOff: 3, Length: 488},
 	}
-	encoded := EncodeDelta(placed, false, 491, zeroHash, zeroHash)
+	encoded := mustEncode(t, placed, false, 491, zeroHash, zeroHash)
 	res, err := DecodeDelta(encoded)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
@@ -241,8 +253,8 @@ func TestBinaryEncodingRoundtrip(t *testing.T) {
 
 func TestBinaryEncodingInplaceFlag(t *testing.T) {
 	placed := []PlacedCommand{PlacedCopy{Src: 0, DstOff: 10, Length: 5}}
-	standard := EncodeDelta(placed, false, 15, zeroHash, zeroHash)
-	inplace := EncodeDelta(placed, true, 15, zeroHash, zeroHash)
+	standard := mustEncode(t, placed, false, 15, zeroHash, zeroHash)
+	inplace := mustEncode(t, placed, true, 15, zeroHash, zeroHash)
 	if IsInplaceDelta(standard) {
 		t.Fatal("standard should not be inplace")
 	}
@@ -263,7 +275,7 @@ func TestBinaryEncodingInplaceFlag(t *testing.T) {
 }
 
 func TestDecodeRejectsMissingEnd(t *testing.T) {
-	encoded := EncodeDelta(nil, false, 0, zeroHash, zeroHash)
+	encoded := mustEncode(t, nil, false, 0, zeroHash, zeroHash)
 	_, err := DecodeDelta(encoded[:len(encoded)-1])
 	if err == nil || err.Error() != "missing END command" {
 		t.Fatalf("got %v, want missing END command", err)
@@ -271,7 +283,7 @@ func TestDecodeRejectsMissingEnd(t *testing.T) {
 }
 
 func TestDecodeRejectsTrailingData(t *testing.T) {
-	encoded := append(EncodeDelta(nil, false, 0, zeroHash, zeroHash), 0x7f)
+	encoded := append(mustEncode(t, nil, false, 0, zeroHash, zeroHash), 0x7f)
 	_, err := DecodeDelta(encoded)
 	if err == nil || err.Error() != "trailing data after END" {
 		t.Fatalf("got %v, want trailing data after END", err)
@@ -279,7 +291,7 @@ func TestDecodeRejectsTrailingData(t *testing.T) {
 }
 
 func TestDecodeRejectsCopyPastVersionSize(t *testing.T) {
-	encoded := EncodeDelta([]PlacedCommand{
+	encoded := mustEncode(t, []PlacedCommand{
 		PlacedCopy{Src: 0, DstOff: 1, Length: 2},
 	}, false, 2, zeroHash, zeroHash)
 	_, err := DecodeDelta(encoded)
@@ -328,7 +340,7 @@ func TestRealDataRoundtrip(t *testing.T) {
 
 func TestLargeCopyRoundtrip(t *testing.T) {
 	placed := []PlacedCommand{PlacedCopy{Src: 100_000, DstOff: 0, Length: 50_000}}
-	encoded := EncodeDelta(placed, false, 50_000, zeroHash, zeroHash)
+	encoded := mustEncode(t, placed, false, 50_000, zeroHash, zeroHash)
 	res, _ := DecodeDelta(encoded)
 	if len(res.Commands) != 1 {
 		t.Fatalf("command count: got %d", len(res.Commands))
@@ -345,7 +357,7 @@ func TestLargeAddRoundtrip(t *testing.T) {
 		bigData[i] = byte(i & 0xFF)
 	}
 	placed := []PlacedCommand{PlacedAdd{DstOff: 0, Data: bigData}}
-	encoded := EncodeDelta(placed, false, len(bigData), zeroHash, zeroHash)
+	encoded := mustEncode(t, placed, false, len(bigData), zeroHash, zeroHash)
 	res, _ := DecodeDelta(encoded)
 	if len(res.Commands) != 1 {
 		t.Fatalf("command count: got %d", len(res.Commands))
@@ -537,7 +549,7 @@ func TestStandardNotDetectedAsInplace(t *testing.T) {
 	v := repeat(b("EFGHABCD"), 10)
 	cmds := Diff(AlgorithmGreedy, r, v, opts(2))
 	placed := PlaceCommands(cmds)
-	delta := EncodeDelta(placed, false, len(v), zeroHash, zeroHash)
+	delta := mustEncode(t, placed, false, len(v), zeroHash, zeroHash)
 	if IsInplaceDelta(delta) {
 		t.Fatal("standard should not be detected as inplace")
 	}
@@ -548,7 +560,7 @@ func TestInplaceDetected(t *testing.T) {
 	v := repeat(b("EFGHABCD"), 10)
 	cmds := Diff(AlgorithmGreedy, r, v, opts(2))
 	ip := MakeInplace(r, cmds, CyclePolicyLocalmin)
-	delta := EncodeDelta(ip, true, len(v), zeroHash, zeroHash)
+	delta := mustEncode(t, ip, true, len(v), zeroHash, zeroHash)
 	if !IsInplaceDelta(delta) {
 		t.Fatal("inplace delta should be detected")
 	}
@@ -911,7 +923,7 @@ func TestInplaceSubcommandIdempotent(t *testing.T) {
 			t.Run(algo.String()+"/"+pol.String(), func(t *testing.T) {
 				cmds := Diff(algo, r, v, opts(2))
 				ip := MakeInplace(r, cmds, pol)
-				ipDelta := EncodeDelta(ip, true, len(v), zeroHash, zeroHash)
+				ipDelta := mustEncode(t, ip, true, len(v), zeroHash, zeroHash)
 				res, _ := DecodeDelta(ipDelta)
 				if !res.Inplace {
 					t.Fatal("inplace delta should be detected as inplace")
@@ -934,7 +946,7 @@ func TestInplaceSubcommandEquivDirect(t *testing.T) {
 					// Direct path.
 					cmds := Diff(algo, r, v, opts(2))
 					ipDirect := MakeInplace(r, cmds, pol)
-					directBytes := EncodeDelta(ipDirect, true, len(v), zeroHash, zeroHash)
+					directBytes := mustEncode(t, ipDirect, true, len(v), zeroHash, zeroHash)
 					// Subcommand path.
 					subBytes := viaInplaceSubcommand(t, algo, r, v, pol, 2)
 					if !bytes.Equal(directBytes, subBytes) {
@@ -1081,7 +1093,7 @@ func TestEncodingVersionSizeBoundaries(t *testing.T) {
 		8388607, 8388608, 8388609,
 		16777215, 16777216, 16777217}
 	for _, sz := range sizes {
-		encoded := EncodeDelta(nil, false, sz, zeroHash, zeroHash)
+		encoded := mustEncode(t, nil, false, sz, zeroHash, zeroHash)
 		res, err := DecodeDelta(encoded)
 		if err != nil {
 			t.Fatalf("version_size=%d decode error: %v", sz, err)
@@ -1099,7 +1111,7 @@ func TestEncodingCommandFieldBoundaries(t *testing.T) {
 	offsets := []int{0, 1, 127, 128, 255, 256, 257, 65535, 65536, 65537}
 	for _, src := range offsets {
 		placed := []PlacedCommand{PlacedCopy{Src: src, DstOff: 0, Length: 1}}
-		res, _ := DecodeDelta(EncodeDelta(placed, false, 1, zeroHash, zeroHash))
+		res, _ := DecodeDelta(mustEncode(t, placed, false, 1, zeroHash, zeroHash))
 		c := res.Commands[0].(PlacedCopy)
 		if c.Src != src || c.DstOff != 0 || c.Length != 1 {
 			t.Fatalf("copy src=%d fields wrong", src)
@@ -1107,7 +1119,7 @@ func TestEncodingCommandFieldBoundaries(t *testing.T) {
 	}
 	for _, dst := range offsets {
 		placed := []PlacedCommand{PlacedCopy{Src: 0, DstOff: dst, Length: 1}}
-		res, _ := DecodeDelta(EncodeDelta(placed, false, dst+1, zeroHash, zeroHash))
+		res, _ := DecodeDelta(mustEncode(t, placed, false, dst+1, zeroHash, zeroHash))
 		c := res.Commands[0].(PlacedCopy)
 		if c.DstOff != dst {
 			t.Fatalf("copy dst=%d wrong: got %d", dst, c.DstOff)
@@ -1115,7 +1127,7 @@ func TestEncodingCommandFieldBoundaries(t *testing.T) {
 	}
 	for _, length := range []int{1, 127, 128, 255, 256, 257, 65535, 65536} {
 		placed := []PlacedCommand{PlacedCopy{Src: 0, DstOff: 0, Length: length}}
-		res, _ := DecodeDelta(EncodeDelta(placed, false, length, zeroHash, zeroHash))
+		res, _ := DecodeDelta(mustEncode(t, placed, false, length, zeroHash, zeroHash))
 		c := res.Commands[0].(PlacedCopy)
 		if c.Length != length {
 			t.Fatalf("copy length=%d wrong: got %d", length, c.Length)
@@ -1123,7 +1135,7 @@ func TestEncodingCommandFieldBoundaries(t *testing.T) {
 	}
 	for _, dst := range offsets {
 		placed := []PlacedCommand{PlacedAdd{DstOff: dst, Data: []byte{0xFF}}}
-		res, _ := DecodeDelta(EncodeDelta(placed, false, dst+1, zeroHash, zeroHash))
+		res, _ := DecodeDelta(mustEncode(t, placed, false, dst+1, zeroHash, zeroHash))
 		a := res.Commands[0].(PlacedAdd)
 		if a.DstOff != dst || !bytes.Equal(a.Data, []byte{0xFF}) {
 			t.Fatalf("add dst=%d wrong", dst)
@@ -1231,5 +1243,44 @@ func TestSeedLengthBoundaries(t *testing.T) {
 		if got := ApplyDelta(r, Diff(algo, r, vLong, opts(len(r)+1))); !bytes.Equal(vLong, got) {
 			t.Fatalf("%s p>|r| long ver failed", algo)
 		}
+	}
+}
+
+func TestEncodeDeltaRejectsVersionSizeOverflow(t *testing.T) {
+	_, err := EncodeDelta(nil, false, math.MaxUint32+1, zeroHash, zeroHash)
+	if err == nil {
+		t.Fatal("expected error for version_size > uint32 max, got nil")
+	}
+}
+
+func TestEncodeDeltaRejectsCopySrcOverflow(t *testing.T) {
+	cmd := PlacedCopy{Src: math.MaxUint32 + 1, DstOff: 0, Length: 1}
+	_, err := EncodeDelta([]PlacedCommand{cmd}, false, 1, zeroHash, zeroHash)
+	if err == nil {
+		t.Fatal("expected error for copy src > uint32 max, got nil")
+	}
+}
+
+func TestEncodeDeltaRejectsCopyDstOverflow(t *testing.T) {
+	cmd := PlacedCopy{Src: 0, DstOff: math.MaxUint32 + 1, Length: 1}
+	_, err := EncodeDelta([]PlacedCommand{cmd}, false, 1, zeroHash, zeroHash)
+	if err == nil {
+		t.Fatal("expected error for copy dst > uint32 max, got nil")
+	}
+}
+
+func TestEncodeDeltaRejectsCopyLengthOverflow(t *testing.T) {
+	cmd := PlacedCopy{Src: 0, DstOff: 0, Length: math.MaxUint32 + 1}
+	_, err := EncodeDelta([]PlacedCommand{cmd}, false, 1, zeroHash, zeroHash)
+	if err == nil {
+		t.Fatal("expected error for copy length > uint32 max, got nil")
+	}
+}
+
+func TestEncodeDeltaRejectsAddDstOverflow(t *testing.T) {
+	cmd := PlacedAdd{DstOff: math.MaxUint32 + 1, Data: []byte{0}}
+	_, err := EncodeDelta([]PlacedCommand{cmd}, false, 1, zeroHash, zeroHash)
+	if err == nil {
+		t.Fatal("expected error for add dst > uint32 max, got nil")
 	}
 }

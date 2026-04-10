@@ -247,7 +247,8 @@ fn main() {
             };
             let elapsed = t0.elapsed();
 
-            let delta_bytes = encode_delta(&placed, inplace, v.len(), &src_crc, &dst_crc);
+            let delta_bytes = encode_delta(&placed, inplace, v.len(), &src_crc, &dst_crc)
+                .unwrap_or_else(|e| { eprintln!("Error encoding delta: {e}"); process::exit(1) });
             fs::write(&delta_file, &delta_bytes).unwrap_or_else(|e| {
                 eprintln!("Error writing {}: {}", delta_file, e);
                 process::exit(1);
@@ -464,7 +465,8 @@ fn main() {
             let elapsed = t0.elapsed();
 
             // Preserve the original src_crc and dst_crc from the input delta.
-            let ip_delta = encode_delta(&ip_placed, true, version_size, &src_crc, &dst_crc);
+            let ip_delta = encode_delta(&ip_placed, true, version_size, &src_crc, &dst_crc)
+                .unwrap_or_else(|e| { eprintln!("Error encoding delta: {e}"); process::exit(1) });
             fs::write(&delta_out, &ip_delta).unwrap_or_else(|e| {
                 eprintln!("Error writing {}: {}", delta_out, e);
                 process::exit(1);

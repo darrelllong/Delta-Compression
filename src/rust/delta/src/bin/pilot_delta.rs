@@ -108,7 +108,8 @@ fn main() {
             let src_crc = crc64_xz(&old);
             let dst_crc = crc64_xz(&new);
             let placed = place_commands(diff(Algorithm::Onepass, &old, &new, &opts));
-            let delta = encode_delta(&placed, false, new.len(), &src_crc, &dst_crc);
+            let delta = encode_delta(&placed, false, new.len(), &src_crc, &dst_crc)
+                .expect("pilot inputs fit in 32-bit format");
             let n = 100;
             let t0 = Instant::now();
             for _ in 0..n {

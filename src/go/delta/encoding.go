@@ -19,9 +19,43 @@ type DecodeResult struct {
 	DstCrc      [8]byte         // CRC-64/XZ of the version (8 bytes big-endian).
 }
 
+const maxU32 = 1<<32 - 1
+
+func checkU32(val int, field string) error {
+	if val < 0 || val > maxU32 {
+		return fmt.Errorf("%s exceeds 4 GiB (32-bit format limit)", field)
+	}
+	return nil
+}
+
 // EncodeDelta serializes placed commands to the unified binary delta format.
 func EncodeDelta(commands []PlacedCommand, inplace bool, versionSize int,
-	srcCrc, dstCrc [8]byte) []byte {
+	srcCrc, dstCrc [8]byte) ([]byte, error) {
+
+	if err := checkU32(versionSize, "version_size"); err != nil {
+		return nil, err
+	}
+	for _, cmd := range commands {
+		switch c := cmd.(type) {
+		case PlacedCopy:
+			if err := checkU32(c.Src, "copy src offset"); err != nil {
+				return nil, err
+			}
+			if err := checkU32(c.DstOff, "copy dst offset"); err != nil {
+				return nil, err
+			}
+			if err := checkU32(c.Length, "copy length"); err != nil {
+				return nil, err
+			}
+		case PlacedAdd:
+			if err := checkU32(c.DstOff, "add dst offset"); err != nil {
+				return nil, err
+			}
+			if err := checkU32(len(c.Data), "add length"); err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	// Estimate size: header + commands + END(1).
 	est := DeltaHeaderSize + 1
@@ -76,7 +110,7 @@ func EncodeDelta(commands []PlacedCommand, inplace bool, versionSize int,
 	out[pos] = DeltaCmdEnd
 	pos++
 
-	return out[:pos]
+	return out[:pos], nil
 }
 
 // DecodeDelta parses the unified binary delta format.

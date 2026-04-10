@@ -6,6 +6,12 @@
 /// Full 61-bit fingerprints are used for collision-free seed comparison;
 /// fp_to_index maps them into the bounded hash table via F mod q.
 
+// __uint128_t is a GCC/Clang extension required for overflow-free
+// Mersenne arithmetic. MSVC is not supported.
+#if !defined(__GNUC__) && !defined(__clang__)
+#  error "delta/hash.h requires GCC or Clang (__uint128_t is not available on this compiler)"
+#endif
+
 #include <cstddef>
 #include <cstdint>
 #include <span>

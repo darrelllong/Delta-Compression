@@ -244,7 +244,15 @@ private def cmdInplace(args: Array[String]): Unit = {
     println("Delta is already in-place format; copied unchanged.")
     return
   }
-  validatePlacedCommands(result.commands, r.length, result.versionSize, result.inplace)
+
+  // Verify reference matches the delta's embedded source CRC before converting.
+  val rCrc = Crc64.hash8(r)
+  if !rCrc.sameElements(result.srcCrc) then {
+    System.err.printf("source file does not match delta: expected %s, got %s%n",
+      toHex(result.srcCrc), toHex(rCrc))
+    sys.exit(1)
+  }
+  validatePlacedCommands(result.commands, r.length, result.versionSize, false)
 
   val t0       = System.nanoTime()
   val commands = unplaceCommands(result.commands)

@@ -18,7 +18,6 @@ RUST_DELTA=""
 CPP_DELTA=""
 PY_DELTA=""
 JAVA_DELTA=""
-HASKELL_DELTA=""
 
 if [ -x "../../src/rust/delta/target/release/delta" ]; then
     RUST_DELTA="../../src/rust/delta/target/release/delta"
@@ -43,10 +42,23 @@ if [ -d "../java/out" ] && [ -f "../java/out/delta/Delta.class" ]; then
     JAVA_DELTA="$JAVA_BIN -cp ../java/out delta.Delta"
 fi
 
-if [ -x "../haskell/delta-hs" ]; then
-    HASKELL_DELTA="../haskell/delta-hs"
-elif [ -x "../../src/haskell/delta-hs" ]; then
-    HASKELL_DELTA="../../src/haskell/delta-hs"
+GO_DELTA=""
+if [ -x "../go/delta/delta" ]; then
+    GO_DELTA="../go/delta/delta"
+fi
+
+KT_DELTA=""
+if [ -f "../kotlin/delta.jar" ]; then
+    KT_DELTA="java -cp ../kotlin/delta.jar delta.Delta"
+fi
+
+SCALA_DELTA=""
+if [ -f "../scala/delta.jar" ]; then
+    SCALA_JAVA="${JAVA:-/opt/homebrew/opt/openjdk@17/bin/java}"
+    SCALA_LIB="/opt/homebrew/opt/scala/libexec/lib/scala.jar"
+    if [ -x "$SCALA_JAVA" ] && [ -f "$SCALA_LIB" ]; then
+        SCALA_DELTA="$SCALA_JAVA -cp ../scala/delta.jar:$SCALA_LIB delta.Delta"
+    fi
 fi
 
 check() {
@@ -102,6 +114,17 @@ for algo in greedy onepass correcting; do
     $DELTA decode "$ref" "$d" "$out"
     check "$algo roundtrip" diff -q "$ver" "$out"
 done
+
+echo ""
+echo "=== Encode overflow rejection ==="
+
+if [ -x "./test_overflow" ]; then
+    for case in version_size copy_src copy_dst copy_len add_dst add_len; do
+        check_fails "C encode rejects $case overflow" ./test_overflow "$case"
+    done
+else
+    echo "  (test_overflow binary not found, skipping)"
+fi
 
 echo ""
 echo "=== Decode validation ==="
@@ -242,35 +265,77 @@ else
     echo "  (Rust binary not found, skipping)"
 fi
 
-if [ -n "$HASKELL_DELTA" ]; then
+if [ -n "$GO_DELTA" ]; then
     for algo in onepass correcting; do
-        # C encode standard → Haskell inplace subcommand → C decode
-        c_std="$tmpdir/c-std-hs-${algo}.delta"
-        h_ip="$tmpdir/hs-ip-from-c-${algo}.delta"
-        c_out="$tmpdir/c-out-from-hs-ip-${algo}.out"
+        c_std="$tmpdir/c-std-go-${algo}.delta"
+        go_ip="$tmpdir/go-ip-from-c-${algo}.delta"
+        c_out="$tmpdir/c-out-from-go-ip-${algo}.out"
         $DELTA encode $algo "$ref" "$ver" "$c_std"
-        $HASKELL_DELTA inplace "$ref" "$c_std" "$h_ip"
-        $DELTA decode "$ref" "$h_ip" "$c_out"
-        check "C encode -> Haskell inplace -> C decode ($algo)" diff -q "$ver" "$c_out"
+        $GO_DELTA inplace "$ref" "$c_std" "$go_ip"
+        $DELTA decode "$ref" "$go_ip" "$c_out"
+        check "C encode -> Go inplace -> C decode ($algo)" diff -q "$ver" "$c_out"
 
-        # Haskell encode standard → C inplace subcommand → Haskell decode
-        h_std="$tmpdir/hs-std-${algo}.delta"
-        c_ip="$tmpdir/c-ip-from-hs-${algo}.delta"
-        h_out="$tmpdir/hs-out-from-c-ip-${algo}.out"
-        $HASKELL_DELTA encode $algo "$ref" "$ver" "$h_std"
-        $DELTA inplace "$ref" "$h_std" "$c_ip"
-        $HASKELL_DELTA decode "$ref" "$c_ip" "$h_out"
-        check "Haskell encode -> C inplace -> Haskell decode ($algo)" diff -q "$ver" "$h_out"
+        go_std="$tmpdir/go-std-${algo}.delta"
+        c_ip="$tmpdir/c-ip-from-go-${algo}.delta"
+        go_out="$tmpdir/go-out-from-c-ip-${algo}.out"
+        $GO_DELTA encode $algo "$ref" "$ver" "$go_std"
+        $DELTA inplace "$ref" "$go_std" "$c_ip"
+        $GO_DELTA decode "$ref" "$c_ip" "$go_out"
+        check "Go encode -> C inplace -> Go decode ($algo)" diff -q "$ver" "$go_out"
     done
 else
-    echo "  (Haskell binary not found, skipping)"
+    echo "  (Go binary not found, skipping)"
+fi
+
+if [ -n "$KT_DELTA" ]; then
+    for algo in onepass correcting; do
+        c_std="$tmpdir/c-std-kt-${algo}.delta"
+        kt_ip="$tmpdir/kt-ip-from-c-${algo}.delta"
+        c_out="$tmpdir/c-out-from-kt-ip-${algo}.out"
+        $DELTA encode $algo "$ref" "$ver" "$c_std"
+        $KT_DELTA inplace "$ref" "$c_std" "$kt_ip"
+        $DELTA decode "$ref" "$kt_ip" "$c_out"
+        check "C encode -> Kotlin inplace -> C decode ($algo)" diff -q "$ver" "$c_out"
+
+        kt_std="$tmpdir/kt-std-${algo}.delta"
+        c_ip="$tmpdir/c-ip-from-kt-${algo}.delta"
+        kt_out="$tmpdir/kt-out-from-c-ip-${algo}.out"
+        $KT_DELTA encode $algo "$ref" "$ver" "$kt_std"
+        $DELTA inplace "$ref" "$kt_std" "$c_ip"
+        $KT_DELTA decode "$ref" "$c_ip" "$kt_out"
+        check "Kotlin encode -> C inplace -> Kotlin decode ($algo)" diff -q "$ver" "$kt_out"
+    done
+else
+    echo "  (Kotlin JAR not found, skipping)"
+fi
+
+if [ -n "$SCALA_DELTA" ]; then
+    for algo in onepass correcting; do
+        c_std="$tmpdir/c-std-sc-${algo}.delta"
+        sc_ip="$tmpdir/sc-ip-from-c-${algo}.delta"
+        c_out="$tmpdir/c-out-from-sc-ip-${algo}.out"
+        $DELTA encode $algo "$ref" "$ver" "$c_std"
+        $SCALA_DELTA inplace "$ref" "$c_std" "$sc_ip"
+        $DELTA decode "$ref" "$sc_ip" "$c_out"
+        check "C encode -> Scala inplace -> C decode ($algo)" diff -q "$ver" "$c_out"
+
+        sc_std="$tmpdir/sc-std-${algo}.delta"
+        c_ip="$tmpdir/c-ip-from-sc-${algo}.delta"
+        sc_out="$tmpdir/sc-out-from-c-ip-${algo}.out"
+        $SCALA_DELTA encode $algo "$ref" "$ver" "$sc_std"
+        $DELTA inplace "$ref" "$sc_std" "$c_ip"
+        $SCALA_DELTA decode "$ref" "$c_ip" "$sc_out"
+        check "Scala encode -> C inplace -> Scala decode ($algo)" diff -q "$ver" "$sc_out"
+    done
+else
+    echo "  (Scala JAR not found, skipping)"
 fi
 
 echo ""
 echo "=== Byte-identical deltas (C vs other implementations) ==="
 
 if [ -n "$RUST_DELTA" ]; then
-    for algo in onepass correcting; do
+    for algo in greedy onepass correcting; do
         c_d="$tmpdir/c-${algo}.delta"
         r_d="$tmpdir/rust-${algo}.delta"
         $DELTA encode $algo "$ref" "$ver" "$c_d"
@@ -282,7 +347,7 @@ else
 fi
 
 if [ -n "$CPP_DELTA" ]; then
-    for algo in onepass correcting; do
+    for algo in greedy onepass correcting; do
         c_d="$tmpdir/c-${algo}2.delta"
         cpp_d="$tmpdir/cpp-${algo}.delta"
         $DELTA encode $algo "$ref" "$ver" "$c_d"
@@ -294,7 +359,7 @@ else
 fi
 
 if [ -n "$PY_DELTA" ]; then
-    for algo in onepass correcting; do
+    for algo in greedy onepass correcting; do
         c_d="$tmpdir/c-${algo}3.delta"
         py_d="$tmpdir/py-${algo}.delta"
         $DELTA encode $algo "$ref" "$ver" "$c_d"
@@ -306,7 +371,7 @@ else
 fi
 
 if [ -n "$JAVA_DELTA" ]; then
-    for algo in onepass correcting; do
+    for algo in greedy onepass correcting; do
         c_d="$tmpdir/c-${algo}4.delta"
         j_d="$tmpdir/java-${algo}.delta"
         $DELTA encode $algo "$ref" "$ver" "$c_d"
@@ -317,16 +382,40 @@ else
     echo "  (Java classes not found, skipping)"
 fi
 
-if [ -n "$HASKELL_DELTA" ]; then
-    for algo in onepass correcting; do
+if [ -n "$KT_DELTA" ]; then
+    for algo in greedy onepass correcting; do
         c_d="$tmpdir/c-${algo}5.delta"
-        h_d="$tmpdir/hs-${algo}.delta"
+        kt_d="$tmpdir/kotlin-${algo}.delta"
         $DELTA encode $algo "$ref" "$ver" "$c_d"
-        $HASKELL_DELTA encode $algo "$ref" "$ver" "$h_d"
-        check "C vs Haskell $algo byte-identical" diff -q "$c_d" "$h_d"
+        $KT_DELTA encode $algo "$ref" "$ver" "$kt_d"
+        check "C vs Kotlin $algo byte-identical" diff -q "$c_d" "$kt_d"
     done
 else
-    echo "  (Haskell binary not found, skipping)"
+    echo "  (Kotlin JAR not found, skipping)"
+fi
+
+if [ -n "$SCALA_DELTA" ]; then
+    for algo in greedy onepass correcting; do
+        c_d="$tmpdir/c-${algo}6.delta"
+        sc_d="$tmpdir/scala-${algo}.delta"
+        $DELTA encode $algo "$ref" "$ver" "$c_d"
+        $SCALA_DELTA encode $algo "$ref" "$ver" "$sc_d"
+        check "C vs Scala $algo byte-identical" diff -q "$c_d" "$sc_d"
+    done
+else
+    echo "  (Scala JAR not found, skipping)"
+fi
+
+if [ -n "$GO_DELTA" ]; then
+    for algo in greedy onepass correcting; do
+        c_d="$tmpdir/c-${algo}7.delta"
+        go_d="$tmpdir/go-${algo}.delta"
+        $DELTA encode $algo "$ref" "$ver" "$c_d"
+        $GO_DELTA encode $algo "$ref" "$ver" "$go_d"
+        check "C vs Go $algo byte-identical" diff -q "$c_d" "$go_d"
+    done
+else
+    echo "  (Go binary not found, skipping)"
 fi
 
 echo ""
@@ -370,21 +459,57 @@ if [ -n "$JAVA_DELTA" ]; then
     done
 fi
 
-if [ -n "$HASKELL_DELTA" ]; then
+if [ -n "$KT_DELTA" ]; then
     for algo in onepass correcting; do
-        c_d="$tmpdir/c-hdec-${algo}.delta"
-        h_out="$tmpdir/hs-from-c-${algo}.out"
+        c_d="$tmpdir/c-ktdec-${algo}.delta"
+        kt_out="$tmpdir/kotlin-from-c-${algo}.out"
         $DELTA encode $algo "$ref" "$ver" "$c_d"
-        $HASKELL_DELTA decode "$ref" "$c_d" "$h_out"
-        check "C encode -> Haskell decode ($algo)" diff -q "$ver" "$h_out"
+        $KT_DELTA decode "$ref" "$c_d" "$kt_out"
+        check "C encode -> Kotlin decode ($algo)" diff -q "$ver" "$kt_out"
     done
 
     for algo in onepass correcting; do
-        h_d="$tmpdir/hs-cdec-${algo}.delta"
-        c_out="$tmpdir/c-from-hs-${algo}.out"
-        $HASKELL_DELTA encode $algo "$ref" "$ver" "$h_d"
-        $DELTA decode "$ref" "$h_d" "$c_out"
-        check "Haskell encode -> C decode ($algo)" diff -q "$ver" "$c_out"
+        kt_d="$tmpdir/kotlin-cdec-${algo}.delta"
+        c_out="$tmpdir/c-from-kotlin-${algo}.out"
+        $KT_DELTA encode $algo "$ref" "$ver" "$kt_d"
+        $DELTA decode "$ref" "$kt_d" "$c_out"
+        check "Kotlin encode -> C decode ($algo)" diff -q "$ver" "$c_out"
+    done
+fi
+
+if [ -n "$SCALA_DELTA" ]; then
+    for algo in onepass correcting; do
+        c_d="$tmpdir/c-scdec-${algo}.delta"
+        sc_out="$tmpdir/scala-from-c-${algo}.out"
+        $DELTA encode $algo "$ref" "$ver" "$c_d"
+        $SCALA_DELTA decode "$ref" "$c_d" "$sc_out"
+        check "C encode -> Scala decode ($algo)" diff -q "$ver" "$sc_out"
+    done
+
+    for algo in onepass correcting; do
+        sc_d="$tmpdir/scala-cdec-${algo}.delta"
+        c_out="$tmpdir/c-from-scala-${algo}.out"
+        $SCALA_DELTA encode $algo "$ref" "$ver" "$sc_d"
+        $DELTA decode "$ref" "$sc_d" "$c_out"
+        check "Scala encode -> C decode ($algo)" diff -q "$ver" "$c_out"
+    done
+fi
+
+if [ -n "$GO_DELTA" ]; then
+    for algo in onepass correcting; do
+        c_d="$tmpdir/c-godec-${algo}.delta"
+        go_out="$tmpdir/go-from-c-${algo}.out"
+        $DELTA encode $algo "$ref" "$ver" "$c_d"
+        $GO_DELTA decode "$ref" "$c_d" "$go_out"
+        check "C encode -> Go decode ($algo)" diff -q "$ver" "$go_out"
+    done
+
+    for algo in onepass correcting; do
+        go_d="$tmpdir/go-cdec-${algo}.delta"
+        c_out="$tmpdir/c-from-go-${algo}.out"
+        $GO_DELTA encode $algo "$ref" "$ver" "$go_d"
+        $DELTA decode "$ref" "$go_d" "$c_out"
+        check "Go encode -> C decode ($algo)" diff -q "$ver" "$c_out"
     done
 fi
 

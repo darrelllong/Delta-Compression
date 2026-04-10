@@ -219,7 +219,10 @@ func cmdEncode(args []string) error {
 	}
 	elapsed := since(t0)
 
-	deltaBytes := delta.EncodeDelta(placed, inplace, len(v), srcCrc, dstCrc)
+	deltaBytes, err := delta.EncodeDelta(placed, inplace, len(v), srcCrc, dstCrc)
+	if err != nil {
+		return err
+	}
 	if err := writeFile(deltaPath, deltaBytes); err != nil {
 		return err
 	}
@@ -418,12 +421,25 @@ func cmdInplace(args []string) error {
 		return nil
 	}
 
+	// Verify reference matches the delta's embedded source CRC before converting.
+	rCrc := delta.Crc64XZ(r)
+	if rCrc != result.SrcCrc {
+		return fmt.Errorf("source file does not match delta: expected %s, got %s",
+			toHex(result.SrcCrc), toHex(rCrc))
+	}
+	if err := delta.ValidatePlacedCommands(result.Commands, len(r), result.VersionSize, false); err != nil {
+		return err
+	}
+
 	t0 := now()
 	commands := delta.UnplaceCommands(result.Commands)
 	ipPlaced := delta.MakeInplace(r, commands, policy)
 	elapsed := since(t0)
 
-	ipDelta := delta.EncodeDelta(ipPlaced, true, result.VersionSize, result.SrcCrc, result.DstCrc)
+	ipDelta, err := delta.EncodeDelta(ipPlaced, true, result.VersionSize, result.SrcCrc, result.DstCrc)
+	if err != nil {
+		return err
+	}
 	if err := writeFile(deltaOutPath, ipDelta); err != nil {
 		return err
 	}

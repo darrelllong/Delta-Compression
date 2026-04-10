@@ -1,7 +1,6 @@
 #include "delta/encoding.h"
 
 #include <array>
-#include <bit>
 #include <cstring>
 #include <string>
 
@@ -13,22 +12,25 @@ static void validate_placed_range(size_t dst, size_t length, size_t version_size
     }
 }
 
-// Big-endian u32 helpers
-static inline void write_u32_be(std::vector<uint8_t>& out, uint32_t val) {
-    if constexpr (std::endian::native == std::endian::little) {
-        val = __builtin_bswap32(val);
+static void check_u32(size_t val, const char* field) {
+    if (val > UINT32_MAX) {
+        throw DeltaError(std::string(field) + " exceeds 4 GiB (32-bit format limit)");
     }
-    const uint8_t* p = reinterpret_cast<const uint8_t*>(&val);
-    out.insert(out.end(), p, p + DELTA_U32_SIZE);
+}
+
+// Big-endian u32 helpers — portable, no compiler builtins required.
+static inline void write_u32_be(std::vector<uint8_t>& out, uint32_t val) {
+    out.push_back(static_cast<uint8_t>(val >> 24));
+    out.push_back(static_cast<uint8_t>(val >> 16));
+    out.push_back(static_cast<uint8_t>(val >>  8));
+    out.push_back(static_cast<uint8_t>(val));
 }
 
 static inline uint32_t read_u32_be(const uint8_t* p) {
-    uint32_t val;
-    std::memcpy(&val, p, DELTA_U32_SIZE);
-    if constexpr (std::endian::native == std::endian::little) {
-        val = __builtin_bswap32(val);
-    }
-    return val;
+    return (static_cast<uint32_t>(p[0]) << 24)
+         | (static_cast<uint32_t>(p[1]) << 16)
+         | (static_cast<uint32_t>(p[2]) <<  8)
+         |  static_cast<uint32_t>(p[3]);
 }
 
 std::vector<uint8_t> encode_delta(
@@ -41,17 +43,23 @@ std::vector<uint8_t> encode_delta(
     std::vector<uint8_t> out;
     out.insert(out.end(), DELTA_MAGIC, DELTA_MAGIC + DELTA_MAGIC_SIZE);
     out.push_back(inplace ? DELTA_FLAG_INPLACE : 0);
+    check_u32(version_size, "version_size");
     write_u32_be(out, static_cast<uint32_t>(version_size));
     out.insert(out.end(), src_crc.begin(), src_crc.end());
     out.insert(out.end(), dst_crc.begin(), dst_crc.end());
 
     for (const auto& cmd : commands) {
         if (auto* c = std::get_if<PlacedCopy>(&cmd)) {
+            check_u32(c->src,    "copy src offset");
+            check_u32(c->dst,    "copy dst offset");
+            check_u32(c->length, "copy length");
             out.push_back(DELTA_CMD_COPY);
             write_u32_be(out, static_cast<uint32_t>(c->src));
             write_u32_be(out, static_cast<uint32_t>(c->dst));
             write_u32_be(out, static_cast<uint32_t>(c->length));
         } else if (auto* a = std::get_if<PlacedAdd>(&cmd)) {
+            check_u32(a->dst,        "add dst offset");
+            check_u32(a->data.size(), "add length");
             out.push_back(DELTA_CMD_ADD);
             write_u32_be(out, static_cast<uint32_t>(a->dst));
             write_u32_be(out, static_cast<uint32_t>(a->data.size()));

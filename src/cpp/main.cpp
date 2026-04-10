@@ -349,6 +349,16 @@ int main(int argc, char** argv) {
             return 0;
         }
 
+        // Verify reference matches the delta's embedded source CRC before converting.
+        auto r_crc = crc64_xz(r.data(), r.size());
+        if (r_crc != src_crc) {
+            std::fprintf(stderr,
+                "source file does not match delta: expected %s, got %s\n",
+                hex_str(src_crc).c_str(), hex_str(r_crc).c_str());
+            return 1;
+        }
+        validate_placed_commands(placed, r.size(), version_size, false);
+
         auto t0 = std::chrono::steady_clock::now();
         auto commands = unplace_commands(placed);
         auto ip_placed = make_inplace(r, commands, pol);

@@ -221,6 +221,53 @@ TEST_CASE("validate placed commands rejects source overflow", "[integration]") {
         DeltaError);
 }
 
+// ── Regression tests for bugs found in adversarial review ────────────────────
+
+TEST_CASE("encode_delta rejects version_size exceeding UINT32_MAX", "[integration]") {
+    std::array<uint8_t, DELTA_CRC_SIZE> zh{};
+    size_t too_large = static_cast<size_t>(UINT32_MAX) + 1;
+    CHECK_THROWS_AS(encode_delta({}, false, too_large, zh, zh), DeltaError);
+}
+
+TEST_CASE("encode_delta rejects copy src offset exceeding UINT32_MAX", "[integration]") {
+    std::array<uint8_t, DELTA_CRC_SIZE> zh{};
+    size_t big = static_cast<size_t>(UINT32_MAX) + 1;
+    CHECK_THROWS_AS(
+        encode_delta({PlacedCopy{big, 0, 1}}, false, 1, zh, zh),
+        DeltaError);
+}
+
+TEST_CASE("encode_delta rejects copy length exceeding UINT32_MAX", "[integration]") {
+    std::array<uint8_t, DELTA_CRC_SIZE> zh{};
+    size_t big = static_cast<size_t>(UINT32_MAX) + 1;
+    CHECK_THROWS_AS(
+        encode_delta({PlacedCopy{0, 0, big}}, false, 1, zh, zh),
+        DeltaError);
+}
+
+TEST_CASE("encode_delta rejects add dst offset exceeding UINT32_MAX", "[integration]") {
+    std::array<uint8_t, DELTA_CRC_SIZE> zh{};
+    size_t big = static_cast<size_t>(UINT32_MAX) + 1;
+    CHECK_THROWS_AS(
+        encode_delta({PlacedAdd{big, {0x42}}}, false, 1, zh, zh),
+        DeltaError);
+}
+
+TEST_CASE("crc64 wrong reference is detectable", "[integration]") {
+    // Encode a delta from r1 -> v. Verify that applying it to r2 (different
+    // reference) is detectable via src_crc mismatch before any data is touched.
+    std::vector<uint8_t> r1 = {1, 2, 3, 4, 5};
+    std::vector<uint8_t> r2 = {9, 8, 7, 6, 5}; // different reference
+    std::vector<uint8_t> v  = {1, 2, 3, 4, 5};
+
+    auto src_crc = crc64_xz(r1.data(), r1.size());
+    auto dst_crc = crc64_xz(v.data(),  v.size());
+    auto wrong_ref_crc = crc64_xz(r2.data(), r2.size());
+
+    // src_crc was computed from r1; r2 must not match it
+    CHECK(src_crc != wrong_ref_crc);
+}
+
 TEST_CASE("real data roundtrip", "[integration]") {
     auto read_bytes = [](const char* path) {
         std::ifstream in(path, std::ios::binary);
