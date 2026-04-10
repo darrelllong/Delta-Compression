@@ -245,6 +245,14 @@ error.  To attempt recovery from a corrupted or mismatched delta, pass
 `--ignore-hash`; both checks are replaced with warnings and decoding
 proceeds:
 
+> **Security note:** CRC-64/XZ detects accidental corruption (bit flips,
+> truncation, wrong reference file) but is **not** a cryptographic
+> integrity check.  An attacker who can modify the delta file can also
+> forge a matching CRC.  For firmware OTA or any distribution over an
+> untrusted channel, wrap the delta in a signed envelope (GPG, code
+> signing, HMAC) before transmitting — do not rely on the embedded CRC
+> for authentication.
+
 ```bash
 delta decode --ignore-hash wrong-ref.bin delta.bin recovered.bin
 ```
