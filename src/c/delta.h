@@ -19,18 +19,27 @@
 #define DELTA_MAX_TABLE_SIZE 1073741827UL // prime near 2^30; default ceiling for auto-sizing
 #define DELTA_HASH_BASE   263ULL
 #define DELTA_HASH_MOD    ((1ULL << 61) - 1)  // Mersenne prime 2^61-1
-#define DELTA_FLAG_INPLACE 0x01
-#define DELTA_CMD_END      0
-#define DELTA_CMD_COPY     1
-#define DELTA_CMD_ADD      2
-#define DELTA_CRC_SIZE     8    // CRC-64/XZ digest bytes
-#define DELTA_HEADER_SIZE  25   // magic(4) + flags(1) + version_size(4) + src_crc(8) + dst_crc(8)
-#define DELTA_U32_SIZE     4
-#define DELTA_COPY_PAYLOAD 12   // src(4) + dst(4) + len(4)
-#define DELTA_ADD_HEADER   8    // dst(4) + len(4)
-#define DELTA_BUF_CAP      256
+#define DELTA_FLAG_INPLACE    0x01
+#define DELTA_CMD_END         0
+#define DELTA_CMD_COPY        1
+#define DELTA_CMD_ADD         2
+#define DELTA_CMD_BIGCOPY     3  // DLT\x04: COPY with u64 fields
+#define DELTA_CMD_BIGADD      4  // DLT\x04: ADD with u64 dst/len header
+#define DELTA_CMD_MOVE        5  // DLT\x04: copy from already-written output (u32 fields)
+#define DELTA_CMD_BIGMOVE     6  // DLT\x04: MOVE with u64 fields
+#define DELTA_CRC_SIZE        8  // CRC-64/XZ digest bytes
+#define DELTA_HEADER_SIZE     25 // magic(4)+flags(1)+version_size(4)+crcs(16)
+#define DELTA_HEADER_SIZE_V4  29 // magic(4)+flags(1)+version_size(8)+crcs(16)
+#define DELTA_U32_SIZE        4
+#define DELTA_U64_SIZE        8
+#define DELTA_COPY_PAYLOAD    12 // src(4)+dst(4)+len(4)
+#define DELTA_ADD_HEADER      8  // dst(4)+len(4)
+#define DELTA_BIGCOPY_PAYLOAD 24 // src(8)+dst(8)+len(8)
+#define DELTA_BIGADD_HEADER   16 // dst(8)+len(8)
+#define DELTA_BUF_CAP         256
 
-static const uint8_t DELTA_MAGIC[4] = {'D', 'L', 'T', 0x03};
+static const uint8_t DELTA_MAGIC[4]    = {'D', 'L', 'T', 0x03};
+static const uint8_t DELTA_MAGIC_V4[4] = {'D', 'L', 'T', 0x04};
 
 // ── Checked allocation helpers ────────────────────────────────────────
 
@@ -123,13 +132,14 @@ void   delta_commands_free(delta_commands_t *c);
 
 // ── Placed commands — with explicit src/dst, ready for encoding ────────
 
-typedef enum { PCMD_COPY, PCMD_ADD } delta_pcmd_tag_t;
+typedef enum { PCMD_COPY, PCMD_ADD, PCMD_MOVE } delta_pcmd_tag_t;
 
 typedef struct {
 	delta_pcmd_tag_t tag;
 	union {
 		struct { size_t src; size_t dst; size_t length; }  copy;
 		struct { size_t dst; uint8_t *data; size_t length; } add;
+		struct { size_t src; size_t dst; size_t length; }  move;
 	};
 } delta_placed_command_t;
 
@@ -333,6 +343,15 @@ delta_buffer_t delta_encode(const delta_placed_commands_t *cmds,
                             bool inplace, size_t version_size,
                             const uint8_t src_crc[DELTA_CRC_SIZE],
                             const uint8_t dst_crc[DELTA_CRC_SIZE]);
+
+// Encode placed commands to DLT\x04 format.
+// Per-command size selection: COPY/BIGCOPY, ADD/BIGADD, MOVE/BIGMOVE chosen
+// by whether fields fit in u32.  MOVE commands are valid in DLT\x04 only.
+delta_buffer_t delta_encode_v4(const delta_placed_commands_t *cmds,
+                               bool inplace, size_t version_size,
+                               const uint8_t src_crc[DELTA_CRC_SIZE],
+                               const uint8_t dst_crc[DELTA_CRC_SIZE]);
+
 void           delta_buffer_init(delta_buffer_t *buf);
 void           delta_buffer_free(delta_buffer_t *buf);
 

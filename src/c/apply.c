@@ -106,6 +106,10 @@ delta_placed_summary(const delta_placed_commands_t *cmds)
 		if (cmds->data[i].tag == PCMD_COPY) {
 			s.num_copies++;
 			s.copy_bytes += cmds->data[i].copy.length;
+		} else if (cmds->data[i].tag == PCMD_MOVE) {
+			// MOVE copies from already-written output; count with copies.
+			s.num_copies++;
+			s.copy_bytes += cmds->data[i].move.length;
 		} else {
 			s.num_adds++;
 			s.add_bytes += cmds->data[i].add.length;
@@ -169,7 +173,9 @@ delta_place_commands(const delta_commands_t *cmds)
 static size_t
 pcmd_dst(const delta_placed_command_t *cmd)
 {
-	return cmd->tag == PCMD_COPY ? cmd->copy.dst : cmd->add.dst;
+	if (cmd->tag == PCMD_COPY) return cmd->copy.dst;
+	if (cmd->tag == PCMD_MOVE) return cmd->move.dst;
+	return cmd->add.dst;
 }
 
 static void
@@ -210,6 +216,12 @@ delta_unplace_commands(const delta_placed_commands_t *placed)
 	for (i = 0; i < placed->len; i++) {
 		const delta_placed_command_t *pc = &placed->data[indices[i]];
 		delta_command_t cmd;
+		if (pc->tag == PCMD_MOVE) {
+			fprintf(stderr,
+			        "delta_unplace_commands: MOVE has no algorithm-level"
+			        " equivalent; MOVE commands are DLT\\x04-only\n");
+			exit(1);
+		}
 		if (pc->tag == PCMD_COPY) {
 			cmd.tag = CMD_COPY;
 			cmd.copy.offset = pc->copy.src;
@@ -257,6 +269,25 @@ delta_validate_placed_commands(const delta_placed_commands_t *cmds,
 				        i, cmd->copy.src, cmd_len, source_limit);
 				exit(1);
 			}
+		} else if (cmd->tag == PCMD_MOVE) {
+			dst = cmd->move.dst;
+			cmd_len = cmd->move.length;
+			if (cmd->move.src > version_size ||
+			    cmd_len > version_size - cmd->move.src) {
+				fprintf(stderr,
+				        "delta: MOVE command %zu reads past version size "
+				        "(src=%zu len=%zu vs=%zu)\n",
+				        i, cmd->move.src, cmd_len, version_size);
+				exit(1);
+			}
+			// Necessary geometric constraint: src + length <= dst.
+			if (cmd->move.src + cmd_len > dst) {
+				fprintf(stderr,
+				        "delta: MOVE command %zu src+len > dst "
+				        "(src=%zu len=%zu dst=%zu)\n",
+				        i, cmd->move.src, cmd_len, dst);
+				exit(1);
+			}
 		} else {
 			dst = cmd->add.dst;
 			cmd_len = cmd->add.length;
@@ -285,6 +316,10 @@ delta_apply_placed(const uint8_t *r, const delta_placed_commands_t *cmds,
 		if (cmd->tag == PCMD_COPY) {
 			memcpy(&out[cmd->copy.dst], &r[cmd->copy.src],
 			       cmd->copy.length);
+		} else if (cmd->tag == PCMD_MOVE) {
+			// LZ77-style: read from already-written output region.
+			memmove(&out[cmd->move.dst], &out[cmd->move.src],
+			        cmd->move.length);
 		} else {
 			memcpy(&out[cmd->add.dst], cmd->add.data,
 			       cmd->add.length);
@@ -307,6 +342,10 @@ delta_apply_placed_inplace(const delta_placed_commands_t *cmds, uint8_t *buf)
 		if (cmd->tag == PCMD_COPY) {
 			memmove(&buf[cmd->copy.dst], &buf[cmd->copy.src],
 			        cmd->copy.length);
+		} else if (cmd->tag == PCMD_MOVE) {
+			// Same as COPY in the inplace buffer; memmove handles overlaps.
+			memmove(&buf[cmd->move.dst], &buf[cmd->move.src],
+			        cmd->move.length);
 		} else {
 			memcpy(&buf[cmd->add.dst], cmd->add.data,
 			       cmd->add.length);
