@@ -13,7 +13,7 @@ from delta import (
     CopyCmd, AddCmd,
     PlacedCopy, PlacedAdd, PlacedMove,
     diff_greedy, diff_onepass, diff_correcting,
-    place_commands, encode_delta, decode_delta,
+    place_commands, encode_delta, encode_delta_large, decode_delta,
     apply_delta, apply_placed, apply_placed_inplace,
     is_inplace_delta,
     make_inplace,
@@ -1292,10 +1292,9 @@ def _zero_crc():
 
 
 def _roundtrip_large(commands, version_size, R=b''):
-    """Encode v4, decode, apply; return recovered bytes."""
-    delta = encode_delta(commands, version_size=version_size,
-                         src_crc=_zero_crc(), dst_crc=_zero_crc(),
-                         format_version=4)
+    """Encode large format, decode, apply; return recovered bytes."""
+    delta = encode_delta_large(commands, version_size=version_size,
+                               src_crc=_zero_crc(), dst_crc=_zero_crc())
     cmds2, is_ip, vs, _, _ = decode_delta(delta)
     assert vs == version_size
     assert delta[:4] == DELTA_MAGIC_LARGE
@@ -1309,37 +1308,32 @@ class TestDltLargeHeader(unittest.TestCase):
     """DLT\x04 header: magic, u64 version_size, flags."""
 
     def test_magic_large(self):
-        delta = encode_delta([], version_size=0,
-                             src_crc=_zero_crc(), dst_crc=_zero_crc(),
-                             format_version=4)
+        delta = encode_delta_large([], version_size=0,
+                                   src_crc=_zero_crc(), dst_crc=_zero_crc())
         self.assertEqual(delta[:4], DELTA_MAGIC_LARGE)
 
     def test_small_magic_unchanged(self):
         delta = encode_delta([], version_size=0,
-                             src_crc=_zero_crc(), dst_crc=_zero_crc(),
-                             format_version=3)
+                             src_crc=_zero_crc(), dst_crc=_zero_crc())
         self.assertEqual(delta[:4], DELTA_MAGIC)
 
     def test_version_size_u64_large(self):
         # version_size > 2^32 stored and recovered correctly
         big = 2**32 + 999
-        delta = encode_delta([], version_size=big,
-                             src_crc=_zero_crc(), dst_crc=_zero_crc(),
-                             format_version=4)
+        delta = encode_delta_large([], version_size=big,
+                                   src_crc=_zero_crc(), dst_crc=_zero_crc())
         _, _, vs, _, _ = decode_delta(delta)
         self.assertEqual(vs, big)
 
     def test_header_size_large(self):
         # Empty delta: 29-byte header + 1-byte END = 30 bytes
-        delta = encode_delta([], version_size=0,
-                             src_crc=_zero_crc(), dst_crc=_zero_crc(),
-                             format_version=4)
+        delta = encode_delta_large([], version_size=0,
+                                   src_crc=_zero_crc(), dst_crc=_zero_crc())
         self.assertEqual(len(delta), 30)
 
     def test_inplace_flag_large(self):
-        delta = encode_delta([], inplace=True, version_size=0,
-                             src_crc=_zero_crc(), dst_crc=_zero_crc(),
-                             format_version=4)
+        delta = encode_delta_large([], inplace=True, version_size=0,
+                                   src_crc=_zero_crc(), dst_crc=_zero_crc())
         _, is_ip, _, _, _ = decode_delta(delta)
         self.assertTrue(is_ip)
 
@@ -1358,9 +1352,8 @@ class TestDltLargeCopy(unittest.TestCase):
         # so verify the command type byte is 0x03
         big_src = 2**32 + 1
         cmds = [PlacedCopy(src=big_src, dst=0, length=1)]
-        delta = encode_delta(cmds, version_size=1,
-                             src_crc=_zero_crc(), dst_crc=_zero_crc(),
-                             format_version=4)
+        delta = encode_delta_large(cmds, version_size=1,
+                                   src_crc=_zero_crc(), dst_crc=_zero_crc())
         # Find the command byte after the 29-byte header
         self.assertEqual(delta[29], 3)  # DELTA_CMD_BIGCOPY = 3
 
@@ -1393,9 +1386,8 @@ class TestDltLargeAdd(unittest.TestCase):
     def test_bigadd_large_dst_command_byte(self):
         big_dst = 2**32 + 1
         cmds = [PlacedAdd(dst=big_dst, data=b'x')]
-        delta = encode_delta(cmds, version_size=big_dst + 1,
-                             src_crc=_zero_crc(), dst_crc=_zero_crc(),
-                             format_version=4)
+        delta = encode_delta_large(cmds, version_size=big_dst + 1,
+                                   src_crc=_zero_crc(), dst_crc=_zero_crc())
         self.assertEqual(delta[29], 4)  # DELTA_CMD_BIGADD = 4
 
 
@@ -1414,16 +1406,14 @@ class TestDltLargeMove(unittest.TestCase):
 
     def test_move_command_byte(self):
         cmds = [PlacedMove(src=0, dst=3, length=3)]
-        delta = encode_delta(cmds, version_size=6,
-                             src_crc=_zero_crc(), dst_crc=_zero_crc(),
-                             format_version=4)
+        delta = encode_delta_large(cmds, version_size=6,
+                                   src_crc=_zero_crc(), dst_crc=_zero_crc())
         self.assertEqual(delta[29], 5)  # DELTA_CMD_MOVE = 5
 
     def test_bigmove_command_byte(self):
         cmds = [PlacedMove(src=0, dst=2**32 + 1, length=1)]
-        delta = encode_delta(cmds, version_size=2**32 + 2,
-                             src_crc=_zero_crc(), dst_crc=_zero_crc(),
-                             format_version=4)
+        delta = encode_delta_large(cmds, version_size=2**32 + 2,
+                                   src_crc=_zero_crc(), dst_crc=_zero_crc())
         self.assertEqual(delta[29], 6)  # DELTA_CMD_BIGMOVE = 6
 
     def test_move_overlap_rejected(self):
@@ -1455,8 +1445,7 @@ class TestDltLargeRejected(unittest.TestCase):
         cmds = [PlacedMove(src=0, dst=3, length=3)]
         with self.assertRaises(ValueError):
             encode_delta(cmds, version_size=6,
-                         src_crc=_zero_crc(), dst_crc=_zero_crc(),
-                         format_version=3)
+                         src_crc=_zero_crc(), dst_crc=_zero_crc())
 
     def test_bigcopy_in_v3_stream_rejected(self):
         # Hand-craft a DLT\x03 file with a BIGCOPY byte — must be rejected
@@ -1481,9 +1470,8 @@ class TestDltLargeAlgoRoundtrip(unittest.TestCase):
     def _roundtrip_algo(self, algo_fn, R, V):
         cmds = algo_fn(R, V, p=4)
         placed = place_commands(cmds)
-        delta = encode_delta(placed, version_size=len(V),
-                             src_crc=_crc64_xz(R), dst_crc=_crc64_xz(V),
-                             format_version=4)
+        delta = encode_delta_large(placed, version_size=len(V),
+                                   src_crc=_crc64_xz(R), dst_crc=_crc64_xz(V))
         self.assertEqual(delta[:4], DELTA_MAGIC_LARGE)
         placed2, _, vs, sc, dc = decode_delta(delta)
         self.assertEqual(vs, len(V))
