@@ -951,3 +951,196 @@ TEST_CASE("seed length boundaries", "[edge]") {
         REQUIRE(apply_delta(r, algo(r, v_long,  opts(r.size() + 1))) == v_long);
     }
 }
+
+// ── DLT\x04 large-format tests ───────────────────────────────────────────
+
+static const std::array<uint8_t, DELTA_CRC_SIZE> zh{};
+
+static std::vector<uint8_t> encode_large_roundtrip(
+    const std::vector<PlacedCommand>& cmds, size_t version_size) {
+    auto delta_bytes = encode_delta_large(cmds, false, version_size, zh, zh);
+    auto [cmds2, ip, vs, sc, dc] = decode_delta(delta_bytes);
+    std::vector<uint8_t> out(vs, 0);
+    apply_placed_to({}, cmds2, out);
+    return out;
+}
+
+TEST_CASE("large format header magic", "[large]") {
+    auto delta_bytes = encode_delta_large({}, false, 0, zh, zh);
+    REQUIRE(delta_bytes.size() >= 4);
+    CHECK(delta_bytes[0] == 'D');
+    CHECK(delta_bytes[1] == 'L');
+    CHECK(delta_bytes[2] == 'T');
+    CHECK(delta_bytes[3] == 0x04);
+}
+
+TEST_CASE("large format header size", "[large]") {
+    auto delta_bytes = encode_delta_large({}, false, 0, zh, zh);
+    // 29 bytes header + 1 byte END
+    CHECK(delta_bytes.size() == DELTA_HEADER_SIZE_LARGE + 1);
+}
+
+TEST_CASE("large format version_size is u64 BE", "[large]") {
+    size_t vs_in = 0x0102030405060708ULL & SIZE_MAX;
+    auto delta_bytes = encode_delta_large({PlacedAdd{0, {}}}, false, vs_in, zh, zh);
+    // version_size at bytes 5..12
+    uint64_t stored = 0;
+    for (int i = 0; i < 8; ++i)
+        stored = (stored << 8) | delta_bytes[5 + i];
+    CHECK(static_cast<size_t>(stored) == vs_in);
+}
+
+TEST_CASE("large format inplace flag", "[large]") {
+    auto delta_bytes = encode_delta_large({}, true, 0, zh, zh);
+    CHECK((delta_bytes[4] & DELTA_FLAG_INPLACE) != 0);
+    auto delta_bytes2 = encode_delta_large({}, false, 0, zh, zh);
+    CHECK((delta_bytes2[4] & DELTA_FLAG_INPLACE) == 0);
+}
+
+TEST_CASE("large format COPY small roundtrip", "[large]") {
+    std::vector<uint8_t> r = {'h','e','l','l','o'};
+    std::vector<PlacedCommand> cmds = {PlacedCopy{0, 0, 5}};
+    auto delta_bytes = encode_delta_large(cmds, false, 5, zh, zh);
+    CHECK(delta_bytes[DELTA_HEADER_SIZE_LARGE] == DELTA_CMD_COPY);
+    auto [cmds2, ip, vs, sc, dc] = decode_delta(delta_bytes);
+    REQUIRE(cmds2.size() == 1);
+    auto* c = std::get_if<PlacedCopy>(&cmds2[0]);
+    REQUIRE(c);
+    CHECK(c->src == 0); CHECK(c->dst == 0); CHECK(c->length == 5);
+    std::vector<uint8_t> out(5, 0);
+    apply_placed_to(r, cmds2, out);
+    CHECK(out == r);
+}
+
+TEST_CASE("large format BIGCOPY command byte", "[large]") {
+    size_t big = static_cast<size_t>(UINT32_MAX) + 1;
+    std::vector<PlacedCommand> cmds = {PlacedCopy{0, big, 1}};
+    auto delta_bytes = encode_delta_large(cmds, false, big + 1, zh, zh);
+    CHECK(delta_bytes[DELTA_HEADER_SIZE_LARGE] == DELTA_CMD_BIGCOPY);
+}
+
+TEST_CASE("large format ADD roundtrip", "[large]") {
+    std::vector<uint8_t> payload = {'w','o','r','l','d'};
+    std::vector<PlacedCommand> cmds = {PlacedAdd{0, payload}};
+    auto out = encode_large_roundtrip(cmds, payload.size());
+    CHECK(out == payload);
+}
+
+TEST_CASE("large format BIGADD command byte", "[large]") {
+    size_t big_dst = static_cast<size_t>(UINT32_MAX) + 1;
+    std::vector<PlacedCommand> cmds = {PlacedAdd{big_dst, {'x'}}};
+    auto delta_bytes = encode_delta_large(cmds, false, big_dst + 1, zh, zh);
+    CHECK(delta_bytes[DELTA_HEADER_SIZE_LARGE] == DELTA_CMD_BIGADD);
+}
+
+TEST_CASE("large format MOVE roundtrip", "[large]") {
+    // Write "hello" via ADD to offset 0, then MOVE it to offset 5.
+    std::vector<uint8_t> hello = {'h','e','l','l','o'};
+    std::vector<PlacedCommand> cmds = {
+        PlacedAdd{0, hello},
+        PlacedMove{0, 5, 5},
+    };
+    auto delta_bytes = encode_delta_large(cmds, false, 10, zh, zh);
+    auto [cmds2, ip, vs, sc, dc] = decode_delta(delta_bytes);
+    std::vector<uint8_t> out(10, 0);
+    apply_placed_to({}, cmds2, out);
+    std::vector<uint8_t> expected = {'h','e','l','l','o','h','e','l','l','o'};
+    CHECK(out == expected);
+}
+
+TEST_CASE("large format MOVE command byte", "[large]") {
+    std::vector<PlacedCommand> cmds = {
+        PlacedAdd{0, {'x'}},
+        PlacedMove{0, 1, 1},
+    };
+    auto delta_bytes = encode_delta_large(cmds, false, 2, zh, zh);
+    // Second command (after ADD): ADD=1B+4B+4B+1B=10B, then MOVE command byte
+    size_t move_off = DELTA_HEADER_SIZE_LARGE + 1 + DELTA_ADD_HEADER + 1;
+    CHECK(delta_bytes[move_off] == DELTA_CMD_MOVE);
+}
+
+TEST_CASE("large format BIGMOVE command byte", "[large]") {
+    size_t big = static_cast<size_t>(UINT32_MAX) + 1;
+    std::vector<PlacedCommand> cmds = {PlacedMove{0, big, 1}};
+    auto delta_bytes = encode_delta_large(cmds, false, big + 1, zh, zh);
+    CHECK(delta_bytes[DELTA_HEADER_SIZE_LARGE] == DELTA_CMD_BIGMOVE);
+}
+
+TEST_CASE("large format MOVE overlap rejected on decode", "[large]") {
+    // Hand-craft a DLT\x04 delta with MOVE where src+length > dst.
+    std::vector<uint8_t> buf;
+    buf.insert(buf.end(), DELTA_MAGIC_LARGE, DELTA_MAGIC_LARGE + DELTA_MAGIC_SIZE);
+    buf.push_back(0); // flags
+    // version_size = 10 as u64 BE
+    for (int i = 7; i >= 0; --i) buf.push_back(i == 0 ? 10 : 0);
+    for (int i = 0; i < 16; ++i) buf.push_back(0); // crcs
+    buf.push_back(DELTA_CMD_MOVE);
+    // MOVE: src=5, dst=8, length=4  → src+length=9 > dst=8
+    auto pu32 = [&](uint32_t v) {
+        buf.push_back(v >> 24); buf.push_back(v >> 16);
+        buf.push_back(v >> 8);  buf.push_back(v);
+    };
+    pu32(5); pu32(8); pu32(4);
+    buf.push_back(DELTA_CMD_END);
+    CHECK_THROWS_AS(decode_delta(buf), DeltaError);
+}
+
+TEST_CASE("small format rejects large command bytes", "[large]") {
+    // Hand-craft a DLT\x03 delta with BIGCOPY command byte (3).
+    std::vector<uint8_t> buf;
+    buf.insert(buf.end(), DELTA_MAGIC, DELTA_MAGIC + DELTA_MAGIC_SIZE);
+    buf.push_back(0); // flags
+    for (int i = 3; i >= 0; --i) buf.push_back(i == 0 ? 1 : 0); // version_size=1 u32
+    for (int i = 0; i < 16; ++i) buf.push_back(0); // crcs
+    buf.push_back(DELTA_CMD_BIGCOPY);
+    CHECK_THROWS_AS(decode_delta(buf), DeltaError);
+}
+
+TEST_CASE("unknown magic rejected", "[large]") {
+    std::vector<uint8_t> buf = {'X','X','X',0x03, 0, 0,0,0,0};
+    CHECK_THROWS_AS(decode_delta(buf), DeltaError);
+}
+
+TEST_CASE("encode_delta rejects PlacedMove", "[large]") {
+    std::vector<PlacedCommand> cmds = {PlacedMove{0, 5, 3}};
+    CHECK_THROWS_AS(encode_delta(cmds, false, 8, zh, zh), DeltaError);
+}
+
+TEST_CASE("large format algo roundtrip greedy", "[large]") {
+    std::vector<uint8_t> r = {'t','h','e',' ','q','u','i','c','k',' ','b','r','o','w','n',' ','f','o','x'};
+    std::vector<uint8_t> v = {'t','h','e',' ','s','l','o','w',' ','b','r','o','w','n',' ','f','o','x'};
+    auto cmds = diff_greedy(r, v, opts(4));
+    auto placed = place_commands(cmds);
+    auto src_c = crc64_xz(r.data(), r.size());
+    auto dst_c = crc64_xz(v.data(), v.size());
+    auto delta_bytes = encode_delta_large(placed, false, v.size(), src_c, dst_c);
+    auto [placed2, ip, vs, sc, dc] = decode_delta(delta_bytes);
+    REQUIRE(sc == src_c); REQUIRE(dc == dst_c);
+    std::vector<uint8_t> out(v.size(), 0);
+    apply_placed_to(r, placed2, out);
+    CHECK(out == v);
+}
+
+TEST_CASE("large format algo roundtrip onepass", "[large]") {
+    std::vector<uint8_t> r = {'t','h','e',' ','q','u','i','c','k',' ','b','r','o','w','n',' ','f','o','x'};
+    std::vector<uint8_t> v = {'t','h','e',' ','s','l','o','w',' ','b','r','o','w','n',' ','f','o','x'};
+    auto cmds = diff_onepass(r, v, opts(4));
+    auto placed = place_commands(cmds);
+    auto delta_bytes = encode_delta_large(placed, false, v.size(), zh, zh);
+    auto [placed2, ip, vs, sc, dc] = decode_delta(delta_bytes);
+    std::vector<uint8_t> out(v.size(), 0);
+    apply_placed_to(r, placed2, out);
+    CHECK(out == v);
+}
+
+TEST_CASE("large format algo roundtrip correcting", "[large]") {
+    std::vector<uint8_t> r = {'t','h','e',' ','q','u','i','c','k',' ','b','r','o','w','n',' ','f','o','x'};
+    std::vector<uint8_t> v = {'t','h','e',' ','s','l','o','w',' ','b','r','o','w','n',' ','f','o','x'};
+    auto cmds = diff_correcting(r, v, opts(4));
+    auto placed = place_commands(cmds);
+    auto delta_bytes = encode_delta_large(placed, false, v.size(), zh, zh);
+    auto [placed2, ip, vs, sc, dc] = decode_delta(delta_bytes);
+    std::vector<uint8_t> out(v.size(), 0);
+    apply_placed_to(r, placed2, out);
+    CHECK(out == v);
+}

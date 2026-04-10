@@ -27,17 +27,26 @@ inline constexpr size_t TABLE_SIZE = 1048573;       // largest prime < 2^20
 inline constexpr size_t MAX_TABLE_SIZE = 1073741827; // prime near 2^30; default ceiling for auto-sizing
 inline constexpr uint64_t HASH_BASE = 263;
 inline constexpr uint64_t HASH_MOD = (1ULL << 61) - 1; // Mersenne prime 2^61-1
-inline constexpr uint8_t DELTA_MAGIC[4] = {'D', 'L', 'T', 0x03};
+inline constexpr uint8_t DELTA_MAGIC[4]       = {'D', 'L', 'T', 0x03};
+inline constexpr uint8_t DELTA_MAGIC_LARGE[4] = {'D', 'L', 'T', 0x04};
 inline constexpr size_t  DELTA_MAGIC_SIZE = sizeof(DELTA_MAGIC);
 inline constexpr uint8_t DELTA_FLAG_INPLACE = 0x01;
-inline constexpr uint8_t DELTA_CMD_END  = 0;
-inline constexpr uint8_t DELTA_CMD_COPY = 1;
-inline constexpr uint8_t DELTA_CMD_ADD  = 2;
-inline constexpr size_t  DELTA_CRC_SIZE = 8;     // CRC-64/XZ digest
-inline constexpr size_t  DELTA_HEADER_SIZE = 25; // magic(4) + flags(1) + version_size(4) + src_crc(8) + dst_crc(8)
+inline constexpr uint8_t DELTA_CMD_END     = 0;
+inline constexpr uint8_t DELTA_CMD_COPY    = 1;
+inline constexpr uint8_t DELTA_CMD_ADD     = 2;
+inline constexpr uint8_t DELTA_CMD_BIGCOPY = 3; // DLT\x04: COPY with u64 fields
+inline constexpr uint8_t DELTA_CMD_BIGADD  = 4; // DLT\x04: ADD with u64 dst/len header
+inline constexpr uint8_t DELTA_CMD_MOVE    = 5; // DLT\x04: copy from already-written output (u32 fields)
+inline constexpr uint8_t DELTA_CMD_BIGMOVE = 6; // DLT\x04: MOVE with u64 fields
+inline constexpr size_t  DELTA_CRC_SIZE = 8;          // CRC-64/XZ digest
+inline constexpr size_t  DELTA_HEADER_SIZE       = 25; // magic(4)+flags(1)+version_size(4)+src_crc(8)+dst_crc(8)
+inline constexpr size_t  DELTA_HEADER_SIZE_LARGE = 29; // magic(4)+flags(1)+version_size(8)+src_crc(8)+dst_crc(8)
 inline constexpr size_t  DELTA_U32_SIZE = 4;
-inline constexpr size_t  DELTA_COPY_PAYLOAD = 12; // src(4) + dst(4) + len(4)
-inline constexpr size_t  DELTA_ADD_HEADER = 8;    // dst(4) + len(4)
+inline constexpr size_t  DELTA_U64_SIZE = 8;
+inline constexpr size_t  DELTA_COPY_PAYLOAD    = 12; // src(4)+dst(4)+len(4)
+inline constexpr size_t  DELTA_ADD_HEADER      = 8;  // dst(4)+len(4)
+inline constexpr size_t  DELTA_BIGCOPY_PAYLOAD = 24; // src(8)+dst(8)+len(8)
+inline constexpr size_t  DELTA_BIGADD_HEADER   = 16; // dst(8)+len(8)
 inline constexpr size_t  DELTA_BUF_CAP = 256;
 
 // ============================================================================
@@ -79,8 +88,18 @@ struct PlacedAdd {
     bool operator==(const PlacedAdd&) const = default;
 };
 
+/// Copy @p length bytes from @p src in the already-written output to @p dst.
+/// The encoder guarantees src+length <= dst (source is fully written before it is read).
+/// Only valid in DLT\x04 format; use encode_delta_large to encode PlacedMove commands.
+struct PlacedMove {
+    size_t src;    ///< Source byte offset in the already-written output buffer.
+    size_t dst;    ///< Destination byte offset in the output.
+    size_t length; ///< Number of bytes to copy.
+    bool operator==(const PlacedMove&) const = default;
+};
+
 /// A command with explicit source and destination offsets.
-using PlacedCommand = std::variant<PlacedCopy, PlacedAdd>;
+using PlacedCommand = std::variant<PlacedCopy, PlacedAdd, PlacedMove>;
 
 // ============================================================================
 // Algorithm and Policy enums

@@ -31,6 +31,9 @@ DeltaSummary placed_summary(const std::vector<PlacedCommand>& commands) {
         } else if (auto* a = std::get_if<PlacedAdd>(&cmd)) {
             ++num_adds;
             add_bytes += a->data.size();
+        } else if (auto* m = std::get_if<PlacedMove>(&cmd)) {
+            ++num_copies; // MOVE counts with copies
+            copy_bytes += m->length;
         }
     }
     return {commands.size(), num_copies, num_adds, copy_bytes, add_bytes,
@@ -72,7 +75,8 @@ std::vector<Command> unplace_commands(const std::vector<PlacedCommand>& placed) 
     std::sort(indices.begin(), indices.end(), [&](size_t a, size_t b) {
         auto dst_of = [&](size_t i) -> size_t {
             if (auto* c = std::get_if<PlacedCopy>(&placed[i])) { return c->dst; }
-            return std::get<PlacedAdd>(placed[i]).dst;
+            if (auto* a = std::get_if<PlacedAdd>(&placed[i]))  { return a->dst; }
+            return std::get<PlacedMove>(placed[i]).dst;
         };
         return dst_of(a) < dst_of(b);
     });
@@ -84,6 +88,8 @@ std::vector<Command> unplace_commands(const std::vector<PlacedCommand>& placed) 
             commands.emplace_back(CopyCmd{c->src, c->length});
         } else if (auto* a = std::get_if<PlacedAdd>(&placed[i])) {
             commands.emplace_back(AddCmd{a->data});
+        } else {
+            throw DeltaError("PlacedMove has no algorithm-level equivalent");
         }
     }
     return commands;
@@ -104,6 +110,11 @@ size_t apply_placed_to(
             std::memcpy(&out[a->dst], a->data.data(), a->data.size());
             size_t end = a->dst + a->data.size();
             if (end > max_written) { max_written = end; }
+        } else if (auto* m = std::get_if<PlacedMove>(&cmd)) {
+            // src+length <= dst guaranteed by encoder; read from already-written output
+            std::memcpy(&out[m->dst], &out[m->src], m->length);
+            size_t end = m->dst + m->length;
+            if (end > max_written) { max_written = end; }
         }
     }
     return max_written;
@@ -119,6 +130,8 @@ void apply_placed_inplace_to(
             std::memmove(&buf[c->dst], &buf[c->src], c->length);
         } else if (auto* a = std::get_if<PlacedAdd>(&cmd)) {
             std::memcpy(&buf[a->dst], a->data.data(), a->data.size());
+        } else if (auto* m = std::get_if<PlacedMove>(&cmd)) {
+            std::memcpy(&buf[m->dst], &buf[m->src], m->length);
         }
     }
 }
@@ -143,6 +156,10 @@ void validate_placed_commands(
             validate_range(c->src, c->length, source_limit, "copy source");
         } else if (auto* a = std::get_if<PlacedAdd>(&cmd)) {
             validate_range(a->dst, a->data.size(), version_size, "add destination");
+        } else if (auto* m = std::get_if<PlacedMove>(&cmd)) {
+            validate_range(m->dst, m->length, version_size, "move destination");
+            if (m->src + m->length > m->dst)
+                throw DeltaError("move src+length > dst: encoder ordering constraint violated");
         }
     }
 }
