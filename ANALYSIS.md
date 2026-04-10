@@ -237,7 +237,7 @@ Total: $O(n \log n + E)$.
 
 | Script | Purpose |
 |--------|---------|
-| `tests/correctness.sh` | Builds all eight implementations and runs unit tests + cross-language compatibility (208/66/75/91/57/63/57/57 unit tests) |
+| `tests/correctness.sh` | Builds all eight implementations and runs unit tests + cross-language compatibility (215/85/75/91/57/63/57/57 unit tests) |
 | `tests/kernel-delta-test.sh` | Performance benchmark on Linux 5.1.0–5.1.7 kernel tarballs (~871 MB each) |
 | `tests/transposition-benchmark.sh` | Performance benchmark on synthetic block permutations (16 MB–1 GB) |
 | `tests/per-language-benchmark.sh` | Per-language speed comparison (all 8 implementations, linux-5.1.0→5.1.1) |

@@ -189,8 +189,8 @@ Individual suites:
 
 | Language | Tests | Command |
 |----------|------:|---------|
-| Python | 208 | `cd src/python && python3 -m unittest test_delta -v` |
-| Rust | 66 | `cd src/rust/delta && cargo test` |
+| Python | 215 | `cd src/python && python3 -m unittest test_delta -v` |
+| Rust | 85 | `cd src/rust/delta && cargo test` |
 | C++ | 75 | `cd src/cpp && cmake -B build && cmake --build build && ctest --test-dir build` |
 | C | 91 | `cd src/c && make && bash test_delta.sh` |
 | Java | 57 | `cd src/java && make test` |
@@ -212,8 +212,8 @@ tables and details.
 
 ```
 src/
-  python/         Single-file library + CLI + 208-test suite
-  rust/delta/     Cargo crate — library + clap CLI + 66 tests
+  python/         Single-file library + CLI + 215-test suite
+  rust/delta/     Cargo crate — library + clap CLI + 85 tests
   cpp/            CMake project — static library + CLI11 CLI + Catch2 tests (75)
   c/              Makefile project — single-header API + CLI + 91 tests
   java/           Makefile project — library + CLI + 57 tests

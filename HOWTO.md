@@ -51,7 +51,7 @@ make test
 
 ### Java
 
-Requires Java 11+.  No external dependencies.
+Requires Java 17+.  No external dependencies.
 
 ```bash
 cd src/java
@@ -527,24 +527,24 @@ then runs cross-language compatibility tests):
 Individual suites:
 
 ```bash
-# Python — 208 tests
+# Python — 215 tests
 cd src/python
 python3 -m unittest test_delta -v
 
-# Rust — 56 tests
+# Rust — 85 tests
 cd src/rust/delta
 cargo test
 
-# C++ — 64 test cases
+# C++ — 75 test cases
 cd src/cpp
 cmake -B build && cmake --build build
 ctest --test-dir build
 
-# C — 45 integration tests
+# C — 91 integration tests
 cd src/c
 make && bash test_delta.sh
 
-# Java — 52 unit tests
+# Java — 57 unit tests (requires Java 17+)
 cd src/java
 make test
 ```
