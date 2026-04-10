@@ -29,7 +29,7 @@
 #define DELTA_CMD_BIGMOVE     6  // DLT\x04: MOVE with u64 fields
 #define DELTA_CRC_SIZE        8  // CRC-64/XZ digest bytes
 #define DELTA_HEADER_SIZE     25 // magic(4)+flags(1)+version_size(4)+crcs(16)
-#define DELTA_HEADER_SIZE_V4  29 // magic(4)+flags(1)+version_size(8)+crcs(16)
+#define DELTA_HEADER_SIZE_LARGE  29 // magic(4)+flags(1)+version_size(8)+crcs(16)
 #define DELTA_U32_SIZE        4
 #define DELTA_U64_SIZE        8
 #define DELTA_COPY_PAYLOAD    12 // src(4)+dst(4)+len(4)
@@ -39,7 +39,7 @@
 #define DELTA_BUF_CAP         256
 
 static const uint8_t DELTA_MAGIC[4]    = {'D', 'L', 'T', 0x03};
-static const uint8_t DELTA_MAGIC_V4[4] = {'D', 'L', 'T', 0x04};
+static const uint8_t DELTA_MAGIC_LARGE[4] = {'D', 'L', 'T', 0x04};
 
 // ── Checked allocation helpers ────────────────────────────────────────
 
@@ -347,7 +347,7 @@ delta_buffer_t delta_encode(const delta_placed_commands_t *cmds,
 // Encode placed commands to DLT\x04 format.
 // Per-command size selection: COPY/BIGCOPY, ADD/BIGADD, MOVE/BIGMOVE chosen
 // by whether fields fit in u32.  MOVE commands are valid in DLT\x04 only.
-delta_buffer_t delta_encode_v4(const delta_placed_commands_t *cmds,
+delta_buffer_t delta_encode_large(const delta_placed_commands_t *cmds,
                                bool inplace, size_t version_size,
                                const uint8_t src_crc[DELTA_CRC_SIZE],
                                const uint8_t dst_crc[DELTA_CRC_SIZE]);

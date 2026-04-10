@@ -127,7 +127,7 @@ delta_encode(const delta_placed_commands_t *cmds, bool inplace,
 		} else {
 			fprintf(stderr,
 			        "delta_encode: MOVE commands require DLT\\x04 format;"
-			        " use delta_encode_v4\n");
+			        " use delta_encode_large\n");
 			exit(1);
 		}
 	}
@@ -143,13 +143,13 @@ delta_encode(const delta_placed_commands_t *cmds, bool inplace,
 // ── Encode V4 ─────────────────────────────────────────────────────────
 
 delta_buffer_t
-delta_encode_v4(const delta_placed_commands_t *cmds, bool inplace,
+delta_encode_large(const delta_placed_commands_t *cmds, bool inplace,
                 size_t version_size,
                 const uint8_t src_crc[DELTA_CRC_SIZE],
                 const uint8_t dst_crc[DELTA_CRC_SIZE])
 {
 	// Estimate size: V4 header + per-cmd big overhead
-	size_t est = DELTA_HEADER_SIZE_V4 + cmds->len * 26 + 1;
+	size_t est = DELTA_HEADER_SIZE_LARGE + cmds->len * 26 + 1;
 	size_t i;
 	uint8_t *buf, *p;
 
@@ -163,8 +163,8 @@ delta_encode_v4(const delta_placed_commands_t *cmds, bool inplace,
 	p = buf;
 
 	// V4 header: magic(4) + flags(1) + version_size(u64 BE) + crcs(16)
-	memcpy(p, DELTA_MAGIC_V4, sizeof(DELTA_MAGIC_V4));
-	p += sizeof(DELTA_MAGIC_V4);
+	memcpy(p, DELTA_MAGIC_LARGE, sizeof(DELTA_MAGIC_LARGE));
+	p += sizeof(DELTA_MAGIC_LARGE);
 	*p++ = inplace ? DELTA_FLAG_INPLACE : 0;
 	write_u64_be(&p, (uint64_t)version_size);
 	memcpy(p, src_crc, DELTA_CRC_SIZE); p += DELTA_CRC_SIZE;
@@ -421,9 +421,9 @@ delta_decode(const uint8_t *data, size_t len)
 		memcpy(result.src_crc, &data[9],                   DELTA_CRC_SIZE);
 		memcpy(result.dst_crc, &data[9 + DELTA_CRC_SIZE],  DELTA_CRC_SIZE);
 		decode_commands_small(&result, data, len, DELTA_HEADER_SIZE);
-	} else if (memcmp(data, DELTA_MAGIC_V4, 4) == 0) {
+	} else if (memcmp(data, DELTA_MAGIC_LARGE, 4) == 0) {
 		// DLT\x04
-		if (len < DELTA_HEADER_SIZE_V4) {
+		if (len < DELTA_HEADER_SIZE_LARGE) {
 			fprintf(stderr, "delta_decode: not a delta file\n");
 			exit(1);
 		}
@@ -431,7 +431,7 @@ delta_decode(const uint8_t *data, size_t len)
 		result.version_size = (size_t)read_u64_be(&data[5]);
 		memcpy(result.src_crc, &data[13],                   DELTA_CRC_SIZE);
 		memcpy(result.dst_crc, &data[13 + DELTA_CRC_SIZE],  DELTA_CRC_SIZE);
-		decode_commands_large(&result, data, len, DELTA_HEADER_SIZE_V4);
+		decode_commands_large(&result, data, len, DELTA_HEADER_SIZE_LARGE);
 	} else {
 		fprintf(stderr, "delta_decode: not a delta file\n");
 		exit(1);

@@ -9,9 +9,9 @@ import unittest
 from pathlib import Path
 
 from delta import (
-    DELTA_CRC_SIZE, DELTA_MAGIC, TABLE_SIZE,
+    DELTA_CRC_SIZE, DELTA_MAGIC, DELTA_MAGIC_LARGE, TABLE_SIZE,
     CopyCmd, AddCmd,
-    PlacedCopy, PlacedAdd,
+    PlacedCopy, PlacedAdd, PlacedMove,
     diff_greedy, diff_onepass, diff_correcting,
     place_commands, encode_delta, decode_delta,
     apply_delta, apply_placed, apply_placed_inplace,
@@ -178,7 +178,7 @@ class TestBinaryEncoding(unittest.TestCase):
         _, is_ip, _, _, _ = decode_delta(delta)
         self.assertTrue(is_ip)
 
-    def test_magic_v3(self):
+    def test_magic_small(self):
         placed = []
         delta = encode_delta(placed, inplace=False, version_size=0,
                              src_crc=self._src, dst_crc=self._dst)
@@ -1283,6 +1283,225 @@ class TestRealDataRoundTrip(unittest.TestCase):
     def test_greedy(self):     self._run(diff_greedy)
     def test_onepass(self):    self._run(diff_onepass)
     def test_correcting(self): self._run(diff_correcting)
+
+
+# ── DLT\x04 format tests ─────────────────────────────────────────────────────
+
+def _zero_crc():
+    return b'\x00' * DELTA_CRC_SIZE
+
+
+def _roundtrip_large(commands, version_size, R=b''):
+    """Encode v4, decode, apply; return recovered bytes."""
+    delta = encode_delta(commands, version_size=version_size,
+                         src_crc=_zero_crc(), dst_crc=_zero_crc(),
+                         format_version=4)
+    cmds2, is_ip, vs, _, _ = decode_delta(delta)
+    assert vs == version_size
+    assert delta[:4] == DELTA_MAGIC_LARGE
+    buf = bytearray(version_size)
+    from delta import apply_placed_to
+    apply_placed_to(R, cmds2, buf)
+    return bytes(buf)
+
+
+class TestDltLargeHeader(unittest.TestCase):
+    """DLT\x04 header: magic, u64 version_size, flags."""
+
+    def test_magic_large(self):
+        delta = encode_delta([], version_size=0,
+                             src_crc=_zero_crc(), dst_crc=_zero_crc(),
+                             format_version=4)
+        self.assertEqual(delta[:4], DELTA_MAGIC_LARGE)
+
+    def test_small_magic_unchanged(self):
+        delta = encode_delta([], version_size=0,
+                             src_crc=_zero_crc(), dst_crc=_zero_crc(),
+                             format_version=3)
+        self.assertEqual(delta[:4], DELTA_MAGIC)
+
+    def test_version_size_u64_large(self):
+        # version_size > 2^32 stored and recovered correctly
+        big = 2**32 + 999
+        delta = encode_delta([], version_size=big,
+                             src_crc=_zero_crc(), dst_crc=_zero_crc(),
+                             format_version=4)
+        _, _, vs, _, _ = decode_delta(delta)
+        self.assertEqual(vs, big)
+
+    def test_header_size_large(self):
+        # Empty delta: 29-byte header + 1-byte END = 30 bytes
+        delta = encode_delta([], version_size=0,
+                             src_crc=_zero_crc(), dst_crc=_zero_crc(),
+                             format_version=4)
+        self.assertEqual(len(delta), 30)
+
+    def test_inplace_flag_large(self):
+        delta = encode_delta([], inplace=True, version_size=0,
+                             src_crc=_zero_crc(), dst_crc=_zero_crc(),
+                             format_version=4)
+        _, is_ip, _, _, _ = decode_delta(delta)
+        self.assertTrue(is_ip)
+
+
+class TestDltLargeCopy(unittest.TestCase):
+    """COPY vs BIGCOPY selection and round-trip."""
+
+    def test_copy_small_fields(self):
+        R = b'ABCDEFGH'
+        cmds = [PlacedCopy(src=0, dst=0, length=8)]
+        result = _roundtrip_large(cmds, version_size=8, R=R)
+        self.assertEqual(result, R)
+
+    def test_bigcopy_large_src(self):
+        # src > U32_MAX forces BIGCOPY; we can't actually allocate that,
+        # so verify the command type byte is 0x03
+        big_src = 2**32 + 1
+        cmds = [PlacedCopy(src=big_src, dst=0, length=1)]
+        delta = encode_delta(cmds, version_size=1,
+                             src_crc=_zero_crc(), dst_crc=_zero_crc(),
+                             format_version=4)
+        # Find the command byte after the 29-byte header
+        self.assertEqual(delta[29], 3)  # DELTA_CMD_BIGCOPY = 3
+
+    def test_bigcopy_roundtrip_decode(self):
+        # Decode a hand-crafted BIGCOPY and verify fields
+        import struct
+        header = DELTA_MAGIC_LARGE + bytes([0]) + struct.pack('>Q', 100)
+        header += _zero_crc() + _zero_crc()
+        big_src = 2**32 + 7
+        big_dst = 0
+        big_len = 5
+        body = bytes([3]) + struct.pack('>QQQ', big_src, big_dst, big_len)
+        body += bytes([0])  # END
+        data = header + body
+        cmds, _, vs, _, _ = decode_delta(data)
+        self.assertEqual(len(cmds), 1)
+        self.assertIsInstance(cmds[0], PlacedCopy)
+        self.assertEqual(cmds[0].src, big_src)
+        self.assertEqual(cmds[0].length, big_len)
+
+
+class TestDltLargeAdd(unittest.TestCase):
+    """ADD vs BIGADD selection and round-trip."""
+
+    def test_add_small(self):
+        cmds = [PlacedAdd(dst=0, data=b'hello')]
+        result = _roundtrip_large(cmds, version_size=5)
+        self.assertEqual(result, b'hello')
+
+    def test_bigadd_large_dst_command_byte(self):
+        big_dst = 2**32 + 1
+        cmds = [PlacedAdd(dst=big_dst, data=b'x')]
+        delta = encode_delta(cmds, version_size=big_dst + 1,
+                             src_crc=_zero_crc(), dst_crc=_zero_crc(),
+                             format_version=4)
+        self.assertEqual(delta[29], 4)  # DELTA_CMD_BIGADD = 4
+
+
+class TestDltLargeMove(unittest.TestCase):
+    """MOVE and BIGMOVE commands."""
+
+    def test_move_basic(self):
+        # Write "ABC" then MOVE it to position 3 → "ABCABC"
+        R = b''
+        cmds = [
+            PlacedAdd(dst=0, data=b'ABC'),
+            PlacedMove(src=0, dst=3, length=3),
+        ]
+        result = _roundtrip_large(cmds, version_size=6, R=R)
+        self.assertEqual(result, b'ABCABC')
+
+    def test_move_command_byte(self):
+        cmds = [PlacedMove(src=0, dst=3, length=3)]
+        delta = encode_delta(cmds, version_size=6,
+                             src_crc=_zero_crc(), dst_crc=_zero_crc(),
+                             format_version=4)
+        self.assertEqual(delta[29], 5)  # DELTA_CMD_MOVE = 5
+
+    def test_bigmove_command_byte(self):
+        cmds = [PlacedMove(src=0, dst=2**32 + 1, length=1)]
+        delta = encode_delta(cmds, version_size=2**32 + 2,
+                             src_crc=_zero_crc(), dst_crc=_zero_crc(),
+                             format_version=4)
+        self.assertEqual(delta[29], 6)  # DELTA_CMD_BIGMOVE = 6
+
+    def test_move_overlap_rejected(self):
+        # src + length > dst: decoder must reject
+        import struct
+        header = DELTA_MAGIC_LARGE + bytes([0]) + struct.pack('>Q', 10)
+        header += _zero_crc() + _zero_crc()
+        # MOVE src=5 dst=7 length=4 → src+length=9 > dst=7
+        body = bytes([5]) + struct.pack('>III', 5, 7, 4) + bytes([0])
+        with self.assertRaises(ValueError):
+            decode_delta(header + body)
+
+    def test_move_chained(self):
+        # ADD "X", then MOVE to fill a repeated pattern
+        cmds = [
+            PlacedAdd(dst=0, data=b'X'),
+            PlacedMove(src=0, dst=1, length=1),
+            PlacedMove(src=0, dst=2, length=2),
+            PlacedMove(src=0, dst=4, length=4),
+        ]
+        result = _roundtrip_large(cmds, version_size=8)
+        self.assertEqual(result, b'XXXXXXXX')
+
+
+class TestDltLargeRejected(unittest.TestCase):
+    """DLT\x03 decoders reject v4 commands; v3 encoder rejects PlacedMove."""
+
+    def test_v3_encoder_rejects_move(self):
+        cmds = [PlacedMove(src=0, dst=3, length=3)]
+        with self.assertRaises(ValueError):
+            encode_delta(cmds, version_size=6,
+                         src_crc=_zero_crc(), dst_crc=_zero_crc(),
+                         format_version=3)
+
+    def test_bigcopy_in_v3_stream_rejected(self):
+        # Hand-craft a DLT\x03 file with a BIGCOPY byte — must be rejected
+        import struct
+        header = DELTA_MAGIC + bytes([0]) + struct.pack('>I', 10)
+        header += _zero_crc() + _zero_crc()
+        body = bytes([3]) + struct.pack('>QQQ', 0, 0, 5) + bytes([0])
+        with self.assertRaises(ValueError):
+            decode_delta(header + body)
+
+    def test_unknown_magic_rejected(self):
+        import struct
+        bad = b'DLT\x99' + bytes([0]) + struct.pack('>I', 0)
+        bad += _zero_crc() + _zero_crc() + bytes([0])
+        with self.assertRaises(ValueError):
+            decode_delta(bad)
+
+
+class TestDltLargeAlgoRoundtrip(unittest.TestCase):
+    """Full algo → encode v4 → decode → apply round-trips."""
+
+    def _roundtrip_algo(self, algo_fn, R, V):
+        cmds = algo_fn(R, V, p=4)
+        placed = place_commands(cmds)
+        delta = encode_delta(placed, version_size=len(V),
+                             src_crc=_crc64_xz(R), dst_crc=_crc64_xz(V),
+                             format_version=4)
+        self.assertEqual(delta[:4], DELTA_MAGIC_LARGE)
+        placed2, _, vs, sc, dc = decode_delta(delta)
+        self.assertEqual(vs, len(V))
+        self.assertEqual(sc, _crc64_xz(R))
+        self.assertEqual(dc, _crc64_xz(V))
+        return apply_placed(R, placed2)
+
+    def test_greedy_large(self):
+        R, V = b'hello world', b'hello earth'
+        self.assertEqual(self._roundtrip_algo(diff_greedy, R, V), V)
+
+    def test_onepass_large(self):
+        R, V = b'abcdefgh' * 10, b'abcdefgh' * 5 + b'XXXXXXXX' * 5
+        self.assertEqual(self._roundtrip_algo(diff_onepass, R, V), V)
+
+    def test_correcting_large(self):
+        R, V = b'the quick brown fox', b'the slow brown fox'
+        self.assertEqual(self._roundtrip_algo(diff_correcting, R, V), V)
 
 
 if __name__ == '__main__':

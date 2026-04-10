@@ -4,8 +4,8 @@ use crate::types::{
     DELTA_CMD_ADD, DELTA_CMD_BIGADD, DELTA_CMD_BIGCOPY, DELTA_CMD_BIGMOVE,
     DELTA_CMD_COPY, DELTA_CMD_END, DELTA_CMD_MOVE,
     DELTA_COPY_PAYLOAD, DELTA_CRC_SIZE, DELTA_FLAG_INPLACE,
-    DELTA_HEADER_SIZE, DELTA_HEADER_SIZE_V4,
-    DELTA_MAGIC, DELTA_MAGIC_V4,
+    DELTA_HEADER_SIZE, DELTA_HEADER_SIZE_LARGE,
+    DELTA_MAGIC, DELTA_MAGIC_LARGE,
     DELTA_U32_SIZE, DELTA_U64_SIZE,
 };
 
@@ -54,7 +54,7 @@ pub fn encode_delta(
             }
             PlacedCommand::Move { .. } => {
                 return Err(DeltaError::InvalidFormat(
-                    "MOVE commands require DLT\\x04 format; use encode_delta_v4".into(),
+                    "MOVE commands require DLT\\x04 format; use encode_delta_large".into(),
                 ));
             }
         }
@@ -75,7 +75,7 @@ pub fn encode_delta(
 /// platforms Rust supports (Rust guarantees `usize` ≤ 64 bits), so no field can
 /// overflow a u64.  Contrast with `encode_delta` (DLT\x03), which returns `Result`
 /// because `usize → u32` truncates on 64-bit platforms.
-pub fn encode_delta_v4(
+pub fn encode_delta_large(
     commands: &[PlacedCommand],
     inplace: bool,
     version_size: usize,
@@ -83,7 +83,7 @@ pub fn encode_delta_v4(
     dst_crc: &[u8; DELTA_CRC_SIZE],
 ) -> Vec<u8> {
     let mut out = Vec::new();
-    out.extend_from_slice(DELTA_MAGIC_V4);
+    out.extend_from_slice(DELTA_MAGIC_LARGE);
     out.push(if inplace { DELTA_FLAG_INPLACE } else { 0 });
     out.extend_from_slice(&(version_size as u64).to_be_bytes());
     out.extend_from_slice(src_crc);
@@ -147,13 +147,13 @@ pub fn decode_delta(
         return Err(DeltaError::InvalidFormat("not a delta file".into()));
     }
     match &data[..4] {
-        m if m == DELTA_MAGIC    => decode_v3(data),
-        m if m == DELTA_MAGIC_V4 => decode_v4(data),
+        m if m == DELTA_MAGIC    => decode_small(data),
+        m if m == DELTA_MAGIC_LARGE => decode_large(data),
         _ => Err(DeltaError::InvalidFormat("not a delta file".into())),
     }
 }
 
-fn decode_v3(
+fn decode_small(
     data: &[u8],
 ) -> Result<(Vec<PlacedCommand>, bool, usize, [u8; DELTA_CRC_SIZE], [u8; DELTA_CRC_SIZE]), DeltaError> {
     if data.len() < DELTA_HEADER_SIZE {
@@ -214,10 +214,10 @@ fn decode_v3(
     finish_decode(commands, saw_end, pos, data.len(), inplace, version_size, src_crc, dst_crc)
 }
 
-fn decode_v4(
+fn decode_large(
     data: &[u8],
 ) -> Result<(Vec<PlacedCommand>, bool, usize, [u8; DELTA_CRC_SIZE], [u8; DELTA_CRC_SIZE]), DeltaError> {
-    if data.len() < DELTA_HEADER_SIZE_V4 {
+    if data.len() < DELTA_HEADER_SIZE_LARGE {
         return Err(DeltaError::InvalidFormat("not a delta file".into()));
     }
     let inplace = data[4] & DELTA_FLAG_INPLACE != 0;
@@ -231,7 +231,7 @@ fn decode_v4(
     src_crc.copy_from_slice(&data[crc_offset..crc_offset + DELTA_CRC_SIZE]);
     dst_crc.copy_from_slice(&data[crc_offset + DELTA_CRC_SIZE..crc_offset + 2 * DELTA_CRC_SIZE]);
 
-    let mut pos = DELTA_HEADER_SIZE_V4;
+    let mut pos = DELTA_HEADER_SIZE_LARGE;
     let mut commands = Vec::new();
     let mut saw_end = false;
 
@@ -348,7 +348,7 @@ pub fn is_inplace_delta(data: &[u8]) -> bool {
         return false;
     }
     let magic = &data[..4];
-    (magic == DELTA_MAGIC || magic == DELTA_MAGIC_V4)
+    (magic == DELTA_MAGIC || magic == DELTA_MAGIC_LARGE)
         && data[4] & DELTA_FLAG_INPLACE != 0
 }
 

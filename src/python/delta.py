@@ -91,7 +91,23 @@ class PlacedAdd:
         return f"ADD(dst={self.dst}, len={len(self.data)})"
 
 
-PlacedCommand = Union[PlacedCopy, PlacedAdd]
+@dataclass
+class PlacedMove:
+    """Copy from already-written output buffer at src to dst (self-referential).
+
+    Used by DLT\\x04 MOVE/BIGMOVE commands.  Constraint: src + length <= dst,
+    so only previously written bytes are referenced.  Always safe for in-place
+    reconstruction (src < dst, no CRWI cycle possible).
+    """
+    src: int
+    dst: int
+    length: int
+
+    def __repr__(self):
+        return f"MOVE(src={self.src}, dst={self.dst}, len={self.length})"
+
+
+PlacedCommand = Union[PlacedCopy, PlacedAdd, PlacedMove]
 
 
 # ============================================================================
@@ -933,29 +949,54 @@ def unplace_commands(placed: List[PlacedCommand]) -> List[Command]:
 # ============================================================================
 # Unified Binary Delta Format
 #
-# Header (v3):
+# DLT\x03 Header (25 bytes):
 #   Magic:        4 bytes  b'DLT\x03'
-#   Flags:        1 byte   (0x00 = standard, 0x01 = in-place)
+#   Flags:        1 byte   bit0=INPLACE
 #   Version size: 4 bytes  uint32 BE
 #   Src CRC:      8 bytes  CRC-64/XZ of reference file (big-endian)
 #   Dst CRC:      8 bytes  CRC-64/XZ of version/output file (big-endian)
 #
-# Commands (in execution order):
-#   END:  type=0                                     (1 byte)
-#   COPY: type=1, src:u32, dst:u32, len:u32         (13 bytes)
-#   ADD:  type=2, dst:u32, len:u32, data             (9 + len bytes)
+# DLT\x04 Header (29 bytes):
+#   Magic:        4 bytes  b'DLT\x04'
+#   Flags:        1 byte   bit0=INPLACE
+#   Version size: 8 bytes  uint64 BE   ← extended from 4 bytes
+#   Src CRC:      8 bytes  CRC-64/XZ of reference file (big-endian)
+#   Dst CRC:      8 bytes  CRC-64/XZ of version/output file (big-endian)
+#
+# Commands (both versions, in execution order):
+#   END:     type=0                                       (1 byte)
+#   COPY:    type=1, src:u32, dst:u32, len:u32           (13 bytes)
+#   ADD:     type=2, dst:u32, len:u32, data               (9 + len bytes)
+#   BIGCOPY: type=3, src:u64, dst:u64, len:u64           (25 bytes)  [v4 only]
+#   BIGADD:  type=4, dst:u64, len:u64, data              (17 + len bytes)  [v4 only]
+#   MOVE:    type=5, src:u32, dst:u32, len:u32           (13 bytes)  [v4 only]
+#   BIGMOVE: type=6, src:u64, dst:u64, len:u64           (25 bytes)  [v4 only]
+#
+# MOVE/BIGMOVE copy from the already-written output buffer (src < dst).
+# The encoder selects COPY vs BIGCOPY (and MOVE vs BIGMOVE) per-command
+# based on whether all fields fit in u32.
 # ============================================================================
 
-DELTA_MAGIC = b'DLT\x03'
-DELTA_FLAG_INPLACE = 0x01
-DELTA_CMD_END = 0
-DELTA_CMD_COPY = 1
-DELTA_CMD_ADD = 2
-DELTA_CRC_SIZE = 8
-DELTA_HEADER_SIZE = 25  # magic(4) + flags(1) + version_size(4) + src_crc(8) + dst_crc(8)
-DELTA_U32_SIZE = 4
-DELTA_COPY_PAYLOAD = 12 # src(4) + dst(4) + len(4)
-DELTA_ADD_HEADER = 8    # dst(4) + len(4)
+DELTA_MAGIC    = b'DLT\x03'
+DELTA_MAGIC_LARGE = b'DLT\x04'
+DELTA_FLAG_INPLACE  = 0x01
+DELTA_CMD_END     = 0
+DELTA_CMD_COPY    = 1
+DELTA_CMD_ADD     = 2
+DELTA_CMD_BIGCOPY = 3
+DELTA_CMD_BIGADD  = 4
+DELTA_CMD_MOVE    = 5
+DELTA_CMD_BIGMOVE = 6
+DELTA_CRC_SIZE       = 8
+DELTA_U32_SIZE       = 4
+DELTA_U64_SIZE       = 8
+DELTA_HEADER_SIZE    = 25  # magic(4)+flags(1)+version_size(4)+crcs(16)
+DELTA_HEADER_SIZE_LARGE = 29  # magic(4)+flags(1)+version_size(8)+crcs(16)
+DELTA_COPY_PAYLOAD    = 12  # src(4)+dst(4)+len(4)
+DELTA_ADD_HEADER      = 8   # dst(4)+len(4)
+DELTA_BIGCOPY_PAYLOAD = 24  # src(8)+dst(8)+len(8)
+DELTA_BIGADD_HEADER   = 16  # dst(8)+len(8)
+_U32_MAX = 0xFFFFFFFF
 
 # ── CRC-64/XZ (ECMA-182 reflected) ───────────────────────────────────────────
 # Canonical polynomial: 0x42F0E1EBA9EA3693 (normal form)
@@ -987,19 +1028,28 @@ def _crc64_xz(data: bytes) -> bytes:
 
 def encode_delta(commands: List[PlacedCommand], *,
                  inplace: bool = False, version_size: int,
-                 src_crc: bytes, dst_crc: bytes) -> bytes:
+                 src_crc: bytes, dst_crc: bytes,
+                 format_version: int = 3) -> bytes:
     """Encode placed commands to the unified binary delta format.
 
-    src_crc and dst_crc must each be exactly DELTA_CRC_SIZE (8) bytes,
-    produced by _crc64_xz() over the reference and version data respectively.
+    format_version=3 (default): DLT\\x03, u32 fields, max 4 GiB.
+    format_version=4:           DLT\\x04, u64 version_size, COPY/BIGCOPY/MOVE/BIGMOVE
+                                chosen per-command based on field sizes.
+
+    src_crc and dst_crc must each be exactly DELTA_CRC_SIZE (8) bytes.
     """
+    if format_version == 4:
+        return _encode_delta_large(commands, inplace=inplace,
+                                version_size=version_size,
+                                src_crc=src_crc, dst_crc=dst_crc)
+
+    # DLT\x03: u32 fields, no MOVE/BIGCOPY
     out = bytearray()
     out.extend(DELTA_MAGIC)
     out.append(DELTA_FLAG_INPLACE if inplace else 0)
     out.extend(struct.pack('>I', version_size))
     out.extend(src_crc)
     out.extend(dst_crc)
-
     for cmd in commands:
         if isinstance(cmd, PlacedCopy):
             out.append(DELTA_CMD_COPY)
@@ -1008,35 +1058,114 @@ def encode_delta(commands: List[PlacedCommand], *,
             out.append(DELTA_CMD_ADD)
             out.extend(struct.pack('>II', cmd.dst, len(cmd.data)))
             out.extend(cmd.data)
+        elif isinstance(cmd, PlacedMove):
+            raise ValueError("PlacedMove requires format_version=4")
+    out.append(DELTA_CMD_END)
+    return bytes(out)
+
+
+def _encode_delta_large(commands: List[PlacedCommand], *,
+                     inplace: bool, version_size: int,
+                     src_crc: bytes, dst_crc: bytes) -> bytes:
+    """Encode to DLT\\x04: u64 version_size, BIGCOPY/BIGADD/MOVE/BIGMOVE as needed."""
+    out = bytearray()
+    out.extend(DELTA_MAGIC_LARGE)
+    out.append(DELTA_FLAG_INPLACE if inplace else 0)
+    out.extend(struct.pack('>Q', version_size))   # u64
+    out.extend(src_crc)
+    out.extend(dst_crc)
+
+    for cmd in commands:
+        if isinstance(cmd, PlacedCopy):
+            if cmd.src <= _U32_MAX and cmd.dst <= _U32_MAX and cmd.length <= _U32_MAX:
+                out.append(DELTA_CMD_COPY)
+                out.extend(struct.pack('>III', cmd.src, cmd.dst, cmd.length))
+            else:
+                out.append(DELTA_CMD_BIGCOPY)
+                out.extend(struct.pack('>QQQ', cmd.src, cmd.dst, cmd.length))
+        elif isinstance(cmd, PlacedAdd):
+            if cmd.dst <= _U32_MAX and len(cmd.data) <= _U32_MAX:
+                out.append(DELTA_CMD_ADD)
+                out.extend(struct.pack('>II', cmd.dst, len(cmd.data)))
+                out.extend(cmd.data)
+            else:
+                out.append(DELTA_CMD_BIGADD)
+                out.extend(struct.pack('>QQ', cmd.dst, len(cmd.data)))
+                out.extend(cmd.data)
+        elif isinstance(cmd, PlacedMove):
+            if cmd.src <= _U32_MAX and cmd.dst <= _U32_MAX and cmd.length <= _U32_MAX:
+                out.append(DELTA_CMD_MOVE)
+                out.extend(struct.pack('>III', cmd.src, cmd.dst, cmd.length))
+            else:
+                out.append(DELTA_CMD_BIGMOVE)
+                out.extend(struct.pack('>QQQ', cmd.src, cmd.dst, cmd.length))
 
     out.append(DELTA_CMD_END)
     return bytes(out)
 
 
 def decode_delta(data: bytes):
-    """Decode the unified binary delta format.
+    """Decode the unified binary delta format (DLT\\x03 or DLT\\x04).
 
     Returns (commands, inplace, version_size, src_crc, dst_crc).
     CRC validation is the caller's responsibility.
     """
-    if len(data) < DELTA_HEADER_SIZE or data[:len(DELTA_MAGIC)] != DELTA_MAGIC:
+    if len(data) < 5:
+        raise ValueError("Not a delta file")
+    magic = data[:4]
+    if magic == DELTA_MAGIC:
+        return _decode_delta_small(data)
+    elif magic == DELTA_MAGIC_LARGE:
+        return _decode_delta_large(data)
+    else:
         raise ValueError("Not a delta file")
 
-    inplace = bool(data[len(DELTA_MAGIC)] & DELTA_FLAG_INPLACE)
-    version_size = struct.unpack_from('>I', data, len(DELTA_MAGIC) + 1)[0]
-    crc_offset = len(DELTA_MAGIC) + 1 + DELTA_U32_SIZE
-    src_crc = bytes(data[crc_offset:crc_offset + DELTA_CRC_SIZE])
-    dst_crc = bytes(data[crc_offset + DELTA_CRC_SIZE:crc_offset + 2 * DELTA_CRC_SIZE])
-    pos = DELTA_HEADER_SIZE
+
+def _decode_delta_small(data: bytes):
+    """Decode DLT\\x03 format."""
+    if len(data) < DELTA_HEADER_SIZE:
+        raise ValueError("Not a delta file")
+    inplace = bool(data[4] & DELTA_FLAG_INPLACE)
+    version_size = struct.unpack_from('>I', data, 5)[0]
+    src_crc = bytes(data[9:17])
+    dst_crc = bytes(data[17:25])
+    return _decode_commands(data, pos=DELTA_HEADER_SIZE,
+                            version_size=version_size,
+                            inplace=inplace,
+                            src_crc=src_crc, dst_crc=dst_crc,
+                            allow_big=False)
+
+
+def _decode_delta_large(data: bytes):
+    """Decode DLT\\x04 format."""
+    if len(data) < DELTA_HEADER_SIZE_LARGE:
+        raise ValueError("Not a delta file")
+    inplace = bool(data[4] & DELTA_FLAG_INPLACE)
+    version_size = struct.unpack_from('>Q', data, 5)[0]   # u64
+    src_crc = bytes(data[13:21])
+    dst_crc = bytes(data[21:29])
+    return _decode_commands(data, pos=DELTA_HEADER_SIZE_LARGE,
+                            version_size=version_size,
+                            inplace=inplace,
+                            src_crc=src_crc, dst_crc=dst_crc,
+                            allow_big=True)
+
+
+def _decode_commands(data: bytes, *, pos: int, version_size: int,
+                     inplace: bool, src_crc: bytes, dst_crc: bytes,
+                     allow_big: bool):
+    """Parse the command stream starting at pos."""
     commands: List[PlacedCommand] = []
     saw_end = False
 
     while pos < len(data):
         t = data[pos]
         pos += 1
+
         if t == DELTA_CMD_END:
             saw_end = True
             break
+
         elif t == DELTA_CMD_COPY:
             if pos + DELTA_COPY_PAYLOAD > len(data):
                 raise ValueError("Truncated COPY command")
@@ -1045,17 +1174,70 @@ def decode_delta(data: bytes):
             if dst + length > version_size:
                 raise ValueError("COPY extends past version size")
             commands.append(PlacedCopy(src=src, dst=dst, length=length))
+
         elif t == DELTA_CMD_ADD:
             if pos + DELTA_ADD_HEADER > len(data):
                 raise ValueError("Truncated ADD command header")
             dst, length = struct.unpack_from('>II', data, pos)
             pos += DELTA_ADD_HEADER
             if pos + length > len(data):
-                raise ValueError("Truncated ADD command payload")
+                raise ValueError("Truncated ADD payload")
             if dst + length > version_size:
                 raise ValueError("ADD extends past version size")
             commands.append(PlacedAdd(dst=dst, data=data[pos:pos + length]))
             pos += length
+
+        elif t == DELTA_CMD_BIGCOPY:
+            if not allow_big:
+                raise ValueError("BIGCOPY not valid in DLT\\x03")
+            if pos + DELTA_BIGCOPY_PAYLOAD > len(data):
+                raise ValueError("Truncated BIGCOPY command")
+            src, dst, length = struct.unpack_from('>QQQ', data, pos)
+            pos += DELTA_BIGCOPY_PAYLOAD
+            if dst + length > version_size:
+                raise ValueError("BIGCOPY extends past version size")
+            commands.append(PlacedCopy(src=src, dst=dst, length=length))
+
+        elif t == DELTA_CMD_BIGADD:
+            if not allow_big:
+                raise ValueError("BIGADD not valid in DLT\\x03")
+            if pos + DELTA_BIGADD_HEADER > len(data):
+                raise ValueError("Truncated BIGADD command header")
+            dst, length = struct.unpack_from('>QQ', data, pos)
+            pos += DELTA_BIGADD_HEADER
+            if pos + length > len(data):
+                raise ValueError("Truncated BIGADD payload")
+            if dst + length > version_size:
+                raise ValueError("BIGADD extends past version size")
+            commands.append(PlacedAdd(dst=dst, data=data[pos:pos + length]))
+            pos += length
+
+        elif t == DELTA_CMD_MOVE:
+            if not allow_big:
+                raise ValueError("MOVE not valid in DLT\\x03")
+            if pos + DELTA_COPY_PAYLOAD > len(data):
+                raise ValueError("Truncated MOVE command")
+            src, dst, length = struct.unpack_from('>III', data, pos)
+            pos += DELTA_COPY_PAYLOAD
+            if src + length > dst:
+                raise ValueError("MOVE src overlaps dst (not yet written)")
+            if dst + length > version_size:
+                raise ValueError("MOVE extends past version size")
+            commands.append(PlacedMove(src=src, dst=dst, length=length))
+
+        elif t == DELTA_CMD_BIGMOVE:
+            if not allow_big:
+                raise ValueError("BIGMOVE not valid in DLT\\x03")
+            if pos + DELTA_BIGCOPY_PAYLOAD > len(data):
+                raise ValueError("Truncated BIGMOVE command")
+            src, dst, length = struct.unpack_from('>QQQ', data, pos)
+            pos += DELTA_BIGCOPY_PAYLOAD
+            if src + length > dst:
+                raise ValueError("BIGMOVE src overlaps dst (not yet written)")
+            if dst + length > version_size:
+                raise ValueError("BIGMOVE extends past version size")
+            commands.append(PlacedMove(src=src, dst=dst, length=length))
+
         else:
             raise ValueError(f"Unknown command type: {t}")
 
@@ -1068,10 +1250,10 @@ def decode_delta(data: bytes):
 
 
 def is_inplace_delta(data: bytes) -> bool:
-    """Check if binary data is an in-place delta."""
-    return (len(data) >= len(DELTA_MAGIC) + 1
-            and data[:len(DELTA_MAGIC)] == DELTA_MAGIC
-            and bool(data[len(DELTA_MAGIC)] & DELTA_FLAG_INPLACE))
+    """Check if binary data is an in-place delta (DLT\\x03 or DLT\\x04)."""
+    return (len(data) >= 5
+            and data[:4] in (DELTA_MAGIC, DELTA_MAGIC_LARGE)
+            and bool(data[4] & DELTA_FLAG_INPLACE))
 
 
 # ============================================================================
@@ -1081,6 +1263,7 @@ def is_inplace_delta(data: bytes) -> bool:
 def apply_placed_to(R, commands: List[PlacedCommand], buf) -> int:
     """Apply placed commands in standard mode: read from R, write to buf.
 
+    PlacedMove reads from already-written regions of buf (src < dst guaranteed).
     Returns bytes written.
     """
     max_written = 0
@@ -1095,6 +1278,12 @@ def apply_placed_to(R, commands: List[PlacedCommand], buf) -> int:
             end = cmd.dst + len(cmd.data)
             if end > max_written:
                 max_written = end
+        elif isinstance(cmd, PlacedMove):
+            # Copy from already-written output (src < dst guaranteed by decoder)
+            buf[cmd.dst:cmd.dst + cmd.length] = buf[cmd.src:cmd.src + cmd.length]
+            end = cmd.dst + cmd.length
+            if end > max_written:
+                max_written = end
     return max_written
 
 
@@ -1103,12 +1292,15 @@ def apply_placed_inplace_to(commands: List[PlacedCommand], buf) -> None:
 
     Slice assignment creates a temporary copy of the RHS, so overlapping
     src/dst within a single copy is handled correctly.
+    PlacedMove is always safe (src < dst, reads already-written output).
     """
     for cmd in commands:
         if isinstance(cmd, PlacedCopy):
             buf[cmd.dst:cmd.dst + cmd.length] = buf[cmd.src:cmd.src + cmd.length]
         elif isinstance(cmd, PlacedAdd):
             buf[cmd.dst:cmd.dst + len(cmd.data)] = cmd.data
+        elif isinstance(cmd, PlacedMove):
+            buf[cmd.dst:cmd.dst + cmd.length] = buf[cmd.src:cmd.src + cmd.length]
 
 
 def apply_placed(R, commands: List[PlacedCommand]) -> bytes:

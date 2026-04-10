@@ -521,8 +521,8 @@ echo "--- DLT\\x04 format tests ---"
 # then apply it with the C decoder.
 # ADD "hello" at dst=0, MOVE src=0 dst=5 len=5 → expected output "hellohello"
 if command -v python3 >/dev/null 2>&1; then
-    v4_move_delta="$tmpdir/v4-move-test.delta"
-    v4_move_out="$tmpdir/v4-move-test.out"
+    large_move_delta="$tmpdir/v4-move-test.delta"
+    large_move_out="$tmpdir/v4-move-test.out"
     python3 -c "
 import struct, sys
 hdr  = b'DLT\x04'
@@ -532,9 +532,9 @@ hdr += b'\x00' * 16
 add  = b'\x02' + struct.pack('>II', 0, 5) + b'hello'
 mov  = b'\x05' + struct.pack('>III', 0, 5, 5)
 sys.stdout.buffer.write(hdr + add + mov + b'\x00')
-" > "$v4_move_delta"
-    $DELTA decode /dev/null "$v4_move_delta" "$v4_move_out" --ignore-hash 2>/dev/null
-    if [ "$(cat "$v4_move_out" 2>/dev/null)" = "hellohello" ]; then
+" > "$large_move_delta"
+    $DELTA decode /dev/null "$large_move_delta" "$large_move_out" --ignore-hash 2>/dev/null
+    if [ "$(cat "$large_move_out" 2>/dev/null)" = "hellohello" ]; then
         check "DLT\\x04 MOVE command apply" true
     else
         check "DLT\\x04 MOVE command apply" false
@@ -543,8 +543,8 @@ fi
 
 # V4 header with u64 version_size: encode a small file in V4, decode it
 if command -v python3 >/dev/null 2>&1; then
-    v4_algo_delta="$tmpdir/v4-algo.delta"
-    v4_algo_out="$tmpdir/v4-algo.out"
+    large_algo_delta="$tmpdir/v4-algo.delta"
+    large_algo_out="$tmpdir/v4-algo.out"
     python3 -c "
 import struct, sys
 data = b'hello world'
@@ -552,9 +552,9 @@ hdr = b'DLT\x04' + b'\x00' + struct.pack('>Q', len(data)) + b'\x00' * 16
 # ADD at dst=0 with full payload
 add = b'\x02' + struct.pack('>II', 0, len(data)) + data
 sys.stdout.buffer.write(hdr + add + b'\x00')
-" > "$v4_algo_delta"
-    $DELTA decode /dev/null "$v4_algo_delta" "$v4_algo_out" --ignore-hash 2>/dev/null
-    if [ "$(cat "$v4_algo_out" 2>/dev/null)" = "hello world" ]; then
+" > "$large_algo_delta"
+    $DELTA decode /dev/null "$large_algo_delta" "$large_algo_out" --ignore-hash 2>/dev/null
+    if [ "$(cat "$large_algo_out" 2>/dev/null)" = "hello world" ]; then
         check "DLT\\x04 ADD decode (u64 version_size)" true
     else
         check "DLT\\x04 ADD decode (u64 version_size)" false
@@ -563,9 +563,9 @@ fi
 
 # V4 unknown magic rejected
 if command -v python3 >/dev/null 2>&1; then
-    v4_bad="$tmpdir/v4-bad-magic.delta"
-    python3 -c "import sys; sys.stdout.buffer.write(b'DLT\x05' + b'\x00' * 30)" > "$v4_bad"
-    if $DELTA decode /dev/null "$v4_bad" /dev/null 2>/dev/null; then
+    large_bad="$tmpdir/v4-bad-magic.delta"
+    python3 -c "import sys; sys.stdout.buffer.write(b'DLT\x05' + b'\x00' * 30)" > "$large_bad"
+    if $DELTA decode /dev/null "$large_bad" /dev/null 2>/dev/null; then
         check "DLT unknown magic rejected" false
     else
         check "DLT unknown magic rejected" true
