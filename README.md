@@ -5,9 +5,9 @@ reconstructed from the old file plus the (small) delta.  Supports
 in-place reconstruction — the new version can be rebuilt directly in
 the buffer holding the old version, with no scratch space.
 
-Nine implementations — Python, Rust, C++, C, Java, Go, Kotlin, Scala,
-and Haskell — producing byte-identical binary deltas.  Encode with any
-one, decode with any other.
+Eight implementations — Python, Rust, C++, C, Java, Go, Kotlin, and Scala —
+producing byte-identical binary deltas.  Encode with any one, decode with
+any other.
 
 Implements the algorithms from two papers:
 
@@ -95,15 +95,6 @@ java -cp delta.jar:$SCALA_LIB delta.Delta encode onepass old.bin new.bin delta.b
 java -cp delta.jar:$SCALA_LIB delta.Delta decode old.bin delta.bin recovered.bin
 ```
 
-### Haskell
-
-```bash
-cd src/haskell
-make
-./delta-hs encode onepass old.bin new.bin delta.bin
-./delta-hs decode old.bin delta.bin recovered.bin
-```
-
 ## Algorithms
 
 | Algorithm | Time | Space | Best for |
@@ -124,11 +115,6 @@ slightly: the hash table discards fingerprints that collide to the same
 slot, while the splay tree stores every checkpoint-passing seed.  See
 `HOWTO.md` for benchmark data.  Use `--verbose` to see hash table sizing
 and match statistics on stderr.
-
-Haskell note (alpha): performance-critical internals use scoped local
-mutability (`STUArray` and unboxed buffers) plus specialized `Word64`
-hash math.  The external API remains pure, no C wrappers are used, and
-the binary delta format stays byte-compatible with every other language.
 
 See [`HOWTO.md`](HOWTO.md) for tuning parameters, library API examples,
 checkpointing internals, and benchmark results.
@@ -165,7 +151,7 @@ Cycle-breaking policies:
 
 ## Binary delta format
 
-Unified format used by all nine implementations:
+Unified format used by all eight implementations:
 
 ```
 Header (25 bytes):
@@ -204,14 +190,13 @@ Individual suites:
 | Language | Tests | Command |
 |----------|------:|---------|
 | Python | 208 | `cd src/python && python3 -m unittest test_delta -v` |
-| Rust | 56 | `cd src/rust/delta && cargo test` |
-| C++ | 64 | `cd src/cpp && cmake -B build && cmake --build build && ctest --test-dir build` |
-| C | 45 | `cd src/c && make && bash test_delta.sh` |
-| Java | 52 | `cd src/java && make test` |
-| Go | 52 | `cd src/go && go test ./delta/...` |
-| Kotlin | 52 | `cd src/kotlin && make test` |
-| Scala | 52 | `cd src/scala && make test` |
-| Haskell | smoke | `cd src/haskell && make` (round-trip smoke is run by `./tests/correctness.sh`) |
+| Rust | 66 | `cd src/rust/delta && cargo test` |
+| C++ | 75 | `cd src/cpp && cmake -B build && cmake --build build && ctest --test-dir build` |
+| C | 91 | `cd src/c && make && bash test_delta.sh` |
+| Java | 57 | `cd src/java && make test` |
+| Go | 63 | `cd src/go && go test ./delta/...` |
+| Kotlin | 57 | `cd src/kotlin && make test` |
+| Scala | 57 | `cd src/scala && make test` |
 
 Tests cover all three algorithms, binary round-trips, paper examples,
 edge cases (empty/identical/completely different files), in-place
@@ -220,9 +205,7 @@ transpositions (8–64 blocks with controlled transpositions),
 checkpointing correctness, and cross-language compatibility.
 A kernel tarball benchmark (`tests/kernel-delta-test.sh`) exercises
 onepass and correcting on ~871 MB inputs.  On linux-5.1 → 5.1.1, all
-nine implementations are byte-compatible.  In the latest Haskell alpha
-run on that same pair, onepass is 6.477s and correcting is 18.721s
-(Rust on the same run: 4.296s and 10.623s).  See `ANALYSIS.md` for
+eight implementations are byte-compatible.  See `ANALYSIS.md` for
 tables and details.
 
 ## Project layout
@@ -230,16 +213,15 @@ tables and details.
 ```
 src/
   python/         Single-file library + CLI + 208-test suite
-  rust/delta/     Cargo crate — library + clap CLI + 56 tests
-  cpp/            CMake project — static library + CLI11 CLI + Catch2 tests (64)
-  c/              Makefile project — single-header API + CLI + 45 tests
-  java/           Makefile project — library + CLI + 52 tests
-  go/             Go module — library + CLI + 52 tests
-  kotlin/         Makefile project (JVM) — library + CLI + 52 tests
-  scala/          Makefile project (JVM/Scala 3) — library + CLI + 52 tests
-  haskell/        Makefile project — library + CLI + smoke tests in correctness gate
+  rust/delta/     Cargo crate — library + clap CLI + 66 tests
+  cpp/            CMake project — static library + CLI11 CLI + Catch2 tests (75)
+  c/              Makefile project — single-header API + CLI + 91 tests
+  java/           Makefile project — library + CLI + 57 tests
+  go/             Go module — library + CLI + 63 tests
+  kotlin/         Makefile project (JVM) — library + CLI + 57 tests
+  scala/          Makefile project (JVM/Scala 3) — library + CLI + 57 tests
 tests/
-  correctness.sh          Run all unit + cross-language tests (all 9 implementations)
+  correctness.sh          Run all unit + cross-language tests (all 8 implementations)
   kernel-delta-test.sh    Kernel tarball benchmark
   transposition-benchmark.sh  Synthetic permutation benchmark
 pubs/                     Ajtai et al. 2002, Burns et al. 2003 (PDFs)
@@ -249,6 +231,70 @@ Each implementation has the same architecture: rolling hash, three
 algorithm modules, binary encoding, command placement, and CRWI-based
 in-place conversion.  See [`HOWTO.md`](HOWTO.md) for detailed file
 listings and library API examples.
+
+## Code architecture
+
+The same pipeline runs in all eight implementations:
+
+```
+R, V (byte arrays)
+    │
+    ▼
+[Algorithm]  greedy / onepass / correcting
+    │         Karp-Rabin rolling hash (Mersenne prime 2^61-1, base 263)
+    │         Hash table or splay tree maps fingerprint → source offset(s)
+    │         Scan V; on match extend backward/forward to find longest copy
+    │
+    ▼  Vec<Command>  (Copy {offset, length} | Add {data})
+    │
+    ▼
+[place_commands]
+    │         Assign sequential destination offsets
+    │
+    ▼  Vec<PlacedCommand>  (Copy {src, dst, length} | Add {dst, data})
+    │
+    ├──────────────────────────────────────────────────────────┐
+    │  (standard path)                          (--inplace)    │
+    │                                     [make_inplace]       │
+    │                                  CRWI digraph: edge i→j  │
+    │                                  means i reads a region  │
+    │                                  j will overwrite.       │
+    │                                  Kahn topo-sort; cycles  │
+    │                                  broken by converting    │
+    │                                  smallest copy to ADD.   │
+    │                                           │              │
+    ▼                                           ▼              │
+[encode_delta]  ←──────────────────────────────┘
+    │         Header: DLT\x03 + flags(1) + version_size(u32 BE)
+    │                 + src_crc(8) + dst_crc(8)
+    │         COPY: 0x01 + src(u32) + dst(u32) + len(u32)
+    │         ADD:  0x02 + dst(u32) + len(u32) + payload
+    │         END:  0x00
+    ▼
+  binary delta file
+```
+
+**Key types**
+
+| Type | Description |
+|------|-------------|
+| `Command` | Algorithm output: offset-relative `Copy` or raw `Add` |
+| `PlacedCommand` | Absolute `src`/`dst` offsets — encodable and validatable |
+| `DiffOptions` | `p` (seed length, default 16), `q` (table floor, default 1M+), `max_table`, `verbose`, `use_splay` |
+| `CyclePolicy` | `Localmin` (convert smallest copy in cycle) · `Constant` (convert any) |
+
+**Module responsibilities (Rust names; other languages mirror this)**
+
+| Module | Role |
+|--------|------|
+| `hash` | Karp-Rabin rolling hash; Mersenne modulo; `next_prime` for table sizing |
+| `splay` | Sleator-Tarjan self-adjusting BST — optional alternative to hash table |
+| `algorithm/greedy` | O(n²) optimal: stores every R offset per fingerprint, scans all candidates |
+| `algorithm/onepass` | O(n) linear: one offset per slot, version-based eviction, single forward pass |
+| `algorithm/correcting` | ~O(n): checkpoint filter (§8) limits table entries; lookback buffer corrects missed tail matches |
+| `apply` | `place_commands`, `apply_placed_to`, `apply_delta_inplace`, bounds validation |
+| `inplace` | CRWI graph construction, Kahn topological sort, cycle-breaking (Burns et al. 2003) |
+| `encoding` | Binary encode/decode; CRC-64/XZ verification of reference and output |
 
 ## References
 

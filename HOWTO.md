@@ -188,7 +188,7 @@ delta encode correcting old.bin new.bin delta.bin --verbose
 delta inplace old.bin standard.delta inplace.delta --verbose
 ```
 
-### --splay (Rust, C++, C, and Java)
+### --splay (Rust, C++, C, Java, Go, Kotlin, and Scala)
 
 Replace the hash table with a Tarjan-Sleator splay tree for fingerprint
 lookup.  A splay tree is a self-adjusting binary search tree where every
@@ -300,8 +300,9 @@ Output size:  5678 bytes
 
 ## Cross-language compatibility
 
-All five implementations (Python, Rust, C++, C, Java) produce byte-identical
-delta files.  You can encode with any one and decode with any other.
+All eight implementations (Python, Rust, C++, C, Java, Go, Kotlin, Scala)
+produce byte-identical delta files.  You can encode with any one and decode
+with any other.
 
 ```bash
 # Encode with Rust, decode with Python
@@ -438,12 +439,12 @@ delta_diff_options_t opts = DELTA_DIFF_OPTIONS_DEFAULT;
 opts.flags = delta_flag_set(opts.flags, DELTA_OPT_VERBOSE);
 delta_commands_t cmds = delta_diff(ALGO_ONEPASS, r, r_len, v, v_len, &opts);
 
-/* Standard binary delta (src_hash/dst_hash required) */
+/* Standard binary delta (src_crc/dst_crc required) */
 delta_placed_commands_t placed = delta_place_commands(&cmds);
-uint8_t src_hash[DELTA_HASH_SIZE], dst_hash[DELTA_HASH_SIZE];
-delta_shake128_16(r, r_len, src_hash);
-delta_shake128_16(v, v_len, dst_hash);
-delta_buffer_t encoded = delta_encode(&placed, false, v_len, src_hash, dst_hash);
+uint8_t src_crc[DELTA_CRC_SIZE], dst_crc[DELTA_CRC_SIZE];
+delta_crc64_xz(r, r_len, src_crc);
+delta_crc64_xz(v, v_len, dst_crc);
+delta_buffer_t encoded = delta_encode(&placed, false, v_len, src_crc, dst_crc);
 
 /* Decode and reconstruct */
 delta_decode_result_t res = delta_decode(encoded.data, encoded.len);
@@ -451,7 +452,7 @@ delta_buffer_t output = delta_apply_placed(r, &res.commands, res.version_size);
 
 /* In-place delta */
 delta_placed_commands_t ip = delta_make_inplace(r, r_len, &cmds, POLICY_LOCALMIN);
-delta_buffer_t ip_encoded = delta_encode(&ip, true, v_len, src_hash, dst_hash);
+delta_buffer_t ip_encoded = delta_encode(&ip, true, v_len, src_crc, dst_crc);
 
 /* Cleanup */
 delta_commands_free(&cmds);
@@ -478,20 +479,20 @@ DiffOptions opts = new DiffOptions();
 opts.verbose = true;
 List<Command> commands = Diff.diff(Algorithm.ONEPASS, r, v, opts);
 
-// Standard binary delta (src_hash/dst_hash required)
+// Standard binary delta (srcCrc/dstCrc required)
 List<PlacedCommand> placed = Apply.placeCommands(commands);
-byte[] srcHash = Hash.Shake128.hash16(r);
-byte[] dstHash = Hash.Shake128.hash16(v);
-byte[] deltaBytes = Encoding.encodeDelta(placed, false, v.length, srcHash, dstHash);
+byte[] srcCrc = Hash.Crc64.hash8(r);
+byte[] dstCrc = Hash.Crc64.hash8(v);
+byte[] deltaBytes = Encoding.encodeDelta(placed, false, v.length, srcCrc, dstCrc);
 
 // Decode and reconstruct
 Encoding.DecodeResult result = Encoding.decodeDelta(deltaBytes);
-byte[] output = new byte[result.versionSize];
-Apply.applyPlacedTo(r, result.commands, output);
+byte[] output = new byte[result.versionSize()];
+Apply.applyPlacedTo(r, result.commands(), output);
 
 // In-place delta
 List<PlacedCommand> ip = Apply.makeInplace(r, commands, CyclePolicy.LOCALMIN);
-byte[] ipDelta = Encoding.encodeDelta(ip, true, v.length, srcHash, dstHash);
+byte[] ipDelta = Encoding.encodeDelta(ip, true, v.length, srcCrc, dstCrc);
 byte[] recovered = Apply.applyDeltaInplace(r, ip, v.length);
 ```
 
