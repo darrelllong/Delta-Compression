@@ -254,10 +254,17 @@ see [BENCHMARKING.md](BENCHMARKING.md)).
 
 ## Performance benchmarks
 
+> **Historical note:** The Haskell implementation (`src/haskell/`) was
+> part of the project when these benchmarks were recorded but has since
+> been removed from the active codebase.  The current project has eight
+> implementations (Python, Rust, C++, C, Java, Go, Kotlin, Scala).
+> Haskell data is retained here for reference; all other implementations
+> remain current.
+
 ### Kernel tarball benchmark (linux-5.1 → linux-5.1.1, 871 MB)
 
-Eight compiled implementations, same input pair, default flags.  All produce
-byte-identical delta files.
+Nine compiled implementations (including historical Haskell), same input
+pair, default flags.  All produced byte-identical delta files.
 
 **onepass** (delta: 4.8 MB, ratio: 0.58%)
 
@@ -316,7 +323,7 @@ xychart-beta
 
 ![Correcting speed score radar chart](assets/kernel-correcting-speed-radar.svg)
 
-### Haskell performance note: purity at the API, mutability in hot loops
+### Haskell performance note (historical): purity at the API, mutability in hot loops
 
 The Haskell implementation is pure at the public API boundary and does
 not use C wrappers/FFI, but a purely persistent internal design was
@@ -347,6 +354,7 @@ inner loop.
 Shakespeare's complete works (~5.4 MB ref, 5% byte mutations as version).
 Metric: MiB/s (reference file size ÷ elapsed encode time), 95% CI via
 pilot-bench on Dyson (Apple M4); MiB/s only for Wigner and DMZ.
+Haskell rows are historical (implementation no longer in active codebase).
 
 **onepass**
 
