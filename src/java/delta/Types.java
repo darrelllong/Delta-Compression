@@ -11,17 +11,26 @@ public final class Types {
     public static final long HASH_MOD      = (1L << 61) - 1; // Mersenne prime
 
     // Binary delta format constants
-    public static final byte[] DELTA_MAGIC        = {'D', 'L', 'T', 0x03};
-    public static final byte   DELTA_FLAG_INPLACE = 0x01;
-    public static final int    DELTA_CMD_END      = 0;
-    public static final int    DELTA_CMD_COPY     = 1;
-    public static final int    DELTA_CMD_ADD      = 2;
-    public static final int    DELTA_CRC_SIZE     = 8;     // CRC-64/XZ digest bytes
-    public static final int    DELTA_HEADER_SIZE  = 25;    // magic(4)+flags(1)+version_size(4)+src_crc(8)+dst_crc(8)
-    public static final int    DELTA_U32_SIZE     = 4;
-    public static final int    DELTA_COPY_PAYLOAD = 12;    // src(4) + dst(4) + len(4)
-    public static final int    DELTA_ADD_HEADER   = 8;     // dst(4) + len(4)
-    public static final int    DELTA_BUF_CAP      = 256;
+    public static final byte[] DELTA_MAGIC             = {'D', 'L', 'T', 0x03};
+    public static final byte[] DELTA_MAGIC_LARGE       = {'D', 'L', 'T', 0x04};
+    public static final byte   DELTA_FLAG_INPLACE      = 0x01;
+    public static final int    DELTA_CMD_END           = 0;
+    public static final int    DELTA_CMD_COPY          = 1;
+    public static final int    DELTA_CMD_ADD           = 2;
+    public static final int    DELTA_CMD_BIGCOPY       = 3; // DLT\x04: COPY with u64 fields
+    public static final int    DELTA_CMD_BIGADD        = 4; // DLT\x04: ADD with u64 dst/len header
+    public static final int    DELTA_CMD_MOVE          = 5; // DLT\x04: copy from already-written output (u32)
+    public static final int    DELTA_CMD_BIGMOVE       = 6; // DLT\x04: MOVE with u64 fields
+    public static final int    DELTA_CRC_SIZE          = 8;  // CRC-64/XZ digest bytes
+    public static final int    DELTA_HEADER_SIZE       = 25; // magic(4)+flags(1)+version_size(4)+crcs(16)
+    public static final int    DELTA_HEADER_SIZE_LARGE = 29; // magic(4)+flags(1)+version_size(8)+crcs(16)
+    public static final int    DELTA_U32_SIZE          = 4;
+    public static final int    DELTA_U64_SIZE          = 8;
+    public static final int    DELTA_COPY_PAYLOAD      = 12; // src(4)+dst(4)+len(4)
+    public static final int    DELTA_ADD_HEADER        = 8;  // dst(4)+len(4)
+    public static final int    DELTA_BIGCOPY_PAYLOAD   = 24; // src(8)+dst(8)+len(8)
+    public static final int    DELTA_BIGADD_HEADER     = 16; // dst(8)+len(8)
+    public static final int    DELTA_BUF_CAP           = 256;
 
     /** Differencing algorithm selection. */
     public enum Algorithm {
@@ -66,13 +75,20 @@ public final class Types {
      * Produced by placeCommands or makeInplace; required for delta encoding and
      * for in-place or standard application.
      */
-    public sealed interface PlacedCommand permits PlacedCopy, PlacedAdd {}
+    public sealed interface PlacedCommand permits PlacedCopy, PlacedAdd, PlacedMove {}
 
     /** Copy {@code length} bytes from {@code src} in R (or working buffer) to {@code dst} in output. */
     public record PlacedCopy(int src, int dst, int length) implements PlacedCommand {}
 
     /** Write literal bytes to {@code dst} in the output. */
     public record PlacedAdd(int dst, byte[] data)          implements PlacedCommand {}
+
+    /**
+     * Copy {@code length} bytes from {@code src} in the already-written output to {@code dst}.
+     * The encoder guarantees {@code src + length <= dst} (source fully written before it is read).
+     * Only valid in DLT\x04 format; use {@code encodeDeltaLarge} to encode PlacedMove commands.
+     */
+    public record PlacedMove(int src, int dst, int length) implements PlacedCommand {}
 
     // ── Diff options (mutable — not a record) ──
 

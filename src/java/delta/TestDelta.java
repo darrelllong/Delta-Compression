@@ -1108,9 +1108,212 @@ public class TestDelta {
         check("inplace: version is 1 byte",       TestDelta::testInplaceVersionOneByteMin);
         check("seed length at boundaries",         TestDelta::testSeedLengthBoundaries);
 
+        System.out.println("\n=== DLT\\x04 large format ===");
+        check("large format: header magic",           TestDelta::testLargeHeaderMagic);
+        check("large format: header size",            TestDelta::testLargeHeaderSize);
+        check("large format: version_size u64 BE",   TestDelta::testLargeVersionSizeU64);
+        check("large format: inplace flag",           TestDelta::testLargeInplaceFlag);
+        check("large format: COPY roundtrip",         TestDelta::testLargeFormatCopyRoundtrip);
+        check("large format: ADD roundtrip",          TestDelta::testLargeFormatAddRoundtrip);
+        check("large format: MOVE roundtrip",         TestDelta::testLargeMoveRoundtrip);
+        check("large format: MOVE command byte",      TestDelta::testLargeMoveCommandByte);
+        check("large format: MOVE overlap rejected",  TestDelta::testLargeMoveOverlapRejected);
+        check("large format: small rejects large cmds", TestDelta::testSmallRejectsLargeCommandBytes);
+        check("large format: unknown magic rejected", TestDelta::testUnknownMagicRejected);
+        check("large format: encodeDelta rejects Move", TestDelta::testEncodeDeltaRejectsMove);
+        check("large format: u64 overflow rejected",  TestDelta::testLargeU64OverflowRejected);
+        check("large format: algo roundtrip greedy",  TestDelta::testLargeAlgoRoundtripGreedy);
+        check("large format: algo roundtrip onepass", TestDelta::testLargeAlgoRoundtripOnepass);
+        check("large format: algo roundtrip correcting", TestDelta::testLargeAlgoRoundtripCorrecting);
+
         System.out.println("\n========================================");
         System.out.printf("Results: %d passed, %d failed (of %d)%n", pass, fail, tests);
         System.out.println("========================================");
         if (fail > 0) System.exit(1);
+    }
+
+    // ── DLT\x04 large-format tests ───────────────────────────────────────────
+
+    static final byte[] ZH = new byte[DELTA_CRC_SIZE];
+
+    static void testLargeHeaderMagic() {
+        byte[] d = Encoding.encodeDeltaLarge(List.of(), false, 0, ZH, ZH);
+        assertTrue(d[0] == 'D' && d[1] == 'L' && d[2] == 'T' && d[3] == 0x04,
+            "large format magic must be DLT\\x04");
+    }
+
+    static void testLargeHeaderSize() {
+        byte[] d = Encoding.encodeDeltaLarge(List.of(), false, 0, ZH, ZH);
+        // 29-byte header + 1 byte END
+        assertEquals(DELTA_HEADER_SIZE_LARGE + 1, d.length, "large header+END size");
+    }
+
+    static void testLargeVersionSizeU64() {
+        int vsIn = 0x01020304;
+        byte[] d = Encoding.encodeDeltaLarge(List.of(), false, vsIn, ZH, ZH);
+        // version_size at bytes 5..12 (u64 BE)
+        long stored = 0;
+        for (int i = 0; i < 8; i++) stored = (stored << 8) | (d[5 + i] & 0xFF);
+        assertEquals(Integer.toUnsignedLong(vsIn), stored, "version_size u64 BE encoding");
+    }
+
+    static void testLargeInplaceFlag() {
+        byte[] di = Encoding.encodeDeltaLarge(List.of(), true,  0, ZH, ZH);
+        byte[] dn = Encoding.encodeDeltaLarge(List.of(), false, 0, ZH, ZH);
+        assertTrue((di[4] & DELTA_FLAG_INPLACE) != 0, "inplace flag set");
+        assertTrue((dn[4] & DELTA_FLAG_INPLACE) == 0, "inplace flag not set");
+    }
+
+    static void testLargeFormatCopyRoundtrip() {
+        byte[] r = "hello".getBytes();
+        List<PlacedCommand> cmds = List.of(new PlacedCopy(0, 0, r.length));
+        byte[] d = Encoding.encodeDeltaLarge(cmds, false, r.length, ZH, ZH);
+        // COPY command byte (not BIGCOPY) since fields fit in u32
+        assertEquals(DELTA_CMD_COPY, d[DELTA_HEADER_SIZE_LARGE] & 0xFF, "COPY command byte");
+        Encoding.DecodeResult res = Encoding.decodeDelta(d);
+        byte[] out = new byte[res.versionSize()];
+        Apply.applyPlacedTo(r, res.commands(), out);
+        assertArrayEquals(r, out, "COPY roundtrip via large format");
+    }
+
+    static void testLargeFormatAddRoundtrip() {
+        byte[] payload = "world".getBytes();
+        List<PlacedCommand> cmds = List.of(new PlacedAdd(0, payload));
+        byte[] d = Encoding.encodeDeltaLarge(cmds, false, payload.length, ZH, ZH);
+        Encoding.DecodeResult res = Encoding.decodeDelta(d);
+        byte[] out = new byte[res.versionSize()];
+        Apply.applyPlacedTo(new byte[0], res.commands(), out);
+        assertArrayEquals(payload, out, "ADD roundtrip via large format");
+    }
+
+    static void testLargeMoveRoundtrip() {
+        byte[] hello = "hello".getBytes();
+        // ADD "hello" at 0, then MOVE it to offset 5
+        List<PlacedCommand> cmds = List.of(
+            new PlacedAdd(0, hello),
+            new PlacedMove(0, 5, hello.length)
+        );
+        byte[] d = Encoding.encodeDeltaLarge(cmds, false, 10, ZH, ZH);
+        Encoding.DecodeResult res = Encoding.decodeDelta(d);
+        byte[] out = new byte[res.versionSize()];
+        Apply.applyPlacedTo(new byte[0], res.commands(), out);
+        assertArrayEquals("hellohello".getBytes(), out, "MOVE roundtrip");
+    }
+
+    static void testLargeMoveCommandByte() {
+        List<PlacedCommand> cmds = List.of(
+            new PlacedAdd(0, new byte[]{'x'}),
+            new PlacedMove(0, 1, 1)
+        );
+        byte[] d = Encoding.encodeDeltaLarge(cmds, false, 2, ZH, ZH);
+        // After header(29) + ADD type(1) + ADD header(8) + data(1) = 39
+        int moveOff = DELTA_HEADER_SIZE_LARGE + 1 + DELTA_ADD_HEADER + 1;
+        assertEquals(DELTA_CMD_MOVE, d[moveOff] & 0xFF, "MOVE command byte");
+    }
+
+    static void testLargeMoveOverlapRejected() {
+        // Hand-craft DLT\x04 with MOVE where src+length > dst
+        byte[] buf = new byte[DELTA_HEADER_SIZE_LARGE + DELTA_COPY_PAYLOAD + 2];
+        buf[0] = 'D'; buf[1] = 'L'; buf[2] = 'T'; buf[3] = 0x04;
+        buf[4] = 0; // flags
+        // version_size = 10 as u64 BE at bytes 5..12
+        buf[12] = 10;
+        // crcs 0 (bytes 13..28)
+        buf[DELTA_HEADER_SIZE_LARGE] = (byte) DELTA_CMD_MOVE;
+        // MOVE: src=5, dst=8, length=4 → src+length=9 > dst=8
+        putU32BETest(buf, DELTA_HEADER_SIZE_LARGE + 1, 5); // src
+        putU32BETest(buf, DELTA_HEADER_SIZE_LARGE + 5, 8); // dst
+        putU32BETest(buf, DELTA_HEADER_SIZE_LARGE + 9, 4); // length
+        buf[buf.length - 1] = (byte) DELTA_CMD_END;
+        try {
+            Encoding.decodeDelta(buf);
+            throw new AssertionError("expected IllegalArgumentException for overlapping MOVE");
+        } catch (IllegalArgumentException e) {
+            // expected
+        }
+    }
+
+    static void testSmallRejectsLargeCommandBytes() {
+        byte[] buf = new byte[DELTA_HEADER_SIZE + 2];
+        buf[0] = 'D'; buf[1] = 'L'; buf[2] = 'T'; buf[3] = 0x03;
+        buf[4] = 0; // flags
+        // version_size = 1 as u32 BE at bytes 5..8
+        buf[8] = 1;
+        // crcs 0 (bytes 9..24)
+        buf[DELTA_HEADER_SIZE] = (byte) DELTA_CMD_BIGCOPY; // illegal in small format
+        buf[DELTA_HEADER_SIZE + 1] = (byte) DELTA_CMD_END;
+        try {
+            Encoding.decodeDelta(buf);
+            throw new AssertionError("expected IllegalArgumentException for BIGCOPY in small format");
+        } catch (IllegalArgumentException e) {
+            // expected
+        }
+    }
+
+    static void testUnknownMagicRejected() {
+        byte[] buf = {'X', 'X', 'X', 0x03, 0, 0, 0, 0, 0};
+        try {
+            Encoding.decodeDelta(buf);
+            throw new AssertionError("expected IllegalArgumentException for unknown magic");
+        } catch (IllegalArgumentException e) {
+            // expected
+        }
+    }
+
+    static void testEncodeDeltaRejectsMove() {
+        List<PlacedCommand> cmds = List.of(new PlacedMove(0, 5, 3));
+        try {
+            Encoding.encodeDelta(cmds, false, 8, ZH, ZH);
+            throw new AssertionError("expected IllegalArgumentException for PlacedMove in encodeDelta");
+        } catch (IllegalArgumentException e) {
+            // expected
+        }
+    }
+
+    static void testLargeU64OverflowRejected() {
+        // Hand-craft DLT\x04 with version_size = Long.MIN_VALUE (top bit set = negative long)
+        byte[] buf = new byte[DELTA_HEADER_SIZE_LARGE + 1];
+        buf[0] = 'D'; buf[1] = 'L'; buf[2] = 'T'; buf[3] = 0x04;
+        buf[4] = 0;
+        buf[5] = (byte) 0x80; // version_size top bit set → negative long → rejected
+        buf[DELTA_HEADER_SIZE_LARGE] = (byte) DELTA_CMD_END;
+        try {
+            Encoding.decodeDelta(buf);
+            throw new AssertionError("expected IllegalArgumentException for oversized version_size");
+        } catch (IllegalArgumentException e) {
+            // expected
+        }
+    }
+
+    static void testLargeAlgoRoundtripGreedy() {
+        largeAlgoRoundtrip(Algorithm.GREEDY, "greedy");
+    }
+
+    static void testLargeAlgoRoundtripOnepass() {
+        largeAlgoRoundtrip(Algorithm.ONEPASS, "onepass");
+    }
+
+    static void testLargeAlgoRoundtripCorrecting() {
+        largeAlgoRoundtrip(Algorithm.CORRECTING, "correcting");
+    }
+
+    static void largeAlgoRoundtrip(Algorithm algo, String name) {
+        byte[] r = "the quick brown fox".getBytes();
+        byte[] v = "the slow brown fox".getBytes();
+        List<Types.Command> cmds = Diff.diff(algo, r, v, opts(4));
+        List<PlacedCommand> placed = Apply.placeCommands(cmds);
+        byte[] d = Encoding.encodeDeltaLarge(placed, false, v.length, ZH, ZH);
+        Encoding.DecodeResult res = Encoding.decodeDelta(d);
+        byte[] out = new byte[res.versionSize()];
+        Apply.applyPlacedTo(r, res.commands(), out);
+        assertArrayEquals(v, out, name + " large-format roundtrip");
+    }
+
+    // helper for hand-crafted test buffers
+    static void putU32BETest(byte[] buf, int off, int val) {
+        buf[off]     = (byte) (val >>> 24);
+        buf[off + 1] = (byte) (val >>> 16);
+        buf[off + 2] = (byte) (val >>> 8);
+        buf[off + 3] = (byte) val;
     }
 }

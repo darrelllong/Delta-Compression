@@ -57,6 +57,11 @@ public final class Apply {
                 System.arraycopy(a.data(), 0, out, a.dst(), a.data().length);
                 int end = a.dst() + a.data().length;
                 if (end > maxWritten) maxWritten = end;
+            } else if (cmd instanceof PlacedMove m) {
+                // src+length <= dst guaranteed by encoder; read from already-written output
+                System.arraycopy(out, m.src(), out, m.dst(), m.length());
+                int end = m.dst() + m.length();
+                if (end > maxWritten) maxWritten = end;
             }
         }
         return maxWritten;
@@ -69,6 +74,8 @@ public final class Apply {
                 System.arraycopy(buf, c.src(), buf, c.dst(), c.length());
             } else if (cmd instanceof PlacedAdd a) {
                 System.arraycopy(a.data(), 0, buf, a.dst(), a.data().length);
+            } else if (cmd instanceof PlacedMove m) {
+                System.arraycopy(buf, m.src(), buf, m.dst(), m.length());
             }
         }
     }
@@ -84,6 +91,11 @@ public final class Apply {
                 validateRange(c.src(), c.length(), sourceLimit, "copy source");
             } else if (cmd instanceof PlacedAdd a) {
                 validateRange(a.dst(), a.data().length, versionSize, "add destination");
+            } else if (cmd instanceof PlacedMove m) {
+                validateRange(m.dst(), m.length(), versionSize, "move destination");
+                if (m.src() + m.length() > m.dst())
+                    throw new IllegalArgumentException(
+                        "MOVE src+length > dst: encoder ordering constraint violated");
             }
         }
     }
@@ -126,17 +138,20 @@ public final class Apply {
     /**
      * Convert placed commands back to algorithm commands (strip destinations).
      * Commands are sorted by destination offset to recover original sequential order.
+     * Throws if a PlacedMove is present (no algorithm-level equivalent).
      */
     public static List<Command> unplaceCommands(List<PlacedCommand> placed) {
         List<PlacedCommand> sorted = new ArrayList<>(placed);
         sorted.sort(Comparator.comparingInt(c -> {
-            if (c instanceof PlacedCopy pc) return pc.dst();
-            else return ((PlacedAdd) c).dst();
+            if (c instanceof PlacedCopy pc)  return pc.dst();
+            if (c instanceof PlacedAdd  pa)  return pa.dst();
+            return ((PlacedMove) c).dst();
         }));
         List<Command> commands = new ArrayList<>(sorted.size());
         for (PlacedCommand cmd : sorted) {
             if (cmd instanceof PlacedCopy c) commands.add(new CopyCmd(c.src(), c.length()));
             else if (cmd instanceof PlacedAdd a) commands.add(new AddCmd(a.data()));
+            else throw new IllegalArgumentException("PlacedMove has no algorithm-level equivalent");
         }
         return commands;
     }
@@ -530,6 +545,9 @@ public final class Apply {
             } else if (cmd instanceof PlacedAdd a) {
                 numAdds++;
                 addBytes += a.data().length;
+            } else if (cmd instanceof PlacedMove m) {
+                numCopies++; // MOVE counted with copies
+                copyBytes += m.length();
             }
         }
         return new PlacedSummary(commands.size(), numCopies, numAdds,
