@@ -212,11 +212,13 @@ delta encode onepass old.bin new.bin delta.bin --splay
 delta encode correcting old.bin new.bin delta.bin --splay
 ```
 
-For onepass, `--splay` is faster than the hash table (~17% on 871 MB kernel
-tarballs) because seeds are inserted and then looked up shortly after
-(temporal locality).  For correcting, `--splay` is slower (3.5×) but
-achieves slightly better compression by avoiding hash collisions.
-See [ANALYSIS.md](ANALYSIS.md) for details.
+For onepass, `--splay` produces identical total wall time to the hash
+table on large inputs (~4s each on 871 MB kernel tarballs): I/O dominates
+at ~3.5s, masking splay's ~56% algorithm-time overhead (0.78s vs 0.50s).
+On small, I/O-free inputs the hash table is faster.  For correcting,
+`--splay` is ~7.5× slower in algorithm time (44s vs 5.9s) but achieves
+slightly better compression by storing every checkpoint seed without hash
+collisions.  See [ANALYSIS.md](ANALYSIS.md) for details.
 
 The `--splay` flag does not affect the delta output format — deltas
 produced with and without `--splay` are decoded identically.
