@@ -1406,6 +1406,22 @@ fn test_v4_move_rejected_on_v3() {
 }
 
 #[test]
+fn test_v3_rejects_v4_command_bytes_with_diagnostic() {
+    // Inject a BIGCOPY byte (0x03) into a hand-crafted DLT\x03 stream.
+    // The decoder must say "requires DLT\x04", not "unknown command type".
+    let mut bad = encode_delta(&[], false, 0, &[0u8; 8], &[0u8; 8]).unwrap();
+    bad.pop(); // remove END
+    bad.push(3); // DELTA_CMD_BIGCOPY
+    bad.push(0); // END
+    match decode_delta(&bad) {
+        Err(DeltaError::InvalidFormat(msg)) => {
+            assert!(msg.contains("requires DLT"), "expected DLT\\x04 hint, got: {}", msg);
+        }
+        other => panic!("expected InvalidFormat, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_v4_move_apply_standard() {
     // Encode: ADD "hello" at dst=0, MOVE src=0 dst=5 len=5 → "hellohello"
     let z = [0u8; 8];

@@ -168,7 +168,52 @@ fn decode_v3(
     let mut dst_crc = [0u8; DELTA_CRC_SIZE];
     src_crc.copy_from_slice(&data[crc_offset..crc_offset + DELTA_CRC_SIZE]);
     dst_crc.copy_from_slice(&data[crc_offset + DELTA_CRC_SIZE..crc_offset + 2 * DELTA_CRC_SIZE]);
-    decode_commands(data, DELTA_HEADER_SIZE, version_size, inplace, src_crc, dst_crc, false)
+
+    let mut pos = DELTA_HEADER_SIZE;
+    let mut commands = Vec::new();
+    let mut saw_end = false;
+
+    while pos < data.len() {
+        let t = data[pos];
+        pos += 1;
+        match t {
+            DELTA_CMD_END => { saw_end = true; break; }
+
+            DELTA_CMD_COPY => {
+                if pos + DELTA_COPY_PAYLOAD > data.len() { return Err(DeltaError::UnexpectedEof); }
+                let src    = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                let dst    = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                let length = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                validate_placed_range(dst, length, version_size, "copy")?;
+                commands.push(PlacedCommand::Copy { src, dst, length });
+            }
+
+            DELTA_CMD_ADD => {
+                if pos + DELTA_ADD_HEADER > data.len() { return Err(DeltaError::UnexpectedEof); }
+                let dst    = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                let length = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                if pos + length > data.len() { return Err(DeltaError::UnexpectedEof); }
+                validate_placed_range(dst, length, version_size, "add")?;
+                commands.push(PlacedCommand::Add { dst, data: data[pos..pos + length].to_vec() });
+                pos += length;
+            }
+
+            // V4-only commands arriving in a V3 stream: specific error.
+            DELTA_CMD_BIGCOPY | DELTA_CMD_BIGADD | DELTA_CMD_MOVE | DELTA_CMD_BIGMOVE => {
+                return Err(DeltaError::InvalidFormat(format!(
+                    "command type {} requires DLT\\x04 format", t
+                )));
+            }
+
+            _ => {
+                return Err(DeltaError::InvalidFormat(format!(
+                    "unknown command type: {}", t
+                )));
+            }
+        }
+    }
+
+    finish_decode(commands, saw_end, pos, data.len(), inplace, version_size, src_crc, dst_crc)
 }
 
 fn decode_v4(
@@ -187,7 +232,82 @@ fn decode_v4(
     let mut dst_crc = [0u8; DELTA_CRC_SIZE];
     src_crc.copy_from_slice(&data[crc_offset..crc_offset + DELTA_CRC_SIZE]);
     dst_crc.copy_from_slice(&data[crc_offset + DELTA_CRC_SIZE..crc_offset + 2 * DELTA_CRC_SIZE]);
-    decode_commands(data, DELTA_HEADER_SIZE_V4, version_size, inplace, src_crc, dst_crc, true)
+
+    let mut pos = DELTA_HEADER_SIZE_V4;
+    let mut commands = Vec::new();
+    let mut saw_end = false;
+
+    while pos < data.len() {
+        let t = data[pos];
+        pos += 1;
+        match t {
+            DELTA_CMD_END => { saw_end = true; break; }
+
+            DELTA_CMD_COPY => {
+                if pos + DELTA_COPY_PAYLOAD > data.len() { return Err(DeltaError::UnexpectedEof); }
+                let src    = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                let dst    = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                let length = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                validate_placed_range(dst, length, version_size, "copy")?;
+                commands.push(PlacedCommand::Copy { src, dst, length });
+            }
+
+            DELTA_CMD_ADD => {
+                if pos + DELTA_ADD_HEADER > data.len() { return Err(DeltaError::UnexpectedEof); }
+                let dst    = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                let length = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                if pos + length > data.len() { return Err(DeltaError::UnexpectedEof); }
+                validate_placed_range(dst, length, version_size, "add")?;
+                commands.push(PlacedCommand::Add { dst, data: data[pos..pos + length].to_vec() });
+                pos += length;
+            }
+
+            DELTA_CMD_BIGCOPY => {
+                if pos + DELTA_BIGCOPY_PAYLOAD > data.len() { return Err(DeltaError::UnexpectedEof); }
+                let src    = read_u64(data, pos); pos += DELTA_U64_SIZE;
+                let dst    = read_u64(data, pos); pos += DELTA_U64_SIZE;
+                let length = read_u64(data, pos); pos += DELTA_U64_SIZE;
+                validate_placed_range(dst, length, version_size, "bigcopy")?;
+                commands.push(PlacedCommand::Copy { src, dst, length });
+            }
+
+            DELTA_CMD_BIGADD => {
+                if pos + DELTA_BIGADD_HEADER > data.len() { return Err(DeltaError::UnexpectedEof); }
+                let dst    = read_u64(data, pos); pos += DELTA_U64_SIZE;
+                let length = read_u64(data, pos); pos += DELTA_U64_SIZE;
+                if pos + length > data.len() { return Err(DeltaError::UnexpectedEof); }
+                validate_placed_range(dst, length, version_size, "bigadd")?;
+                commands.push(PlacedCommand::Add { dst, data: data[pos..pos + length].to_vec() });
+                pos += length;
+            }
+
+            DELTA_CMD_MOVE => {
+                if pos + DELTA_COPY_PAYLOAD > data.len() { return Err(DeltaError::UnexpectedEof); }
+                let src    = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                let dst    = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                let length = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                validate_placed_range(dst, length, version_size, "move")?;
+                commands.push(PlacedCommand::Move { src, dst, length });
+            }
+
+            DELTA_CMD_BIGMOVE => {
+                if pos + DELTA_BIGCOPY_PAYLOAD > data.len() { return Err(DeltaError::UnexpectedEof); }
+                let src    = read_u64(data, pos); pos += DELTA_U64_SIZE;
+                let dst    = read_u64(data, pos); pos += DELTA_U64_SIZE;
+                let length = read_u64(data, pos); pos += DELTA_U64_SIZE;
+                validate_placed_range(dst, length, version_size, "bigmove")?;
+                commands.push(PlacedCommand::Move { src, dst, length });
+            }
+
+            _ => {
+                return Err(DeltaError::InvalidFormat(format!(
+                    "unknown command type: {}", t
+                )));
+            }
+        }
+    }
+
+    finish_decode(commands, saw_end, pos, data.len(), inplace, version_size, src_crc, dst_crc)
 }
 
 #[inline]
@@ -203,117 +323,22 @@ fn read_u64(data: &[u8], pos: usize) -> usize {
     ]) as usize
 }
 
-fn decode_commands(
-    data: &[u8],
-    start: usize,
-    version_size: usize,
+fn finish_decode(
+    commands: Vec<PlacedCommand>,
+    saw_end: bool,
+    pos: usize,
+    data_len: usize,
     inplace: bool,
+    version_size: usize,
     src_crc: [u8; DELTA_CRC_SIZE],
     dst_crc: [u8; DELTA_CRC_SIZE],
-    allow_big: bool,
 ) -> Result<(Vec<PlacedCommand>, bool, usize, [u8; DELTA_CRC_SIZE], [u8; DELTA_CRC_SIZE]), DeltaError> {
-    let mut pos = start;
-    let mut commands = Vec::new();
-    let mut saw_end = false;
-
-    while pos < data.len() {
-        let t = data[pos];
-        pos += 1;
-
-        match t {
-            DELTA_CMD_END => {
-                saw_end = true;
-                break;
-            }
-
-            DELTA_CMD_COPY => {
-                if pos + DELTA_COPY_PAYLOAD > data.len() {
-                    return Err(DeltaError::UnexpectedEof);
-                }
-                let src    = read_u32(data, pos); pos += DELTA_U32_SIZE;
-                let dst    = read_u32(data, pos); pos += DELTA_U32_SIZE;
-                let length = read_u32(data, pos); pos += DELTA_U32_SIZE;
-                validate_placed_range(dst, length, version_size, "copy")?;
-                commands.push(PlacedCommand::Copy { src, dst, length });
-            }
-
-            DELTA_CMD_ADD => {
-                if pos + DELTA_ADD_HEADER > data.len() {
-                    return Err(DeltaError::UnexpectedEof);
-                }
-                let dst    = read_u32(data, pos); pos += DELTA_U32_SIZE;
-                let length = read_u32(data, pos); pos += DELTA_U32_SIZE;
-                if pos + length > data.len() {
-                    return Err(DeltaError::UnexpectedEof);
-                }
-                validate_placed_range(dst, length, version_size, "add")?;
-                commands.push(PlacedCommand::Add { dst, data: data[pos..pos + length].to_vec() });
-                pos += length;
-            }
-
-            DELTA_CMD_BIGCOPY if allow_big => {
-                if pos + DELTA_BIGCOPY_PAYLOAD > data.len() {
-                    return Err(DeltaError::UnexpectedEof);
-                }
-                let src    = read_u64(data, pos); pos += DELTA_U64_SIZE;
-                let dst    = read_u64(data, pos); pos += DELTA_U64_SIZE;
-                let length = read_u64(data, pos); pos += DELTA_U64_SIZE;
-                validate_placed_range(dst, length, version_size, "bigcopy")?;
-                commands.push(PlacedCommand::Copy { src, dst, length });
-            }
-
-            DELTA_CMD_BIGADD if allow_big => {
-                if pos + DELTA_BIGADD_HEADER > data.len() {
-                    return Err(DeltaError::UnexpectedEof);
-                }
-                let dst    = read_u64(data, pos); pos += DELTA_U64_SIZE;
-                let length = read_u64(data, pos); pos += DELTA_U64_SIZE;
-                if pos + length > data.len() {
-                    return Err(DeltaError::UnexpectedEof);
-                }
-                validate_placed_range(dst, length, version_size, "bigadd")?;
-                commands.push(PlacedCommand::Add { dst, data: data[pos..pos + length].to_vec() });
-                pos += length;
-            }
-
-            DELTA_CMD_MOVE if allow_big => {
-                if pos + DELTA_COPY_PAYLOAD > data.len() {
-                    return Err(DeltaError::UnexpectedEof);
-                }
-                let src    = read_u32(data, pos); pos += DELTA_U32_SIZE;
-                let dst    = read_u32(data, pos); pos += DELTA_U32_SIZE;
-                let length = read_u32(data, pos); pos += DELTA_U32_SIZE;
-                validate_placed_range(dst, length, version_size, "move")?;
-                commands.push(PlacedCommand::Move { src, dst, length });
-            }
-
-            DELTA_CMD_BIGMOVE if allow_big => {
-                if pos + DELTA_BIGCOPY_PAYLOAD > data.len() {
-                    return Err(DeltaError::UnexpectedEof);
-                }
-                let src    = read_u64(data, pos); pos += DELTA_U64_SIZE;
-                let dst    = read_u64(data, pos); pos += DELTA_U64_SIZE;
-                let length = read_u64(data, pos); pos += DELTA_U64_SIZE;
-                validate_placed_range(dst, length, version_size, "bigmove")?;
-                commands.push(PlacedCommand::Move { src, dst, length });
-            }
-
-            _ => {
-                return Err(DeltaError::InvalidFormat(format!(
-                    "unknown command type: {}",
-                    t
-                )));
-            }
-        }
-    }
-
     if !saw_end {
         return Err(DeltaError::InvalidFormat("missing END command".into()));
     }
-    if pos != data.len() {
+    if pos != data_len {
         return Err(DeltaError::InvalidFormat("trailing data after END".into()));
     }
-
     Ok((commands, inplace, version_size, src_crc, dst_crc))
 }
 
