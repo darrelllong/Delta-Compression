@@ -19,6 +19,7 @@ typedef struct greedy_entry {
 
 typedef struct {
 	greedy_entry_t **buckets;
+	greedy_entry_t **tails;   /* tail pointers for O(1) append */
 	size_t nbuckets;
 } greedy_htable_t;
 
@@ -27,8 +28,11 @@ ght_init(greedy_htable_t *ht, size_t nbuckets)
 {
 	ht->nbuckets = nbuckets;
 	ht->buckets = delta_calloc(nbuckets, sizeof(*ht->buckets));
+	ht->tails   = delta_calloc(nbuckets, sizeof(*ht->tails));
 }
 
+/* Append so chains are traversed in insertion (ascending-offset) order,
+ * matching the oldest-first traversal used by Rust/C++/Go/JVM impls. */
 static void
 ght_insert(greedy_htable_t *ht, uint64_t fp, size_t offset)
 {
@@ -37,8 +41,13 @@ ght_insert(greedy_htable_t *ht, uint64_t fp, size_t offset)
 	if (!e) { return; }
 	e->fp = fp;
 	e->offset = offset;
-	e->next = ht->buckets[idx];
-	ht->buckets[idx] = e;
+	e->next = NULL;
+	if (ht->tails[idx]) {
+		ht->tails[idx]->next = e;
+	} else {
+		ht->buckets[idx] = e;
+	}
+	ht->tails[idx] = e;
 }
 
 static void
@@ -54,6 +63,7 @@ ght_free(greedy_htable_t *ht)
 		}
 	}
 	free(ht->buckets);
+	free(ht->tails);
 }
 
 // ── Splay tree value for greedy: dynamic array of offsets ────────────
@@ -89,7 +99,7 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
                   const delta_diff_options_t *opts)
 {
 	delta_commands_t commands;
-	greedy_htable_t ht = {NULL, 0};
+	greedy_htable_t ht = {NULL, NULL, 0};
 	delta_splay_t splay;
 	delta_rolling_hash_t rh_r, rh_v;
 	int rh_v_valid = 0;

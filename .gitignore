@@ -8,6 +8,7 @@ build/
 # C build artifacts
 src/c/*.o
 src/c/delta
+src/c/test_overflow
 
 # JVM build artifacts
 src/java/out/
