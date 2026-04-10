@@ -202,6 +202,20 @@ application differ.
 | `add.dst` | 2³²−1 | encode rejects |
 | `add.length` (data) | 2³²−1 | encode rejects |
 
+**Rationale for u32:** u32 fields keep the COPY command to 13 bytes and
+the ADD header to 9 bytes.  For a kernel tarball delta with ~200,000
+copy commands, u64 would add ~2.4 MB of header overhead with no benefit
+for the target use cases (OS/firmware updates, software version deltas),
+which fit comfortably within 4 GiB.  Files larger than 4 GiB must be
+split into independently-deltaed segments before encoding.  A future
+`DLT\x04` format with u64 fields remains possible if 64-bit inputs become
+a practical requirement.
+
+**Truncated files:** A decoder that reaches the end of the byte stream
+before encountering an END record must return an error.  Partial COPY
+or ADD records (insufficient bytes remaining for the declared field
+widths) must also be rejected.
+
 ### Version history
 
 | Magic | Change |
