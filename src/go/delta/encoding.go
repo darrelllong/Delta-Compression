@@ -238,32 +238,19 @@ func decodeDeltaSmall(data []byte) (DecodeResult, error) {
 		}
 		switch t {
 		case DeltaCmdCopy:
-			if pos+DeltaCopyPayload > len(data) {
-				return DecodeResult{}, fmt.Errorf("unexpected EOF")
-			}
-			src := getU32BE(data, pos); pos += DeltaU32Size
-			dst := getU32BE(data, pos); pos += DeltaU32Size
-			length := getU32BE(data, pos); pos += DeltaU32Size
-			if err := validatePlacedRange(dst, length, versionSize, "copy"); err != nil {
+			cmd, newPos, err := parseCopy(data, pos, versionSize)
+			if err != nil {
 				return DecodeResult{}, err
 			}
-			commands = append(commands, PlacedCopy{Src: src, DstOff: dst, Length: length})
+			pos = newPos
+			commands = append(commands, cmd)
 		case DeltaCmdAdd:
-			if pos+DeltaAddHeader > len(data) {
-				return DecodeResult{}, fmt.Errorf("unexpected EOF")
-			}
-			dst := getU32BE(data, pos); pos += DeltaU32Size
-			length := getU32BE(data, pos); pos += DeltaU32Size
-			if pos+length > len(data) {
-				return DecodeResult{}, fmt.Errorf("unexpected EOF")
-			}
-			if err := validatePlacedRange(dst, length, versionSize, "add"); err != nil {
+			cmd, newPos, err := parseAdd(data, pos, versionSize)
+			if err != nil {
 				return DecodeResult{}, err
 			}
-			payload := make([]byte, length)
-			copy(payload, data[pos:pos+length])
-			pos += length
-			commands = append(commands, PlacedAdd{DstOff: dst, Data: payload})
+			pos = newPos
+			commands = append(commands, cmd)
 		case DeltaCmdBigCopy, DeltaCmdBigAdd, DeltaCmdMove, DeltaCmdBigMove:
 			return DecodeResult{}, fmt.Errorf("command type %d requires DLT\\x04 format", t)
 		default:
@@ -300,32 +287,19 @@ func decodeDeltaLarge(data []byte) (DecodeResult, error) {
 		}
 		switch t {
 		case DeltaCmdCopy:
-			if pos+DeltaCopyPayload > len(data) {
-				return DecodeResult{}, fmt.Errorf("unexpected EOF")
-			}
-			src := getU32BE(data, pos); pos += DeltaU32Size
-			dst := getU32BE(data, pos); pos += DeltaU32Size
-			length := getU32BE(data, pos); pos += DeltaU32Size
-			if err := validatePlacedRange(dst, length, versionSize, "copy"); err != nil {
+			cmd, newPos, err := parseCopy(data, pos, versionSize)
+			if err != nil {
 				return DecodeResult{}, err
 			}
-			commands = append(commands, PlacedCopy{Src: src, DstOff: dst, Length: length})
+			pos = newPos
+			commands = append(commands, cmd)
 		case DeltaCmdAdd:
-			if pos+DeltaAddHeader > len(data) {
-				return DecodeResult{}, fmt.Errorf("unexpected EOF")
-			}
-			dst := getU32BE(data, pos); pos += DeltaU32Size
-			length := getU32BE(data, pos); pos += DeltaU32Size
-			if pos+length > len(data) {
-				return DecodeResult{}, fmt.Errorf("unexpected EOF")
-			}
-			if err := validatePlacedRange(dst, length, versionSize, "add"); err != nil {
+			cmd, newPos, err := parseAdd(data, pos, versionSize)
+			if err != nil {
 				return DecodeResult{}, err
 			}
-			payload := make([]byte, length)
-			copy(payload, data[pos:pos+length])
-			pos += length
-			commands = append(commands, PlacedAdd{DstOff: dst, Data: payload})
+			pos = newPos
+			commands = append(commands, cmd)
 		case DeltaCmdBigCopy:
 			if pos+DeltaBigCopyPayload > len(data) {
 				return DecodeResult{}, fmt.Errorf("unexpected EOF")
@@ -473,6 +447,40 @@ func getU64BE(buf []byte, off int) (int, error) {
 		return 0, fmt.Errorf("delta field %d overflows int on this platform", v)
 	}
 	return int(v), nil
+}
+
+// parseCopy reads a u32 COPY command starting at pos and returns the command
+// and the updated position. Both decoders share this helper.
+func parseCopy(data []byte, pos, versionSize int) (PlacedCopy, int, error) {
+	if pos+DeltaCopyPayload > len(data) {
+		return PlacedCopy{}, pos, fmt.Errorf("unexpected EOF")
+	}
+	src := getU32BE(data, pos); pos += DeltaU32Size
+	dst := getU32BE(data, pos); pos += DeltaU32Size
+	length := getU32BE(data, pos); pos += DeltaU32Size
+	if err := validatePlacedRange(dst, length, versionSize, "copy"); err != nil {
+		return PlacedCopy{}, pos, err
+	}
+	return PlacedCopy{Src: src, DstOff: dst, Length: length}, pos, nil
+}
+
+// parseAdd reads a u32 ADD command starting at pos and returns the command
+// and the updated position. Both decoders share this helper.
+func parseAdd(data []byte, pos, versionSize int) (PlacedAdd, int, error) {
+	if pos+DeltaAddHeader > len(data) {
+		return PlacedAdd{}, pos, fmt.Errorf("unexpected EOF")
+	}
+	dst := getU32BE(data, pos); pos += DeltaU32Size
+	length := getU32BE(data, pos); pos += DeltaU32Size
+	if pos+length > len(data) {
+		return PlacedAdd{}, pos, fmt.Errorf("unexpected EOF")
+	}
+	if err := validatePlacedRange(dst, length, versionSize, "add"); err != nil {
+		return PlacedAdd{}, pos, err
+	}
+	payload := make([]byte, length)
+	copy(payload, data[pos:pos+length])
+	return PlacedAdd{DstOff: dst, Data: payload}, pos + length, nil
 }
 
 func validatePlacedRange(dst, length, versionSize int, kind string) error {
