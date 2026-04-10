@@ -9,12 +9,18 @@ pub mod inplace;
 // Re-exports for convenience
 pub use types::{
     Algorithm, Command, CyclePolicy, DeltaError, DeltaSummary, DiffOptions, PlacedCommand,
-    DELTA_ADD_HEADER, DELTA_BUF_CAP, DELTA_CMD_ADD, DELTA_CMD_COPY, DELTA_CMD_END,
-    DELTA_COPY_PAYLOAD, DELTA_CRC_SIZE, DELTA_FLAG_INPLACE, DELTA_HEADER_SIZE, DELTA_MAGIC,
-    DELTA_U32_SIZE, HASH_BASE, HASH_MOD, MAX_TABLE_SIZE, SEED_LEN, TABLE_SIZE,
+    DELTA_ADD_HEADER, DELTA_BIGADD_HEADER, DELTA_BIGCOPY_PAYLOAD,
+    DELTA_BUF_CAP,
+    DELTA_CMD_ADD, DELTA_CMD_BIGADD, DELTA_CMD_BIGCOPY, DELTA_CMD_BIGMOVE,
+    DELTA_CMD_COPY, DELTA_CMD_END, DELTA_CMD_MOVE,
+    DELTA_COPY_PAYLOAD, DELTA_CRC_SIZE, DELTA_FLAG_INPLACE,
+    DELTA_HEADER_SIZE, DELTA_HEADER_SIZE_V4,
+    DELTA_MAGIC, DELTA_MAGIC_V4,
+    DELTA_U32_SIZE, DELTA_U64_SIZE,
+    HASH_BASE, HASH_MOD, MAX_TABLE_SIZE, SEED_LEN, TABLE_SIZE,
 };
 pub use hash::{crc64_xz, fingerprint, fp_to_index, is_prime, mod_mersenne, next_prime, precompute_bp, RollingHash};
-pub use encoding::{decode_delta, encode_delta, is_inplace_delta};
+pub use encoding::{decode_delta, encode_delta, encode_delta_v4, is_inplace_delta};
 pub use splay::SplayTree;
 pub use algorithm::{diff, diff_default};
 pub use algorithm::greedy::{diff_greedy, diff_greedy_default};

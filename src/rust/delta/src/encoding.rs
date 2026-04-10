@@ -1,23 +1,29 @@
 use crate::types::{
-    DeltaError, PlacedCommand, DELTA_ADD_HEADER, DELTA_CMD_ADD, DELTA_CMD_COPY, DELTA_CMD_END,
-    DELTA_COPY_PAYLOAD, DELTA_CRC_SIZE, DELTA_FLAG_INPLACE, DELTA_HEADER_SIZE, DELTA_MAGIC,
-    DELTA_U32_SIZE,
+    DeltaError, PlacedCommand,
+    DELTA_ADD_HEADER, DELTA_BIGADD_HEADER, DELTA_BIGCOPY_PAYLOAD,
+    DELTA_CMD_ADD, DELTA_CMD_BIGADD, DELTA_CMD_BIGCOPY, DELTA_CMD_BIGMOVE,
+    DELTA_CMD_COPY, DELTA_CMD_END, DELTA_CMD_MOVE,
+    DELTA_COPY_PAYLOAD, DELTA_CRC_SIZE, DELTA_FLAG_INPLACE,
+    DELTA_HEADER_SIZE, DELTA_HEADER_SIZE_V4,
+    DELTA_MAGIC, DELTA_MAGIC_V4,
+    DELTA_U32_SIZE, DELTA_U64_SIZE,
 };
 
-/// Encode placed commands to the unified binary delta format.
-///
-/// Format:
-///   Header: magic (4 bytes) + flags (1 byte) + version_size (u32 BE)
-///           + src_crc (8 bytes) + dst_crc (8 bytes)
-///   Commands:
-///     END:  type=0
-///     COPY: type=1, src:u32, dst:u32, len:u32
-///     ADD:  type=2, dst:u32, len:u32, data
+/// Maximum value that fits in a u32, as usize, for per-command size selection.
+const U32_MAX: usize = u32::MAX as usize;
+
 fn check_u32(val: usize, field: &str) -> Result<u32, DeltaError> {
     u32::try_from(val)
         .map_err(|_| DeltaError::InvalidFormat(format!("{field} exceeds 4 GiB (32-bit format limit)")))
 }
 
+// ── Encoding ─────────────────────────────────────────────────────────────────
+
+/// Encode placed commands to the DLT\x03 binary delta format.
+///
+/// DLT\x03 header: magic(4) + flags(1) + version_size(u32 BE) + crcs(16) = 25 bytes.
+/// Commands: END(0), COPY(1, u32×3), ADD(2, u32×2 + data).
+/// All offsets must fit in u32; returns Err if any exceed 4 GiB.
 pub fn encode_delta(
     commands: &[PlacedCommand],
     inplace: bool,
@@ -46,6 +52,11 @@ pub fn encode_delta(
                 out.extend_from_slice(&check_u32(data.len(), "add length")?.to_be_bytes());
                 out.extend_from_slice(data);
             }
+            PlacedCommand::Move { .. } => {
+                return Err(DeltaError::InvalidFormat(
+                    "MOVE commands require DLT\\x04 format; use encode_delta_v4".into(),
+                ));
+            }
         }
     }
 
@@ -53,32 +64,150 @@ pub fn encode_delta(
     Ok(out)
 }
 
-/// Decode the unified binary delta format.
+/// Encode placed commands to the DLT\x04 binary delta format.
+///
+/// DLT\x04 header: magic(4) + flags(1) + version_size(u64 BE) + crcs(16) = 29 bytes.
+/// Commands: per-command size selection — COPY(1)/BIGCOPY(3), ADD(2)/BIGADD(4),
+/// MOVE(5)/BIGMOVE(6).  Small variants use u32 fields; big variants use u64 fields.
+/// Fields ≤ U32_MAX get the small variant; larger fields get the big variant.
+pub fn encode_delta_v4(
+    commands: &[PlacedCommand],
+    inplace: bool,
+    version_size: usize,
+    src_crc: &[u8; DELTA_CRC_SIZE],
+    dst_crc: &[u8; DELTA_CRC_SIZE],
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(DELTA_MAGIC_V4);
+    out.push(if inplace { DELTA_FLAG_INPLACE } else { 0 });
+    out.extend_from_slice(&(version_size as u64).to_be_bytes());
+    out.extend_from_slice(src_crc);
+    out.extend_from_slice(dst_crc);
+
+    for cmd in commands {
+        match cmd {
+            PlacedCommand::Copy { src, dst, length } => {
+                if *src <= U32_MAX && *dst <= U32_MAX && *length <= U32_MAX {
+                    out.push(DELTA_CMD_COPY);
+                    out.extend_from_slice(&(*src    as u32).to_be_bytes());
+                    out.extend_from_slice(&(*dst    as u32).to_be_bytes());
+                    out.extend_from_slice(&(*length as u32).to_be_bytes());
+                } else {
+                    out.push(DELTA_CMD_BIGCOPY);
+                    out.extend_from_slice(&(*src    as u64).to_be_bytes());
+                    out.extend_from_slice(&(*dst    as u64).to_be_bytes());
+                    out.extend_from_slice(&(*length as u64).to_be_bytes());
+                }
+            }
+            PlacedCommand::Add { dst, data } => {
+                if *dst <= U32_MAX && data.len() <= U32_MAX {
+                    out.push(DELTA_CMD_ADD);
+                    out.extend_from_slice(&(*dst        as u32).to_be_bytes());
+                    out.extend_from_slice(&(data.len()  as u32).to_be_bytes());
+                } else {
+                    out.push(DELTA_CMD_BIGADD);
+                    out.extend_from_slice(&(*dst        as u64).to_be_bytes());
+                    out.extend_from_slice(&(data.len()  as u64).to_be_bytes());
+                }
+                out.extend_from_slice(data);
+            }
+            PlacedCommand::Move { src, dst, length } => {
+                if *src <= U32_MAX && *dst <= U32_MAX && *length <= U32_MAX {
+                    out.push(DELTA_CMD_MOVE);
+                    out.extend_from_slice(&(*src    as u32).to_be_bytes());
+                    out.extend_from_slice(&(*dst    as u32).to_be_bytes());
+                    out.extend_from_slice(&(*length as u32).to_be_bytes());
+                } else {
+                    out.push(DELTA_CMD_BIGMOVE);
+                    out.extend_from_slice(&(*src    as u64).to_be_bytes());
+                    out.extend_from_slice(&(*dst    as u64).to_be_bytes());
+                    out.extend_from_slice(&(*length as u64).to_be_bytes());
+                }
+            }
+        }
+    }
+
+    out.push(DELTA_CMD_END);
+    out
+}
+
+// ── Decoding ─────────────────────────────────────────────────────────────────
+
+/// Decode a binary delta (DLT\x03 or DLT\x04).
 ///
 /// Returns (commands, inplace, version_size, src_crc, dst_crc).
 /// CRC validation is the caller's responsibility.
 pub fn decode_delta(
     data: &[u8],
 ) -> Result<(Vec<PlacedCommand>, bool, usize, [u8; DELTA_CRC_SIZE], [u8; DELTA_CRC_SIZE]), DeltaError> {
-    if data.len() < DELTA_HEADER_SIZE || &data[..DELTA_MAGIC.len()] != DELTA_MAGIC {
+    if data.len() < 4 {
         return Err(DeltaError::InvalidFormat("not a delta file".into()));
     }
+    match &data[..4] {
+        m if m == DELTA_MAGIC    => decode_v3(data),
+        m if m == DELTA_MAGIC_V4 => decode_v4(data),
+        _ => Err(DeltaError::InvalidFormat("not a delta file".into())),
+    }
+}
 
-    let inplace = data[DELTA_MAGIC.len()] & DELTA_FLAG_INPLACE != 0;
-    let version_size = u32::from_be_bytes([
-        data[DELTA_MAGIC.len() + 1],
-        data[DELTA_MAGIC.len() + 2],
-        data[DELTA_MAGIC.len() + 3],
-        data[DELTA_MAGIC.len() + 4],
-    ]) as usize;
-
-    let crc_offset = DELTA_MAGIC.len() + 1 + DELTA_U32_SIZE;
+fn decode_v3(
+    data: &[u8],
+) -> Result<(Vec<PlacedCommand>, bool, usize, [u8; DELTA_CRC_SIZE], [u8; DELTA_CRC_SIZE]), DeltaError> {
+    if data.len() < DELTA_HEADER_SIZE {
+        return Err(DeltaError::InvalidFormat("not a delta file".into()));
+    }
+    let inplace = data[4] & DELTA_FLAG_INPLACE != 0;
+    let version_size = u32::from_be_bytes([data[5], data[6], data[7], data[8]]) as usize;
+    let crc_offset = 9; // 4 + 1 + 4
     let mut src_crc = [0u8; DELTA_CRC_SIZE];
     let mut dst_crc = [0u8; DELTA_CRC_SIZE];
     src_crc.copy_from_slice(&data[crc_offset..crc_offset + DELTA_CRC_SIZE]);
     dst_crc.copy_from_slice(&data[crc_offset + DELTA_CRC_SIZE..crc_offset + 2 * DELTA_CRC_SIZE]);
+    decode_commands(data, DELTA_HEADER_SIZE, version_size, inplace, src_crc, dst_crc, false)
+}
 
-    let mut pos = DELTA_HEADER_SIZE;
+fn decode_v4(
+    data: &[u8],
+) -> Result<(Vec<PlacedCommand>, bool, usize, [u8; DELTA_CRC_SIZE], [u8; DELTA_CRC_SIZE]), DeltaError> {
+    if data.len() < DELTA_HEADER_SIZE_V4 {
+        return Err(DeltaError::InvalidFormat("not a delta file".into()));
+    }
+    let inplace = data[4] & DELTA_FLAG_INPLACE != 0;
+    let version_size = u64::from_be_bytes([
+        data[5], data[6], data[7],  data[8],
+        data[9], data[10], data[11], data[12],
+    ]) as usize;
+    let crc_offset = 13; // 4 + 1 + 8
+    let mut src_crc = [0u8; DELTA_CRC_SIZE];
+    let mut dst_crc = [0u8; DELTA_CRC_SIZE];
+    src_crc.copy_from_slice(&data[crc_offset..crc_offset + DELTA_CRC_SIZE]);
+    dst_crc.copy_from_slice(&data[crc_offset + DELTA_CRC_SIZE..crc_offset + 2 * DELTA_CRC_SIZE]);
+    decode_commands(data, DELTA_HEADER_SIZE_V4, version_size, inplace, src_crc, dst_crc, true)
+}
+
+#[inline]
+fn read_u32(data: &[u8], pos: usize) -> usize {
+    u32::from_be_bytes([data[pos], data[pos+1], data[pos+2], data[pos+3]]) as usize
+}
+
+#[inline]
+fn read_u64(data: &[u8], pos: usize) -> usize {
+    u64::from_be_bytes([
+        data[pos], data[pos+1], data[pos+2], data[pos+3],
+        data[pos+4], data[pos+5], data[pos+6], data[pos+7],
+    ]) as usize
+}
+
+fn decode_commands(
+    data: &[u8],
+    start: usize,
+    version_size: usize,
+    inplace: bool,
+    src_crc: [u8; DELTA_CRC_SIZE],
+    dst_crc: [u8; DELTA_CRC_SIZE],
+    allow_big: bool,
+) -> Result<(Vec<PlacedCommand>, bool, usize, [u8; DELTA_CRC_SIZE], [u8; DELTA_CRC_SIZE]), DeltaError> {
+    let mut pos = start;
     let mut commands = Vec::new();
     let mut saw_end = false;
 
@@ -96,18 +225,9 @@ pub fn decode_delta(
                 if pos + DELTA_COPY_PAYLOAD > data.len() {
                     return Err(DeltaError::UnexpectedEof);
                 }
-                let src = u32::from_be_bytes([
-                    data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
-                ]) as usize;
-                pos += DELTA_U32_SIZE;
-                let dst = u32::from_be_bytes([
-                    data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
-                ]) as usize;
-                pos += DELTA_U32_SIZE;
-                let length = u32::from_be_bytes([
-                    data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
-                ]) as usize;
-                pos += DELTA_U32_SIZE;
+                let src    = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                let dst    = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                let length = read_u32(data, pos); pos += DELTA_U32_SIZE;
                 validate_placed_range(dst, length, version_size, "copy")?;
                 commands.push(PlacedCommand::Copy { src, dst, length });
             }
@@ -116,23 +236,61 @@ pub fn decode_delta(
                 if pos + DELTA_ADD_HEADER > data.len() {
                     return Err(DeltaError::UnexpectedEof);
                 }
-                let dst = u32::from_be_bytes([
-                    data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
-                ]) as usize;
-                pos += DELTA_U32_SIZE;
-                let length = u32::from_be_bytes([
-                    data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
-                ]) as usize;
-                pos += DELTA_U32_SIZE;
+                let dst    = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                let length = read_u32(data, pos); pos += DELTA_U32_SIZE;
                 if pos + length > data.len() {
                     return Err(DeltaError::UnexpectedEof);
                 }
                 validate_placed_range(dst, length, version_size, "add")?;
-                commands.push(PlacedCommand::Add {
-                    dst,
-                    data: data[pos..pos + length].to_vec(),
-                });
+                commands.push(PlacedCommand::Add { dst, data: data[pos..pos + length].to_vec() });
                 pos += length;
+            }
+
+            DELTA_CMD_BIGCOPY if allow_big => {
+                if pos + DELTA_BIGCOPY_PAYLOAD > data.len() {
+                    return Err(DeltaError::UnexpectedEof);
+                }
+                let src    = read_u64(data, pos); pos += DELTA_U64_SIZE;
+                let dst    = read_u64(data, pos); pos += DELTA_U64_SIZE;
+                let length = read_u64(data, pos); pos += DELTA_U64_SIZE;
+                validate_placed_range(dst, length, version_size, "bigcopy")?;
+                commands.push(PlacedCommand::Copy { src, dst, length });
+            }
+
+            DELTA_CMD_BIGADD if allow_big => {
+                if pos + DELTA_BIGADD_HEADER > data.len() {
+                    return Err(DeltaError::UnexpectedEof);
+                }
+                let dst    = read_u64(data, pos); pos += DELTA_U64_SIZE;
+                let length = read_u64(data, pos); pos += DELTA_U64_SIZE;
+                if pos + length > data.len() {
+                    return Err(DeltaError::UnexpectedEof);
+                }
+                validate_placed_range(dst, length, version_size, "bigadd")?;
+                commands.push(PlacedCommand::Add { dst, data: data[pos..pos + length].to_vec() });
+                pos += length;
+            }
+
+            DELTA_CMD_MOVE if allow_big => {
+                if pos + DELTA_COPY_PAYLOAD > data.len() {
+                    return Err(DeltaError::UnexpectedEof);
+                }
+                let src    = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                let dst    = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                let length = read_u32(data, pos); pos += DELTA_U32_SIZE;
+                validate_placed_range(dst, length, version_size, "move")?;
+                commands.push(PlacedCommand::Move { src, dst, length });
+            }
+
+            DELTA_CMD_BIGMOVE if allow_big => {
+                if pos + DELTA_BIGCOPY_PAYLOAD > data.len() {
+                    return Err(DeltaError::UnexpectedEof);
+                }
+                let src    = read_u64(data, pos); pos += DELTA_U64_SIZE;
+                let dst    = read_u64(data, pos); pos += DELTA_U64_SIZE;
+                let length = read_u64(data, pos); pos += DELTA_U64_SIZE;
+                validate_placed_range(dst, length, version_size, "bigmove")?;
+                commands.push(PlacedCommand::Move { src, dst, length });
             }
 
             _ => {
@@ -154,11 +312,16 @@ pub fn decode_delta(
     Ok((commands, inplace, version_size, src_crc, dst_crc))
 }
 
-/// Check if binary data is an in-place delta.
+// ── Utilities ─────────────────────────────────────────────────────────────────
+
+/// Check if binary data is an in-place delta (DLT\x03 or DLT\x04).
 pub fn is_inplace_delta(data: &[u8]) -> bool {
-    data.len() >= DELTA_MAGIC.len() + 1
-        && &data[..DELTA_MAGIC.len()] == DELTA_MAGIC
-        && data[DELTA_MAGIC.len()] & DELTA_FLAG_INPLACE != 0
+    if data.len() < 5 {
+        return false;
+    }
+    let magic = &data[..4];
+    (magic == DELTA_MAGIC || magic == DELTA_MAGIC_V4)
+        && data[4] & DELTA_FLAG_INPLACE != 0
 }
 
 fn validate_placed_range(dst: usize, length: usize, version_size: usize, kind: &str) -> Result<(), DeltaError> {

@@ -18,16 +18,25 @@ pub const MAX_TABLE_SIZE: usize = 1_073_741_827; // prime near 2^30; default cei
                                                   // Section 8: correcting uses checkpointing to fit any |R|
 pub const HASH_BASE: u64 = 263;
 pub const HASH_MOD: u64 = (1 << 61) - 1; // Mersenne prime 2^61-1
-pub const DELTA_MAGIC: &[u8; 4] = b"DLT\x03";
-pub const DELTA_FLAG_INPLACE: u8 = 0x01;
-pub const DELTA_CMD_END: u8 = 0;
-pub const DELTA_CMD_COPY: u8 = 1;
-pub const DELTA_CMD_ADD: u8 = 2;
-pub const DELTA_CRC_SIZE: usize = 8;
-pub const DELTA_HEADER_SIZE: usize = 25; // magic(4) + flags(1) + version_size(4) + src_crc(8) + dst_crc(8)
-pub const DELTA_U32_SIZE: usize = 4;
-pub const DELTA_COPY_PAYLOAD: usize = 12; // src(4) + dst(4) + len(4)
-pub const DELTA_ADD_HEADER: usize = 8; // dst(4) + len(4)
+pub const DELTA_MAGIC:    &[u8; 4] = b"DLT\x03";
+pub const DELTA_MAGIC_V4: &[u8; 4] = b"DLT\x04";
+pub const DELTA_FLAG_INPLACE:  u8 = 0x01;
+pub const DELTA_CMD_END:     u8 = 0;
+pub const DELTA_CMD_COPY:    u8 = 1;
+pub const DELTA_CMD_ADD:     u8 = 2;
+pub const DELTA_CMD_BIGCOPY: u8 = 3;
+pub const DELTA_CMD_BIGADD:  u8 = 4;
+pub const DELTA_CMD_MOVE:    u8 = 5;
+pub const DELTA_CMD_BIGMOVE: u8 = 6;
+pub const DELTA_CRC_SIZE:        usize = 8;
+pub const DELTA_U32_SIZE:        usize = 4;
+pub const DELTA_U64_SIZE:        usize = 8;
+pub const DELTA_HEADER_SIZE:     usize = 25; // magic(4)+flags(1)+version_size(4)+crcs(16)
+pub const DELTA_HEADER_SIZE_V4:  usize = 29; // magic(4)+flags(1)+version_size(8)+crcs(16)
+pub const DELTA_COPY_PAYLOAD:    usize = 12; // src(4)+dst(4)+len(4)
+pub const DELTA_ADD_HEADER:      usize = 8;  // dst(4)+len(4)
+pub const DELTA_BIGCOPY_PAYLOAD: usize = 24; // src(8)+dst(8)+len(8)
+pub const DELTA_BIGADD_HEADER:   usize = 16; // dst(8)+len(8)
 pub const DELTA_BUF_CAP: usize = 256;
 
 // ============================================================================
@@ -65,10 +74,15 @@ impl fmt::Display for Command {
 /// For standard deltas, `Copy::src` is an offset into the reference and
 /// `Copy::dst` is the write position in the output.  For in-place deltas,
 /// both refer to positions in the shared working buffer.
+///
+/// `Move` copies from already-written output buffer at `src` to `dst`.
+/// Constraint: `src + length <= dst` (only previously written bytes).
+/// DLT\x04 only; always safe for in-place (no CRWI cycle possible).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlacedCommand {
     Copy { src: usize, dst: usize, length: usize },
-    Add { dst: usize, data: Vec<u8> },
+    Add  { dst: usize, data: Vec<u8> },
+    Move { src: usize, dst: usize, length: usize },
 }
 
 impl fmt::Display for PlacedCommand {
@@ -83,6 +97,9 @@ impl fmt::Display for PlacedCommand {
                 } else {
                     write!(f, "ADD(dst={}, len={})", dst, data.len())
                 }
+            }
+            PlacedCommand::Move { src, dst, length } => {
+                write!(f, "MOVE(src={}, dst={}, len={})", src, dst, length)
             }
         }
     }
@@ -233,6 +250,11 @@ pub fn placed_summary(commands: &[PlacedCommand]) -> DeltaSummary {
             PlacedCommand::Add { data, .. } => {
                 num_adds += 1;
                 add_bytes += data.len();
+            }
+            PlacedCommand::Move { length, .. } => {
+                // Move is counted with copies: it copies from already-written output.
+                num_copies += 1;
+                copy_bytes += length;
             }
         }
     }

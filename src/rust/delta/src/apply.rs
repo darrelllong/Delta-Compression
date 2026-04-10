@@ -39,16 +39,26 @@ pub fn place_commands(commands: Vec<Command>) -> Vec<PlacedCommand> {
 /// order, then each PlacedCopy/PlacedAdd is converted to Copy/Add.
 ///
 /// Consumes the placed list so that `Add` payloads are moved, not copied.
+///
+/// # Panics
+///
+/// Panics if any `PlacedCommand::Move` is present.  Move commands are DLT\x04-only
+/// and have no algorithm-level equivalent; they must not be unplaced.
 pub fn unplace_commands(mut placed: Vec<PlacedCommand>) -> Vec<Command> {
     placed.sort_by_key(|c| match c {
         PlacedCommand::Copy { dst, .. } => *dst,
-        PlacedCommand::Add { dst, .. } => *dst,
+        PlacedCommand::Add  { dst, .. } => *dst,
+        PlacedCommand::Move { dst, .. } => *dst,
     });
     placed
         .into_iter()
         .map(|c| match c {
             PlacedCommand::Copy { src, length, .. } => Command::Copy { offset: src, length },
-            PlacedCommand::Add { data, .. } => Command::Add { data }, // move, no clone
+            PlacedCommand::Add  { data, .. }        => Command::Add { data },
+            PlacedCommand::Move { .. } => panic!(
+                "unplace_commands: Move has no algorithm-level equivalent; \
+                 Move commands are DLT\\x04-only and cannot be unplaced"
+            ),
         })
         .collect()
 }
@@ -63,16 +73,21 @@ pub fn apply_placed_to(r: &[u8], commands: &[PlacedCommand], out: &mut [u8]) -> 
             PlacedCommand::Copy { src, dst, length } => {
                 out[*dst..*dst + *length].copy_from_slice(&r[*src..*src + *length]);
                 let end = dst + length;
-                if end > max_written {
-                    max_written = end;
-                }
+                if end > max_written { max_written = end; }
             }
             PlacedCommand::Add { dst, data } => {
                 out[*dst..*dst + data.len()].copy_from_slice(data);
                 let end = dst + data.len();
-                if end > max_written {
-                    max_written = end;
-                }
+                if end > max_written { max_written = end; }
+            }
+            PlacedCommand::Move { src, dst, length } => {
+                // LZ77-style self-referential copy: reads from already-written output.
+                // Encoder invariant: this command must appear after all commands that
+                // write [src, src+length); validate_placed_commands checks src+length<=dst
+                // (necessary) but not execution ordering (encoder's responsibility).
+                out.copy_within(*src..*src + *length, *dst);
+                let end = dst + length;
+                if end > max_written { max_written = end; }
             }
         }
     }
@@ -90,6 +105,10 @@ pub fn apply_placed_inplace_to(commands: &[PlacedCommand], buf: &mut [u8]) {
             }
             PlacedCommand::Add { dst, data } => {
                 buf[*dst..*dst + data.len()].copy_from_slice(data);
+            }
+            PlacedCommand::Move { src, dst, length } => {
+                // Same as Copy in the inplace buffer; copy_within handles overlaps.
+                buf.copy_within(*src..*src + *length, *dst);
             }
         }
     }
@@ -115,6 +134,20 @@ pub fn validate_placed_commands(
             }
             PlacedCommand::Add { dst, data } => {
                 validate_apply_range(*dst, data.len(), version_size, "add destination")?;
+            }
+            PlacedCommand::Move { src, dst, length } => {
+                validate_apply_range(*dst, *length, version_size, "move destination")?;
+                validate_apply_range(*src, *length, version_size, "move source")?;
+                // Necessary geometric constraint: src + length <= dst.
+                // This prevents self-referential loops but does NOT prove the src
+                // region has been written; that is the encoder's responsibility
+                // (Move commands must follow all commands writing their src region).
+                if src + length > *dst {
+                    return Err(DeltaError::InvalidFormat(format!(
+                        "move src+len ({}+{}) > dst ({}): source not yet written",
+                        src, length, dst
+                    )));
+                }
             }
         }
     }
