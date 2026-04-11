@@ -12,7 +12,6 @@ DELTA=./delta
 PASS=0
 FAIL=0
 TESTS=0
-SKIP=0
 
 # Locate other implementations for cross-language tests
 RUST_DELTA=""
@@ -124,7 +123,7 @@ if [ -x "./test_overflow" ]; then
         check_fails "C encode rejects $case overflow" ./test_overflow "$case"
     done
 else
-    echo "  (test_overflow binary not found, skipping)"
+    echo "  (test_overflow: not found)"
 fi
 
 echo ""
@@ -263,7 +262,7 @@ if [ -n "$RUST_DELTA" ]; then
         check "Rust encode -> C inplace -> Rust decode ($algo)" diff -q "$ver" "$r_out"
     done
 else
-    SKIP=$((SKIP + 6)); echo "  SKIP  Rust inplace (binary not found)"
+    echo "  (Rust inplace: not found)"
 fi
 
 if [ -n "$GO_DELTA" ]; then
@@ -285,7 +284,7 @@ if [ -n "$GO_DELTA" ]; then
         check "Go encode -> C inplace -> Go decode ($algo)" diff -q "$ver" "$go_out"
     done
 else
-    SKIP=$((SKIP + 6)); echo "  SKIP  Go inplace (binary not found)"
+    echo "  (Go inplace: not found)"
 fi
 
 if [ -n "$KT_DELTA" ]; then
@@ -307,7 +306,7 @@ if [ -n "$KT_DELTA" ]; then
         check "Kotlin encode -> C inplace -> Kotlin decode ($algo)" diff -q "$ver" "$kt_out"
     done
 else
-    SKIP=$((SKIP + 6)); echo "  SKIP  Kotlin inplace (JAR not found)"
+    echo "  (Kotlin inplace: not found)"
 fi
 
 if [ -n "$SCALA_DELTA" ]; then
@@ -329,7 +328,7 @@ if [ -n "$SCALA_DELTA" ]; then
         check "Scala encode -> C inplace -> Scala decode ($algo)" diff -q "$ver" "$sc_out"
     done
 else
-    SKIP=$((SKIP + 6)); echo "  SKIP  Scala inplace (JAR not found)"
+    echo "  (Scala inplace: not found)"
 fi
 
 echo ""
@@ -344,7 +343,7 @@ if [ -n "$RUST_DELTA" ]; then
         check "C vs Rust $algo byte-identical" diff -q "$c_d" "$r_d"
     done
 else
-    SKIP=$((SKIP + 3)); echo "  SKIP  C vs Rust byte-identical (binary not found)"
+    echo "  (C vs Rust byte-identical: not found)"
 fi
 
 if [ -n "$CPP_DELTA" ]; then
@@ -356,7 +355,7 @@ if [ -n "$CPP_DELTA" ]; then
         check "C vs C++ $algo byte-identical" diff -q "$c_d" "$cpp_d"
     done
 else
-    SKIP=$((SKIP + 3)); echo "  SKIP  C vs C++ byte-identical (binary not found)"
+    echo "  (C vs C++ byte-identical: not found)"
 fi
 
 if [ -n "$PY_DELTA" ]; then
@@ -368,7 +367,7 @@ if [ -n "$PY_DELTA" ]; then
         check "C vs Python $algo byte-identical" diff -q "$c_d" "$py_d"
     done
 else
-    SKIP=$((SKIP + 3)); echo "  SKIP  C vs Python byte-identical (python3 not found)"
+    echo "  (C vs Python byte-identical: not found)"
 fi
 
 if [ -n "$JAVA_DELTA" ]; then
@@ -380,7 +379,7 @@ if [ -n "$JAVA_DELTA" ]; then
         check "C vs Java $algo byte-identical" diff -q "$c_d" "$j_d"
     done
 else
-    SKIP=$((SKIP + 3)); echo "  SKIP  C vs Java byte-identical (classes not found)"
+    echo "  (C vs Java byte-identical: not found)"
 fi
 
 if [ -n "$KT_DELTA" ]; then
@@ -392,7 +391,7 @@ if [ -n "$KT_DELTA" ]; then
         check "C vs Kotlin $algo byte-identical" diff -q "$c_d" "$kt_d"
     done
 else
-    SKIP=$((SKIP + 3)); echo "  SKIP  C vs Kotlin byte-identical (JAR not found)"
+    echo "  (C vs Kotlin byte-identical: not found)"
 fi
 
 if [ -n "$SCALA_DELTA" ]; then
@@ -404,7 +403,7 @@ if [ -n "$SCALA_DELTA" ]; then
         check "C vs Scala $algo byte-identical" diff -q "$c_d" "$sc_d"
     done
 else
-    SKIP=$((SKIP + 3)); echo "  SKIP  C vs Scala byte-identical (JAR not found)"
+    echo "  (C vs Scala byte-identical: not found)"
 fi
 
 if [ -n "$GO_DELTA" ]; then
@@ -416,7 +415,7 @@ if [ -n "$GO_DELTA" ]; then
         check "C vs Go $algo byte-identical" diff -q "$c_d" "$go_d"
     done
 else
-    SKIP=$((SKIP + 3)); echo "  SKIP  C vs Go byte-identical (binary not found)"
+    echo "  (C vs Go byte-identical: not found)"
 fi
 
 echo ""
@@ -465,7 +464,7 @@ if [ -n "$RUST_DELTA" ]; then
     $RUST_DELTA inplace "$magic_ref" "$d_enc" "$d_ip" > /dev/null 2>&1
     check_v4_header "Rust" "$d_ip" "inplace"
 else
-    SKIP=$((SKIP + 2)); echo "  SKIP  DLT\\x04 header Rust (binary not found)"
+    echo "  (DLT\\x04 header Rust: not found)"
 fi
 
 if [ -n "$GO_DELTA" ]; then
@@ -475,7 +474,7 @@ if [ -n "$GO_DELTA" ]; then
     $GO_DELTA inplace "$magic_ref" "$d_enc" "$d_ip" > /dev/null 2>&1
     check_v4_header "Go" "$d_ip" "inplace"
 else
-    SKIP=$((SKIP + 2)); echo "  SKIP  DLT\\x04 header Go (binary not found)"
+    echo "  (DLT\\x04 header Go: not found)"
 fi
 
 if [ -n "$CPP_DELTA" ]; then
@@ -485,7 +484,7 @@ if [ -n "$CPP_DELTA" ]; then
     $CPP_DELTA inplace "$magic_ref" "$d_enc" "$d_ip" > /dev/null 2>&1
     check_v4_header "C++" "$d_ip" "inplace"
 else
-    SKIP=$((SKIP + 2)); echo "  SKIP  DLT\\x04 header C++ (binary not found)"
+    echo "  (DLT\\x04 header C++: not found)"
 fi
 
 if [ -n "$JAVA_DELTA" ]; then
@@ -495,7 +494,7 @@ if [ -n "$JAVA_DELTA" ]; then
     $JAVA_DELTA inplace "$magic_ref" "$d_enc" "$d_ip" > /dev/null 2>&1
     check_v4_header "Java" "$d_ip" "inplace"
 else
-    SKIP=$((SKIP + 2)); echo "  SKIP  DLT\\x04 header Java (classes not found)"
+    echo "  (DLT\\x04 header Java: not found)"
 fi
 
 if [ -n "$KT_DELTA" ]; then
@@ -505,7 +504,7 @@ if [ -n "$KT_DELTA" ]; then
     $KT_DELTA inplace "$magic_ref" "$d_enc" "$d_ip" > /dev/null 2>&1
     check_v4_header "Kotlin" "$d_ip" "inplace"
 else
-    SKIP=$((SKIP + 2)); echo "  SKIP  DLT\\x04 header Kotlin (JAR not found)"
+    echo "  (DLT\\x04 header Kotlin: not found)"
 fi
 
 if [ -n "$SCALA_DELTA" ]; then
@@ -515,7 +514,7 @@ if [ -n "$SCALA_DELTA" ]; then
     $SCALA_DELTA inplace "$magic_ref" "$d_enc" "$d_ip" > /dev/null 2>&1
     check_v4_header "Scala" "$d_ip" "inplace"
 else
-    SKIP=$((SKIP + 2)); echo "  SKIP  DLT\\x04 header Scala (JAR not found)"
+    echo "  (DLT\\x04 header Scala: not found)"
 fi
 
 if [ -n "$PY_DELTA" ]; then
@@ -525,7 +524,7 @@ if [ -n "$PY_DELTA" ]; then
     $PY_DELTA inplace "$magic_ref" "$d_enc" "$d_ip" > /dev/null 2>&1
     check_v4_header "Python" "$d_ip" "inplace"
 else
-    SKIP=$((SKIP + 2)); echo "  SKIP  DLT\\x04 header Python (not found)"
+    echo "  (DLT\\x04 header Python: not found)"
 fi
 
 echo ""
@@ -548,7 +547,7 @@ if [ -n "$RUST_DELTA" ] && [ -n "$GO_DELTA" ]; then
     $DELTA decode "$xip_ref" "$xip_ip" "$xip_out" > /dev/null 2>&1
     check "Rust encode -> Go inplace -> C decode" diff -q "$xip_ver" "$xip_out"
 else
-    SKIP=$((SKIP + 1)); echo "  SKIP  Rust->Go->C inplace chain (binary not found)"
+    echo "  (Rust->Go->C inplace chain: not found)"
 fi
 
 # Go encode → C++ inplace → Rust decode
@@ -560,7 +559,7 @@ if [ -n "$GO_DELTA" ] && [ -n "$CPP_DELTA" ] && [ -n "$RUST_DELTA" ]; then
     $RUST_DELTA decode "$xip_ref" "$xip_ip" "$xip_out" > /dev/null 2>&1
     check "Go encode -> C++ inplace -> Rust decode" diff -q "$xip_ver" "$xip_out"
 else
-    SKIP=$((SKIP + 1)); echo "  SKIP  Go->C++->Rust inplace chain (binary not found)"
+    echo "  (Go->C++->Rust inplace chain: not found)"
 fi
 
 # Java encode → Kotlin inplace → Scala decode
@@ -572,7 +571,7 @@ if [ -n "$JAVA_DELTA" ] && [ -n "$KT_DELTA" ] && [ -n "$SCALA_DELTA" ]; then
     $SCALA_DELTA decode "$xip_ref" "$xip_ip" "$xip_out" > /dev/null 2>&1
     check "Java encode -> Kotlin inplace -> Scala decode" diff -q "$xip_ver" "$xip_out"
 else
-    SKIP=$((SKIP + 1)); echo "  SKIP  Java->Kotlin->Scala inplace chain (binary not found)"
+    echo "  (Java->Kotlin->Scala inplace chain: not found)"
 fi
 
 # C++ encode → Scala inplace → Kotlin decode
@@ -584,7 +583,7 @@ if [ -n "$CPP_DELTA" ] && [ -n "$SCALA_DELTA" ] && [ -n "$KT_DELTA" ]; then
     $KT_DELTA decode "$xip_ref" "$xip_ip" "$xip_out" > /dev/null 2>&1
     check "C++ encode -> Scala inplace -> Kotlin decode" diff -q "$xip_ver" "$xip_out"
 else
-    SKIP=$((SKIP + 1)); echo "  SKIP  C++->Scala->Kotlin inplace chain (binary not found)"
+    echo "  (C++->Scala->Kotlin inplace chain: not found)"
 fi
 
 # C encode → Python inplace → Rust decode
@@ -596,7 +595,7 @@ if [ -n "$PY_DELTA" ] && [ -n "$RUST_DELTA" ]; then
     $RUST_DELTA decode "$xip_ref" "$xip_ip" "$xip_out" > /dev/null 2>&1
     check "C encode -> Python inplace -> Rust decode" diff -q "$xip_ver" "$xip_out"
 else
-    SKIP=$((SKIP + 1)); echo "  SKIP  C->Python->Rust inplace chain (binary not found)"
+    echo "  (C->Python->Rust inplace chain: not found)"
 fi
 
 # Python encode → Go inplace → Java decode
@@ -608,7 +607,7 @@ if [ -n "$PY_DELTA" ] && [ -n "$GO_DELTA" ] && [ -n "$JAVA_DELTA" ]; then
     $JAVA_DELTA decode "$xip_ref" "$xip_ip" "$xip_out" > /dev/null 2>&1
     check "Python encode -> Go inplace -> Java decode" diff -q "$xip_ver" "$xip_out"
 else
-    SKIP=$((SKIP + 1)); echo "  SKIP  Python->Go->Java inplace chain (binary not found)"
+    echo "  (Python->Go->Java inplace chain: not found)"
 fi
 
 echo ""
@@ -630,7 +629,7 @@ if [ -n "$RUST_DELTA" ]; then
         check "Rust encode -> C decode ($algo)" diff -q "$ver" "$c_out"
     done
 else
-    SKIP=$((SKIP + 6)); echo "  SKIP  Rust cross-decode (binary not found)"
+    echo "  (Rust cross-decode: not found)"
 fi
 
 if [ -n "$JAVA_DELTA" ]; then
@@ -649,7 +648,7 @@ if [ -n "$JAVA_DELTA" ]; then
         check "Java encode -> C decode ($algo)" diff -q "$ver" "$c_out"
     done
 else
-    SKIP=$((SKIP + 6)); echo "  SKIP  Java cross-decode (classes not found)"
+    echo "  (Java cross-decode: not found)"
 fi
 
 if [ -n "$KT_DELTA" ]; then
@@ -668,7 +667,7 @@ if [ -n "$KT_DELTA" ]; then
         check "Kotlin encode -> C decode ($algo)" diff -q "$ver" "$c_out"
     done
 else
-    SKIP=$((SKIP + 6)); echo "  SKIP  Kotlin cross-decode (JAR not found)"
+    echo "  (Kotlin cross-decode: not found)"
 fi
 
 if [ -n "$SCALA_DELTA" ]; then
@@ -687,7 +686,7 @@ if [ -n "$SCALA_DELTA" ]; then
         check "Scala encode -> C decode ($algo)" diff -q "$ver" "$c_out"
     done
 else
-    SKIP=$((SKIP + 6)); echo "  SKIP  Scala cross-decode (JAR not found)"
+    echo "  (Scala cross-decode: not found)"
 fi
 
 if [ -n "$GO_DELTA" ]; then
@@ -706,7 +705,7 @@ if [ -n "$GO_DELTA" ]; then
         check "Go encode -> C decode ($algo)" diff -q "$ver" "$c_out"
     done
 else
-    SKIP=$((SKIP + 6)); echo "  SKIP  Go cross-decode (binary not found)"
+    echo "  (Go cross-decode: not found)"
 fi
 
 # ── Real-data cross-language validation ──────────────────────────────────────
@@ -779,7 +778,7 @@ if $have_sh; then
             check "Shakespeare C encode -> Rust decode ($algo)" diff -q "$sh_ver" "$out"
         done
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  Shakespeare C->Rust (binary not found)"
+        echo "  (Shakespeare C->Rust: not found)"
     fi
     if [ -n "$GO_DELTA" ]; then
         for algo in greedy onepass correcting; do
@@ -790,7 +789,7 @@ if $have_sh; then
             check "Shakespeare C encode -> Go decode ($algo)" diff -q "$sh_ver" "$out"
         done
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  Shakespeare C->Go (binary not found)"
+        echo "  (Shakespeare C->Go: not found)"
     fi
     if [ -n "$CPP_DELTA" ]; then
         for algo in greedy onepass correcting; do
@@ -801,7 +800,7 @@ if $have_sh; then
             check "Shakespeare C encode -> C++ decode ($algo)" diff -q "$sh_ver" "$out"
         done
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  Shakespeare C->C++ (binary not found)"
+        echo "  (Shakespeare C->C++: not found)"
     fi
     if [ -n "$JAVA_DELTA" ]; then
         for algo in greedy onepass correcting; do
@@ -812,7 +811,7 @@ if $have_sh; then
             check "Shakespeare C encode -> Java decode ($algo)" diff -q "$sh_ver" "$out"
         done
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  Shakespeare C->Java (classes not found)"
+        echo "  (Shakespeare C->Java: not found)"
     fi
     if [ -n "$KT_DELTA" ]; then
         for algo in greedy onepass correcting; do
@@ -823,7 +822,7 @@ if $have_sh; then
             check "Shakespeare C encode -> Kotlin decode ($algo)" diff -q "$sh_ver" "$out"
         done
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  Shakespeare C->Kotlin (JAR not found)"
+        echo "  (Shakespeare C->Kotlin: not found)"
     fi
     if [ -n "$SCALA_DELTA" ]; then
         for algo in greedy onepass correcting; do
@@ -834,7 +833,7 @@ if $have_sh; then
             check "Shakespeare C encode -> Scala decode ($algo)" diff -q "$sh_ver" "$out"
         done
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  Shakespeare C->Scala (JAR not found)"
+        echo "  (Shakespeare C->Scala: not found)"
     fi
 
     # Each non-C language encodes; C decodes.
@@ -847,7 +846,7 @@ if $have_sh; then
             check "Shakespeare Rust encode -> C decode ($algo)" diff -q "$sh_ver" "$out"
         done
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  Shakespeare Rust->C (binary not found)"
+        echo "  (Shakespeare Rust->C: not found)"
     fi
     if [ -n "$GO_DELTA" ]; then
         for algo in greedy onepass correcting; do
@@ -858,7 +857,7 @@ if $have_sh; then
             check "Shakespeare Go encode -> C decode ($algo)" diff -q "$sh_ver" "$out"
         done
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  Shakespeare Go->C (binary not found)"
+        echo "  (Shakespeare Go->C: not found)"
     fi
     if [ -n "$CPP_DELTA" ]; then
         for algo in greedy onepass correcting; do
@@ -869,7 +868,7 @@ if $have_sh; then
             check "Shakespeare C++ encode -> C decode ($algo)" diff -q "$sh_ver" "$out"
         done
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  Shakespeare C++->C (binary not found)"
+        echo "  (Shakespeare C++->C: not found)"
     fi
     if [ -n "$JAVA_DELTA" ]; then
         for algo in greedy onepass correcting; do
@@ -880,7 +879,7 @@ if $have_sh; then
             check "Shakespeare Java encode -> C decode ($algo)" diff -q "$sh_ver" "$out"
         done
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  Shakespeare Java->C (classes not found)"
+        echo "  (Shakespeare Java->C: not found)"
     fi
     if [ -n "$KT_DELTA" ]; then
         for algo in greedy onepass correcting; do
@@ -891,7 +890,7 @@ if $have_sh; then
             check "Shakespeare Kotlin encode -> C decode ($algo)" diff -q "$sh_ver" "$out"
         done
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  Shakespeare Kotlin->C (JAR not found)"
+        echo "  (Shakespeare Kotlin->C: not found)"
     fi
     if [ -n "$SCALA_DELTA" ]; then
         for algo in greedy onepass correcting; do
@@ -902,7 +901,7 @@ if $have_sh; then
             check "Shakespeare Scala encode -> C decode ($algo)" diff -q "$sh_ver" "$out"
         done
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  Shakespeare Scala->C (JAR not found)"
+        echo "  (Shakespeare Scala->C: not found)"
     fi
 
     # Non-C cross-language pairs (ring topology, catches shared encoder/decoder bugs).
@@ -962,7 +961,7 @@ if $have_sh; then
     fi
 else
     # Count skipped tests: 12 star pairs + 6 ring pairs = 18 language pairs × 3 algos
-    SKIP=$((SKIP + 54)); echo "  SKIP  Shakespeare tests (python3 not found)"
+    echo "  (Shakespeare tests: not found)"
 fi
 
 # ── DLT\x03 legacy decode regression ─────────────────────────────────────────
@@ -1076,46 +1075,46 @@ if $have_v3; then
     if [ -n "$RUST_DELTA" ]; then
         run_v3_tests Rust    $RUST_DELTA decode
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  DLT\\x03 Rust (binary not found)"
+        echo "  (DLT\\x03 Rust: not found)"
     fi
 
     if [ -n "$GO_DELTA" ]; then
         run_v3_tests Go      $GO_DELTA decode
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  DLT\\x03 Go (binary not found)"
+        echo "  (DLT\\x03 Go: not found)"
     fi
 
     if [ -n "$CPP_DELTA" ]; then
         run_v3_tests "C++"   $CPP_DELTA decode
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  DLT\\x03 C++ (binary not found)"
+        echo "  (DLT\\x03 C++: not found)"
     fi
 
     if [ -n "$JAVA_DELTA" ]; then
         run_v3_tests Java    $JAVA_DELTA decode
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  DLT\\x03 Java (classes not found)"
+        echo "  (DLT\\x03 Java: not found)"
     fi
 
     if [ -n "$KT_DELTA" ]; then
         run_v3_tests Kotlin  $KT_DELTA decode
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  DLT\\x03 Kotlin (JAR not found)"
+        echo "  (DLT\\x03 Kotlin: not found)"
     fi
 
     if [ -n "$SCALA_DELTA" ]; then
         run_v3_tests Scala   $SCALA_DELTA decode
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  DLT\\x03 Scala (JAR not found)"
+        echo "  (DLT\\x03 Scala: not found)"
     fi
 
     if [ -n "$PY_DELTA" ]; then
         run_v3_tests Python  $PY_DELTA decode
     else
-        SKIP=$((SKIP + 3)); echo "  SKIP  DLT\\x03 Python (not found)"
+        echo "  (DLT\\x03 Python: not found)"
     fi
 else
-    SKIP=$((SKIP + 24)); echo "  SKIP  DLT\\x03 legacy tests (python3 not found)"
+    echo "  (DLT\\x03 legacy tests: not found)"
 fi
 
 # ── DLT\x04 cross-language decode ────────────────────────────────────────────
@@ -1256,40 +1255,40 @@ if $have_v4; then
     if [ -n "$RUST_DELTA" ]; then
         run_v4_tests Rust    $RUST_DELTA decode
     else
-        SKIP=$((SKIP + 6)); echo "  SKIP  DLT\\x04 Rust (binary not found)"
+        echo "  (DLT\\x04 Rust: not found)"
     fi
 
     if [ -n "$GO_DELTA" ]; then
         run_v4_tests Go      $GO_DELTA decode
     else
-        SKIP=$((SKIP + 6)); echo "  SKIP  DLT\\x04 Go (binary not found)"
+        echo "  (DLT\\x04 Go: not found)"
     fi
 
     if [ -n "$CPP_DELTA" ]; then
         run_v4_tests "C++"   $CPP_DELTA decode
     else
-        SKIP=$((SKIP + 6)); echo "  SKIP  DLT\\x04 C++ (binary not found)"
+        echo "  (DLT\\x04 C++: not found)"
     fi
 
     if [ -n "$JAVA_DELTA" ]; then
         run_v4_tests Java    $JAVA_DELTA decode
     else
-        SKIP=$((SKIP + 6)); echo "  SKIP  DLT\\x04 Java (classes not found)"
+        echo "  (DLT\\x04 Java: not found)"
     fi
 
     if [ -n "$KT_DELTA" ]; then
         run_v4_tests Kotlin  $KT_DELTA decode
     else
-        SKIP=$((SKIP + 6)); echo "  SKIP  DLT\\x04 Kotlin (JAR not found)"
+        echo "  (DLT\\x04 Kotlin: not found)"
     fi
 
     if [ -n "$SCALA_DELTA" ]; then
         run_v4_tests Scala   $SCALA_DELTA decode
     else
-        SKIP=$((SKIP + 6)); echo "  SKIP  DLT\\x04 Scala (JAR not found)"
+        echo "  (DLT\\x04 Scala: not found)"
     fi
 else
-    SKIP=$((SKIP + 42)); echo "  SKIP  DLT\\x04 tests (python3 not found)"
+    echo "  (DLT\\x04 tests: not found)"
 fi
 
 echo ""
@@ -1374,7 +1373,7 @@ if $have_crc_neg; then
         $RUST_DELTA decode "$crc_ref" "$crc_bad_dst" "$out_dst2" --ignore-hash 2>/dev/null
         check "--ignore-hash bypasses dst_crc (Rust)"   diff -q "$crc_ver" "$out_dst2"
     else
-        SKIP=$((SKIP + 4)); echo "  SKIP  CRC mismatch Rust (binary not found)"
+        echo "  (CRC mismatch Rust: not found)"
     fi
 
     if [ -n "$GO_DELTA" ]; then
@@ -1386,7 +1385,7 @@ if $have_crc_neg; then
         $GO_DELTA decode "$crc_ref" "$crc_bad_dst" "$out_dst2" --ignore-hash 2>/dev/null
         check "--ignore-hash bypasses dst_crc (Go)"     diff -q "$crc_ver" "$out_dst2"
     else
-        SKIP=$((SKIP + 4)); echo "  SKIP  CRC mismatch Go (binary not found)"
+        echo "  (CRC mismatch Go: not found)"
     fi
 
     if [ -n "$CPP_DELTA" ]; then
@@ -1398,7 +1397,7 @@ if $have_crc_neg; then
         $CPP_DELTA decode "$crc_ref" "$crc_bad_dst" "$out_dst2" --ignore-hash 2>/dev/null
         check "--ignore-hash bypasses dst_crc (C++)"    diff -q "$crc_ver" "$out_dst2"
     else
-        SKIP=$((SKIP + 4)); echo "  SKIP  CRC mismatch C++ (binary not found)"
+        echo "  (CRC mismatch C++: not found)"
     fi
 
     if [ -n "$JAVA_DELTA" ]; then
@@ -1410,7 +1409,7 @@ if $have_crc_neg; then
         $JAVA_DELTA decode "$crc_ref" "$crc_bad_dst" "$out_dst2" --ignore-hash 2>/dev/null
         check "--ignore-hash bypasses dst_crc (Java)"   diff -q "$crc_ver" "$out_dst2"
     else
-        SKIP=$((SKIP + 4)); echo "  SKIP  CRC mismatch Java (classes not found)"
+        echo "  (CRC mismatch Java: not found)"
     fi
 
     if [ -n "$KT_DELTA" ]; then
@@ -1422,7 +1421,7 @@ if $have_crc_neg; then
         $KT_DELTA decode "$crc_ref" "$crc_bad_dst" "$out_dst2" --ignore-hash 2>/dev/null
         check "--ignore-hash bypasses dst_crc (Kotlin)" diff -q "$crc_ver" "$out_dst2"
     else
-        SKIP=$((SKIP + 4)); echo "  SKIP  CRC mismatch Kotlin (JAR not found)"
+        echo "  (CRC mismatch Kotlin: not found)"
     fi
 
     if [ -n "$SCALA_DELTA" ]; then
@@ -1434,7 +1433,7 @@ if $have_crc_neg; then
         $SCALA_DELTA decode "$crc_ref" "$crc_bad_dst" "$out_dst2" --ignore-hash 2>/dev/null
         check "--ignore-hash bypasses dst_crc (Scala)"  diff -q "$crc_ver" "$out_dst2"
     else
-        SKIP=$((SKIP + 4)); echo "  SKIP  CRC mismatch Scala (JAR not found)"
+        echo "  (CRC mismatch Scala: not found)"
     fi
 
     if [ -n "$PY_DELTA" ]; then
@@ -1446,10 +1445,10 @@ if $have_crc_neg; then
         $PY_DELTA decode "$crc_ref" "$crc_bad_dst" "$out_dst2" --ignore-hash 2>/dev/null
         check "--ignore-hash bypasses dst_crc (Python)" diff -q "$crc_ver" "$out_dst2"
     else
-        SKIP=$((SKIP + 4)); echo "  SKIP  CRC mismatch Python (not found)"
+        echo "  (CRC mismatch Python: not found)"
     fi
 else
-    SKIP=$((SKIP + 32)); echo "  SKIP  CRC mismatch tests (python3 not found)"
+    echo "  (CRC mismatch tests: not found)"
 fi
 
 echo ""
@@ -1502,7 +1501,7 @@ if [ -n "$GO_DELTA" ]; then
     $GO_DELTA decode "$ref" "$large_ip_go" "$large_ip_go_out"
     check "Go --inplace --large roundtrip" diff -q "$ver" "$large_ip_go_out"
 else
-    SKIP=$((SKIP + 4)); echo "  SKIP  Go --large tests (binary not found)"
+    echo "  (Go --large tests: not found)"
 fi
 
 # Rust
@@ -1519,7 +1518,7 @@ if [ -n "$RUST_DELTA" ]; then
     $RUST_DELTA decode "$ref" "$large_ip_rs" "$large_ip_rs_out"
     check "Rust --inplace --large roundtrip" diff -q "$ver" "$large_ip_rs_out"
 else
-    SKIP=$((SKIP + 4)); echo "  SKIP  Rust --large tests (binary not found)"
+    echo "  (Rust --large tests: not found)"
 fi
 
 # C++
@@ -1536,7 +1535,7 @@ if [ -n "$CPP_DELTA" ]; then
     $CPP_DELTA decode "$ref" "$large_ip_cpp" "$large_ip_cpp_out"
     check "C++ --inplace --large roundtrip" diff -q "$ver" "$large_ip_cpp_out"
 else
-    SKIP=$((SKIP + 4)); echo "  SKIP  C++ --large tests (binary not found)"
+    echo "  (C++ --large tests: not found)"
 fi
 
 # Python
@@ -1553,7 +1552,7 @@ if [ -n "$PY_DELTA" ]; then
     $PY_DELTA decode "$ref" "$large_ip_py" "$large_ip_py_out"
     check "Python --inplace --large roundtrip" diff -q "$ver" "$large_ip_py_out"
 else
-    SKIP=$((SKIP + 4)); echo "  SKIP  Python --large tests (not found)"
+    echo "  (Python --large tests: not found)"
 fi
 
 # Java
@@ -1570,7 +1569,7 @@ if [ -n "$JAVA_DELTA" ]; then
     $JAVA_DELTA decode "$ref" "$large_ip_java" "$large_ip_java_out"
     check "Java --inplace --large roundtrip" diff -q "$ver" "$large_ip_java_out"
 else
-    SKIP=$((SKIP + 4)); echo "  SKIP  Java --large tests (not found)"
+    echo "  (Java --large tests: not found)"
 fi
 
 # Kotlin
@@ -1587,7 +1586,7 @@ if [ -n "$KT_DELTA" ]; then
     $KT_DELTA decode "$ref" "$large_ip_kt" "$large_ip_kt_out"
     check "Kotlin --inplace --large roundtrip" diff -q "$ver" "$large_ip_kt_out"
 else
-    SKIP=$((SKIP + 4)); echo "  SKIP  Kotlin --large tests (JAR not found)"
+    echo "  (Kotlin --large tests: not found)"
 fi
 
 # Scala
@@ -1604,7 +1603,7 @@ if [ -n "$SCALA_DELTA" ]; then
     $SCALA_DELTA decode "$ref" "$large_ip_sc" "$large_ip_sc_out"
     check "Scala --inplace --large roundtrip" diff -q "$ver" "$large_ip_sc_out"
 else
-    SKIP=$((SKIP + 4)); echo "  SKIP  Scala --large tests (JAR not found)"
+    echo "  (Scala --large tests: not found)"
 fi
 
 echo ""
@@ -1620,7 +1619,7 @@ if [ -n "$GO_DELTA" ]; then
     $GO_DELTA decode "$ref" "$large_ip_c" "$xl_ip_go_out"
     check "--large inplace: C encode → Go decode" diff -q "$ver" "$xl_ip_go_out"
 else
-    SKIP=$((SKIP + 2)); echo "  SKIP  --large C→Go (Go binary not found)"
+    echo "  (--large C→Go: not found)"
 fi
 
 # Go --large → Rust decode
@@ -1629,7 +1628,7 @@ if [ -n "$GO_DELTA" ] && [ -n "$RUST_DELTA" ]; then
     $RUST_DELTA decode "$ref" "$large_go" "$xl_rs_out"
     check "--large: Go encode → Rust decode" diff -q "$ver" "$xl_rs_out"
 else
-    SKIP=$((SKIP + 1)); echo "  SKIP  --large Go→Rust (binary not found)"
+    echo "  (--large Go→Rust: not found)"
 fi
 
 # Rust --large → C++ decode
@@ -1638,7 +1637,7 @@ if [ -n "$RUST_DELTA" ] && [ -n "$CPP_DELTA" ]; then
     $CPP_DELTA decode "$ref" "$large_rs" "$xl_cpp_out"
     check "--large: Rust encode → C++ decode" diff -q "$ver" "$xl_cpp_out"
 else
-    SKIP=$((SKIP + 1)); echo "  SKIP  --large Rust→C++ (binary not found)"
+    echo "  (--large Rust→C++: not found)"
 fi
 
 # Java --large → Kotlin decode
@@ -1647,7 +1646,7 @@ if [ -n "$JAVA_DELTA" ] && [ -n "$KT_DELTA" ]; then
     $KT_DELTA decode "$ref" "$large_java" "$xl_kt_out"
     check "--large: Java encode → Kotlin decode" diff -q "$ver" "$xl_kt_out"
 else
-    SKIP=$((SKIP + 1)); echo "  SKIP  --large Java→Kotlin (binary not found)"
+    echo "  (--large Java→Kotlin: not found)"
 fi
 
 # Scala --large → Java decode
@@ -1656,7 +1655,7 @@ if [ -n "$SCALA_DELTA" ] && [ -n "$JAVA_DELTA" ]; then
     $JAVA_DELTA decode "$ref" "$large_sc" "$xl_java_out"
     check "--large: Scala encode → Java decode" diff -q "$ver" "$xl_java_out"
 else
-    SKIP=$((SKIP + 1)); echo "  SKIP  --large Scala→Java (binary not found)"
+    echo "  (--large Scala→Java: not found)"
 fi
 
 # Python --large → C decode
@@ -1665,12 +1664,12 @@ if [ -n "$PY_DELTA" ]; then
     $DELTA decode "$ref" "$large_py" "$xl_c_out"
     check "--large: Python encode → C decode" diff -q "$ver" "$xl_c_out"
 else
-    SKIP=$((SKIP + 1)); echo "  SKIP  --large Python→C (not found)"
+    echo "  (--large Python→C: not found)"
 fi
 
 echo ""
 echo "========================================"
-printf "Results: %d passed, %d failed, %d skipped (of %d)\n" "$PASS" "$FAIL" "$SKIP" "$TESTS"
+printf "Results: %d passed, %d failed\n" "$PASS" "$FAIL"
 echo "========================================"
 
 if [ "$FAIL" -gt 0 ]; then
