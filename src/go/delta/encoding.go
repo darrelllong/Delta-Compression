@@ -119,10 +119,11 @@ func EncodeDelta(commands []PlacedCommand, inplace bool, versionSize int,
 // EncodeDeltaLarge serializes placed commands to the DLT\x04 binary delta format.
 //
 // Per-command size selection: COPY/BIGCOPY, ADD/BIGADD, MOVE/BIGMOVE chosen
-// based on whether all fields fit in u32. This function is infallible: on
-// 64-bit platforms int ≤ 63 bits, which always fits in u64.
+// based on whether all fields fit in u32. When forceLarge is true, the big
+// (u64) variant is always emitted regardless of field values. This function
+// is infallible: on 64-bit platforms int ≤ 63 bits, which always fits in u64.
 func EncodeDeltaLarge(commands []PlacedCommand, inplace bool, versionSize int,
-	srcCrc, dstCrc [8]byte) []byte {
+	srcCrc, dstCrc [8]byte, forceLarge bool) []byte {
 
 	// Worst-case estimate: V4 header + BIGCOPY/BIGMOVE per cmd + END.
 	est := DeltaHeaderSizeLarge + 1
@@ -156,7 +157,7 @@ func EncodeDeltaLarge(commands []PlacedCommand, inplace bool, versionSize int,
 	for _, cmd := range commands {
 		switch c := cmd.(type) {
 		case PlacedCopy:
-			if c.Src <= maxU32 && c.DstOff <= maxU32 && c.Length <= maxU32 {
+			if !forceLarge && c.Src <= maxU32 && c.DstOff <= maxU32 && c.Length <= maxU32 {
 				out[pos] = DeltaCmdCopy; pos++
 				putU32BE(out, pos, c.Src); pos += DeltaU32Size
 				putU32BE(out, pos, c.DstOff); pos += DeltaU32Size
@@ -168,7 +169,7 @@ func EncodeDeltaLarge(commands []PlacedCommand, inplace bool, versionSize int,
 				putU64BE(out, pos, c.Length); pos += DeltaU64Size
 			}
 		case PlacedAdd:
-			if c.DstOff <= maxU32 && len(c.Data) <= maxU32 {
+			if !forceLarge && c.DstOff <= maxU32 && len(c.Data) <= maxU32 {
 				out[pos] = DeltaCmdAdd; pos++
 				putU32BE(out, pos, c.DstOff); pos += DeltaU32Size
 				putU32BE(out, pos, len(c.Data)); pos += DeltaU32Size
@@ -180,7 +181,7 @@ func EncodeDeltaLarge(commands []PlacedCommand, inplace bool, versionSize int,
 			copy(out[pos:], c.Data)
 			pos += len(c.Data)
 		case PlacedMove:
-			if c.Src <= maxU32 && c.DstOff <= maxU32 && c.Length <= maxU32 {
+			if !forceLarge && c.Src <= maxU32 && c.DstOff <= maxU32 && c.Length <= maxU32 {
 				out[pos] = DeltaCmdMove; pos++
 				putU32BE(out, pos, c.Src); pos += DeltaU32Size
 				putU32BE(out, pos, c.DstOff); pos += DeltaU32Size

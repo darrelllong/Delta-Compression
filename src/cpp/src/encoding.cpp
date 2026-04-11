@@ -137,7 +137,8 @@ std::vector<uint8_t> encode_delta_large(
     bool inplace,
     size_t version_size,
     const std::array<uint8_t, DELTA_CRC_SIZE>& src_crc,
-    const std::array<uint8_t, DELTA_CRC_SIZE>& dst_crc) {
+    const std::array<uint8_t, DELTA_CRC_SIZE>& dst_crc,
+    bool force_large) {
 
     std::vector<uint8_t> out;
     out.insert(out.end(), DELTA_MAGIC_LARGE, DELTA_MAGIC_LARGE + DELTA_MAGIC_SIZE);
@@ -148,7 +149,7 @@ std::vector<uint8_t> encode_delta_large(
 
     for (const auto& cmd : commands) {
         if (auto* c = std::get_if<PlacedCopy>(&cmd)) {
-            if (c->src <= UINT32_MAX && c->dst <= UINT32_MAX && c->length <= UINT32_MAX) {
+            if (!force_large && c->src <= UINT32_MAX && c->dst <= UINT32_MAX && c->length <= UINT32_MAX) {
                 out.push_back(DELTA_CMD_COPY);
                 write_u32_be(out, static_cast<uint32_t>(c->src));
                 write_u32_be(out, static_cast<uint32_t>(c->dst));
@@ -160,7 +161,7 @@ std::vector<uint8_t> encode_delta_large(
                 write_u64_be(out, static_cast<uint64_t>(c->length));
             }
         } else if (auto* a = std::get_if<PlacedAdd>(&cmd)) {
-            if (a->dst <= UINT32_MAX && a->data.size() <= UINT32_MAX) {
+            if (!force_large && a->dst <= UINT32_MAX && a->data.size() <= UINT32_MAX) {
                 out.push_back(DELTA_CMD_ADD);
                 write_u32_be(out, static_cast<uint32_t>(a->dst));
                 write_u32_be(out, static_cast<uint32_t>(a->data.size()));
@@ -171,7 +172,7 @@ std::vector<uint8_t> encode_delta_large(
             }
             out.insert(out.end(), a->data.begin(), a->data.end());
         } else if (auto* m = std::get_if<PlacedMove>(&cmd)) {
-            if (m->src <= UINT32_MAX && m->dst <= UINT32_MAX && m->length <= UINT32_MAX) {
+            if (!force_large && m->src <= UINT32_MAX && m->dst <= UINT32_MAX && m->length <= UINT32_MAX) {
                 out.push_back(DELTA_CMD_MOVE);
                 write_u32_be(out, static_cast<uint32_t>(m->src));
                 write_u32_be(out, static_cast<uint32_t>(m->dst));

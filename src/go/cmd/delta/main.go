@@ -59,7 +59,7 @@ func usage() {
 
 Algorithms: greedy, onepass, correcting
 Options: --seed-len N, --table-size N, --max-table N (k/M/B ok),
-         --inplace, --policy P, --verbose, --splay`)
+         --inplace, --large, --policy P, --verbose, --splay`)
 	os.Exit(1)
 }
 
@@ -143,6 +143,7 @@ func cmdEncode(args []string) error {
 
 	opts := delta.DefaultDiffOptions()
 	inplace := false
+	forceLarge := false
 	policy := delta.CyclePolicyLocalmin
 
 	i := 5
@@ -174,6 +175,8 @@ func cmdEncode(args []string) error {
 			opts.MaxTable = n
 		case "--inplace":
 			inplace = true
+		case "--large":
+			forceLarge = true
 		case "--policy":
 			if i+1 >= len(args) { return fmt.Errorf("--policy: missing value") }
 			i++
@@ -219,7 +222,7 @@ func cmdEncode(args []string) error {
 	}
 	elapsed := since(t0)
 
-	deltaBytes := delta.EncodeDeltaLarge(placed, inplace, len(v), srcCrc, dstCrc)
+	deltaBytes := delta.EncodeDeltaLarge(placed, inplace, len(v), srcCrc, dstCrc, forceLarge)
 	if err := writeFile(deltaPath, deltaBytes); err != nil {
 		return err
 	}
@@ -378,6 +381,7 @@ func cmdInplace(args []string) error {
 	deltaOutPath := args[3]
 	policy := delta.CyclePolicyLocalmin
 	policyStr := "localmin"
+	forceLargeIP := false
 
 	i := 4
 	for i < len(args) {
@@ -391,6 +395,8 @@ func cmdInplace(args []string) error {
 				return err
 			}
 			policyStr = policy.String()
+		case "--large":
+			forceLargeIP = true
 		default:
 			return fmt.Errorf("unknown inplace option: %s", args[i])
 		}
@@ -433,7 +439,7 @@ func cmdInplace(args []string) error {
 	ipPlaced := delta.MakeInplace(r, commands, policy)
 	elapsed := since(t0)
 
-	ipDelta := delta.EncodeDeltaLarge(ipPlaced, true, result.VersionSize, result.SrcCrc, result.DstCrc)
+	ipDelta := delta.EncodeDeltaLarge(ipPlaced, true, result.VersionSize, result.SrcCrc, result.DstCrc, forceLargeIP)
 	if err := writeFile(deltaOutPath, ipDelta); err != nil {
 		return err
 	}

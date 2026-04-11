@@ -77,16 +77,19 @@ fun encodeDelta(commands: List<PlacedCommand>, inplace: Boolean,
 
 /**
  * Encode placed commands to DLT\x04 format (u64 fields, Move support).
- * Kotlin/JVM Int fields always fit in u32, so COPY/ADD/MOVE variants are emitted.
+ * When forceLarge is false, Kotlin/JVM Int fields always fit in u32 so
+ * COPY/ADD/MOVE variants are emitted.  When forceLarge is true,
+ * BIGCOPY/BIGADD/BIGMOVE with u64 fields are always emitted.
  */
 fun encodeDeltaLarge(commands: List<PlacedCommand>, inplace: Boolean,
-                     versionSize: Int, srcCrc: ByteArray, dstCrc: ByteArray): ByteArray {
+                     versionSize: Int, srcCrc: ByteArray, dstCrc: ByteArray,
+                     forceLarge: Boolean = false): ByteArray {
     var est = DELTA_HEADER_SIZE_LARGE + 1
     for (cmd in commands) {
         est += when (cmd) {
-            is PlacedCommand.Copy -> 1 + DELTA_COPY_PAYLOAD
-            is PlacedCommand.Add  -> 1 + DELTA_ADD_HEADER + cmd.data.size
-            is PlacedCommand.Move -> 1 + DELTA_COPY_PAYLOAD
+            is PlacedCommand.Copy -> if (forceLarge) 1 + DELTA_BIGCOPY_PAYLOAD else 1 + DELTA_COPY_PAYLOAD
+            is PlacedCommand.Add  -> if (forceLarge) 1 + DELTA_BIGADD_HEADER + cmd.data.size else 1 + DELTA_ADD_HEADER + cmd.data.size
+            is PlacedCommand.Move -> if (forceLarge) 1 + DELTA_BIGCOPY_PAYLOAD else 1 + DELTA_COPY_PAYLOAD
         }
     }
     val out = ByteArray(est)
@@ -101,23 +104,42 @@ fun encodeDeltaLarge(commands: List<PlacedCommand>, inplace: Boolean,
     for (cmd in commands) {
         when (cmd) {
             is PlacedCommand.Copy -> {
-                // Kotlin/JVM Int ≤ Integer.MAX_VALUE ≤ UINT32_MAX; always emit COPY form
-                out[pos++] = DELTA_CMD_COPY.toByte()
-                putU32BE(out, pos, cmd.src);    pos += DELTA_U32_SIZE
-                putU32BE(out, pos, cmd.dst);    pos += DELTA_U32_SIZE
-                putU32BE(out, pos, cmd.length); pos += DELTA_U32_SIZE
+                if (forceLarge) {
+                    out[pos++] = DELTA_CMD_BIGCOPY.toByte()
+                    putU64BE(out, pos, Integer.toUnsignedLong(cmd.src));    pos += DELTA_U64_SIZE
+                    putU64BE(out, pos, Integer.toUnsignedLong(cmd.dst));    pos += DELTA_U64_SIZE
+                    putU64BE(out, pos, Integer.toUnsignedLong(cmd.length)); pos += DELTA_U64_SIZE
+                } else {
+                    out[pos++] = DELTA_CMD_COPY.toByte()
+                    putU32BE(out, pos, cmd.src);    pos += DELTA_U32_SIZE
+                    putU32BE(out, pos, cmd.dst);    pos += DELTA_U32_SIZE
+                    putU32BE(out, pos, cmd.length); pos += DELTA_U32_SIZE
+                }
             }
             is PlacedCommand.Add -> {
-                out[pos++] = DELTA_CMD_ADD.toByte()
-                putU32BE(out, pos, cmd.dst);       pos += DELTA_U32_SIZE
-                putU32BE(out, pos, cmd.data.size); pos += DELTA_U32_SIZE
-                cmd.data.copyInto(out, pos);       pos += cmd.data.size
+                if (forceLarge) {
+                    out[pos++] = DELTA_CMD_BIGADD.toByte()
+                    putU64BE(out, pos, Integer.toUnsignedLong(cmd.dst));       pos += DELTA_U64_SIZE
+                    putU64BE(out, pos, Integer.toUnsignedLong(cmd.data.size)); pos += DELTA_U64_SIZE
+                } else {
+                    out[pos++] = DELTA_CMD_ADD.toByte()
+                    putU32BE(out, pos, cmd.dst);       pos += DELTA_U32_SIZE
+                    putU32BE(out, pos, cmd.data.size); pos += DELTA_U32_SIZE
+                }
+                cmd.data.copyInto(out, pos); pos += cmd.data.size
             }
             is PlacedCommand.Move -> {
-                out[pos++] = DELTA_CMD_MOVE.toByte()
-                putU32BE(out, pos, cmd.src);    pos += DELTA_U32_SIZE
-                putU32BE(out, pos, cmd.dst);    pos += DELTA_U32_SIZE
-                putU32BE(out, pos, cmd.length); pos += DELTA_U32_SIZE
+                if (forceLarge) {
+                    out[pos++] = DELTA_CMD_BIGMOVE.toByte()
+                    putU64BE(out, pos, Integer.toUnsignedLong(cmd.src));    pos += DELTA_U64_SIZE
+                    putU64BE(out, pos, Integer.toUnsignedLong(cmd.dst));    pos += DELTA_U64_SIZE
+                    putU64BE(out, pos, Integer.toUnsignedLong(cmd.length)); pos += DELTA_U64_SIZE
+                } else {
+                    out[pos++] = DELTA_CMD_MOVE.toByte()
+                    putU32BE(out, pos, cmd.src);    pos += DELTA_U32_SIZE
+                    putU32BE(out, pos, cmd.dst);    pos += DELTA_U32_SIZE
+                    putU32BE(out, pos, cmd.length); pos += DELTA_U32_SIZE
+                }
             }
         }
     }

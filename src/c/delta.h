@@ -347,10 +347,12 @@ delta_buffer_t delta_encode(const delta_placed_commands_t *cmds,
 // Encode placed commands to DLT\x04 format.
 // Per-command size selection: COPY/BIGCOPY, ADD/BIGADD, MOVE/BIGMOVE chosen
 // by whether fields fit in u32.  MOVE commands are valid in DLT\x04 only.
+// When force_large is true the 64-bit variant is always emitted.
 delta_buffer_t delta_encode_large(const delta_placed_commands_t *cmds,
                                bool inplace, size_t version_size,
                                const uint8_t src_crc[DELTA_CRC_SIZE],
-                               const uint8_t dst_crc[DELTA_CRC_SIZE]);
+                               const uint8_t dst_crc[DELTA_CRC_SIZE],
+                               bool force_large);
 
 void           delta_buffer_init(delta_buffer_t *buf);
 void           delta_buffer_free(delta_buffer_t *buf);

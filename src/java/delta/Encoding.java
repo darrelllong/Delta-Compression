@@ -90,20 +90,22 @@ public final class Encoding {
 
     /**
      * Encode placed commands to DLT\x04 format (u64 fields, PlacedMove support).
-     * Java int fields always fit in u32, so COPY/ADD/MOVE variants are emitted.
-     * The decoder still accepts BIGCOPY/BIGADD/BIGMOVE from other implementations.
+     * When forceLarge is false, Java int fields always fit in u32 so COPY/ADD/MOVE
+     * variants are emitted.  When forceLarge is true, BIGCOPY/BIGADD/BIGMOVE with
+     * u64 fields are always emitted regardless of field values.
      */
     public static byte[] encodeDeltaLarge(List<PlacedCommand> commands,
                                           boolean inplace, int versionSize,
-                                          byte[] srcCrc, byte[] dstCrc) {
+                                          byte[] srcCrc, byte[] dstCrc,
+                                          boolean forceLarge) {
         int est = DELTA_HEADER_SIZE_LARGE + 1;
         for (PlacedCommand cmd : commands) {
             if (cmd instanceof PlacedCopy) {
-                est += 1 + DELTA_COPY_PAYLOAD;
+                est += forceLarge ? 1 + DELTA_BIGCOPY_PAYLOAD : 1 + DELTA_COPY_PAYLOAD;
             } else if (cmd instanceof PlacedAdd a) {
-                est += 1 + DELTA_ADD_HEADER + a.data().length;
+                est += (forceLarge ? 1 + DELTA_BIGADD_HEADER : 1 + DELTA_ADD_HEADER) + a.data().length;
             } else if (cmd instanceof PlacedMove) {
-                est += 1 + DELTA_COPY_PAYLOAD;
+                est += forceLarge ? 1 + DELTA_BIGCOPY_PAYLOAD : 1 + DELTA_COPY_PAYLOAD;
             }
         }
         byte[] out = new byte[est];
@@ -118,22 +120,41 @@ public final class Encoding {
 
         for (PlacedCommand cmd : commands) {
             if (cmd instanceof PlacedCopy c) {
-                // Java int ≤ Integer.MAX_VALUE ≤ UINT32_MAX; always emit COPY form
-                out[pos++] = DELTA_CMD_COPY;
-                putU32BE(out, pos, c.src());    pos += DELTA_U32_SIZE;
-                putU32BE(out, pos, c.dst());    pos += DELTA_U32_SIZE;
-                putU32BE(out, pos, c.length()); pos += DELTA_U32_SIZE;
+                if (forceLarge) {
+                    out[pos++] = DELTA_CMD_BIGCOPY;
+                    putU64BE(out, pos, Integer.toUnsignedLong(c.src()));    pos += DELTA_U64_SIZE;
+                    putU64BE(out, pos, Integer.toUnsignedLong(c.dst()));    pos += DELTA_U64_SIZE;
+                    putU64BE(out, pos, Integer.toUnsignedLong(c.length())); pos += DELTA_U64_SIZE;
+                } else {
+                    out[pos++] = DELTA_CMD_COPY;
+                    putU32BE(out, pos, c.src());    pos += DELTA_U32_SIZE;
+                    putU32BE(out, pos, c.dst());    pos += DELTA_U32_SIZE;
+                    putU32BE(out, pos, c.length()); pos += DELTA_U32_SIZE;
+                }
             } else if (cmd instanceof PlacedAdd a) {
-                out[pos++] = DELTA_CMD_ADD;
-                putU32BE(out, pos, a.dst());         pos += DELTA_U32_SIZE;
-                putU32BE(out, pos, a.data().length); pos += DELTA_U32_SIZE;
+                if (forceLarge) {
+                    out[pos++] = DELTA_CMD_BIGADD;
+                    putU64BE(out, pos, Integer.toUnsignedLong(a.dst()));          pos += DELTA_U64_SIZE;
+                    putU64BE(out, pos, Integer.toUnsignedLong(a.data().length));  pos += DELTA_U64_SIZE;
+                } else {
+                    out[pos++] = DELTA_CMD_ADD;
+                    putU32BE(out, pos, a.dst());         pos += DELTA_U32_SIZE;
+                    putU32BE(out, pos, a.data().length); pos += DELTA_U32_SIZE;
+                }
                 System.arraycopy(a.data(), 0, out, pos, a.data().length);
                 pos += a.data().length;
             } else if (cmd instanceof PlacedMove m) {
-                out[pos++] = DELTA_CMD_MOVE;
-                putU32BE(out, pos, m.src());    pos += DELTA_U32_SIZE;
-                putU32BE(out, pos, m.dst());    pos += DELTA_U32_SIZE;
-                putU32BE(out, pos, m.length()); pos += DELTA_U32_SIZE;
+                if (forceLarge) {
+                    out[pos++] = DELTA_CMD_BIGMOVE;
+                    putU64BE(out, pos, Integer.toUnsignedLong(m.src()));    pos += DELTA_U64_SIZE;
+                    putU64BE(out, pos, Integer.toUnsignedLong(m.dst()));    pos += DELTA_U64_SIZE;
+                    putU64BE(out, pos, Integer.toUnsignedLong(m.length())); pos += DELTA_U64_SIZE;
+                } else {
+                    out[pos++] = DELTA_CMD_MOVE;
+                    putU32BE(out, pos, m.src());    pos += DELTA_U32_SIZE;
+                    putU32BE(out, pos, m.dst());    pos += DELTA_U32_SIZE;
+                    putU32BE(out, pos, m.length()); pos += DELTA_U32_SIZE;
+                }
             }
         }
 

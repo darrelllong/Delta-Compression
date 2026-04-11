@@ -133,6 +133,10 @@ enum Commands {
         #[arg(long)]
         inplace: bool,
 
+        /// Force 64-bit (BIGCOPY/BIGADD/BIGMOVE) commands even for small files
+        #[arg(long)]
+        large: bool,
+
         /// Cycle-breaking policy for --inplace
         #[arg(long, value_enum, default_value_t = PolicyArg::Localmin)]
         policy: PolicyArg,
@@ -183,6 +187,10 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = PolicyArg::Localmin)]
         policy: PolicyArg,
 
+        /// Force 64-bit (BIGCOPY/BIGADD/BIGMOVE) commands even for small files
+        #[arg(long)]
+        large: bool,
+
         /// Print diagnostics (cycles broken, etc.)
         #[arg(long)]
         verbose: bool,
@@ -204,6 +212,7 @@ fn main() {
             table_size,
             max_table,
             inplace,
+            large,
             policy,
             verbose,
             splay,
@@ -247,7 +256,7 @@ fn main() {
             };
             let elapsed = t0.elapsed();
 
-            let delta_bytes = encode_delta_large(&placed, inplace, v.len(), &src_crc, &dst_crc);
+            let delta_bytes = encode_delta_large(&placed, inplace, v.len(), &src_crc, &dst_crc, large);
             fs::write(&delta_file, &delta_bytes).unwrap_or_else(|e| {
                 eprintln!("Error writing {}: {}", delta_file, e);
                 process::exit(1);
@@ -428,6 +437,7 @@ fn main() {
             delta_in,
             delta_out,
             policy,
+            large,
             verbose,
         } => {
             // Read reference and compute hash in one sequential pass.
@@ -464,7 +474,7 @@ fn main() {
             let elapsed = t0.elapsed();
 
             // Preserve the original src_crc and dst_crc from the input delta.
-            let ip_delta = encode_delta_large(&ip_placed, true, version_size, &src_crc, &dst_crc);
+            let ip_delta = encode_delta_large(&ip_placed, true, version_size, &src_crc, &dst_crc, large);
             fs::write(&delta_out, &ip_delta).unwrap_or_else(|e| {
                 eprintln!("Error writing {}: {}", delta_out, e);
                 process::exit(1);

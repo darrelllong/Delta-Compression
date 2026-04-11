@@ -157,6 +157,8 @@ int main(int argc, char** argv) {
                     "Max hash table size (k/M/B suffix: e.g. 512M, 2B)");
     bool enc_inplace = false;
     enc->add_flag("--inplace", enc_inplace, "Produce in-place delta");
+    bool enc_large = false;
+    enc->add_flag("--large", enc_large, "Force 64-bit (BIGCOPY/BIGADD) commands");
     std::string enc_policy_str = "localmin";
     enc->add_option("--policy", enc_policy_str, "Cycle policy (localmin/constant)");
     bool enc_verbose = false;
@@ -187,6 +189,8 @@ int main(int argc, char** argv) {
     inp->add_option("delta_out", inp_delta_out, "Output (in-place) delta file")->required();
     std::string inp_policy_str = "localmin";
     inp->add_option("--policy", inp_policy_str, "Cycle policy (localmin/constant)");
+    bool inp_large = false;
+    inp->add_flag("--large", inp_large, "Force 64-bit (BIGCOPY/BIGADD) commands");
 
     CLI11_PARSE(app, argc, argv);
 
@@ -237,7 +241,7 @@ int main(int argc, char** argv) {
         auto t1 = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(t1 - t0).count();
 
-        auto delta_bytes = encode_delta_large(placed, enc_inplace, v.size(), src_crc, dst_crc);
+        auto delta_bytes = encode_delta_large(placed, enc_inplace, v.size(), src_crc, dst_crc, enc_large);
         write_file(enc_delta, delta_bytes);
 
         auto stats = placed_summary(placed);
@@ -365,7 +369,7 @@ int main(int argc, char** argv) {
         auto t1 = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(t1 - t0).count();
 
-        auto ip_delta = encode_delta_large(ip_placed, true, version_size, src_crc, dst_crc);
+        auto ip_delta = encode_delta_large(ip_placed, true, version_size, src_crc, dst_crc, inp_large);
         write_file(inp_delta_out, ip_delta);
 
         auto stats = placed_summary(ip_placed);

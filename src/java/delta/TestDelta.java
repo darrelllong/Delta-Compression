@@ -1137,20 +1137,20 @@ public class TestDelta {
     static final byte[] ZH = new byte[DELTA_CRC_SIZE];
 
     static void testLargeHeaderMagic() {
-        byte[] d = Encoding.encodeDeltaLarge(List.of(), false, 0, ZH, ZH);
+        byte[] d = Encoding.encodeDeltaLarge(List.of(), false, 0, ZH, ZH, false);
         assertTrue(d[0] == 'D' && d[1] == 'L' && d[2] == 'T' && d[3] == 0x04,
             "large format magic must be DLT\\x04");
     }
 
     static void testLargeHeaderSize() {
-        byte[] d = Encoding.encodeDeltaLarge(List.of(), false, 0, ZH, ZH);
+        byte[] d = Encoding.encodeDeltaLarge(List.of(), false, 0, ZH, ZH, false);
         // 29-byte header + 1 byte END
         assertEquals(DELTA_HEADER_SIZE_LARGE + 1, d.length, "large header+END size");
     }
 
     static void testLargeVersionSizeU64() {
         int vsIn = 0x01020304;
-        byte[] d = Encoding.encodeDeltaLarge(List.of(), false, vsIn, ZH, ZH);
+        byte[] d = Encoding.encodeDeltaLarge(List.of(), false, vsIn, ZH, ZH, false);
         // version_size at bytes 5..12 (u64 BE)
         long stored = 0;
         for (int i = 0; i < 8; i++) stored = (stored << 8) | (d[5 + i] & 0xFF);
@@ -1158,8 +1158,8 @@ public class TestDelta {
     }
 
     static void testLargeInplaceFlag() {
-        byte[] di = Encoding.encodeDeltaLarge(List.of(), true,  0, ZH, ZH);
-        byte[] dn = Encoding.encodeDeltaLarge(List.of(), false, 0, ZH, ZH);
+        byte[] di = Encoding.encodeDeltaLarge(List.of(), true,  0, ZH, ZH, false);
+        byte[] dn = Encoding.encodeDeltaLarge(List.of(), false, 0, ZH, ZH, false);
         assertTrue((di[4] & DELTA_FLAG_INPLACE) != 0, "inplace flag set");
         assertTrue((dn[4] & DELTA_FLAG_INPLACE) == 0, "inplace flag not set");
     }
@@ -1167,7 +1167,7 @@ public class TestDelta {
     static void testLargeFormatCopyRoundtrip() {
         byte[] r = "hello".getBytes();
         List<PlacedCommand> cmds = List.of(new PlacedCopy(0, 0, r.length));
-        byte[] d = Encoding.encodeDeltaLarge(cmds, false, r.length, ZH, ZH);
+        byte[] d = Encoding.encodeDeltaLarge(cmds, false, r.length, ZH, ZH, false);
         // COPY command byte (not BIGCOPY) since fields fit in u32
         assertEquals(DELTA_CMD_COPY, d[DELTA_HEADER_SIZE_LARGE] & 0xFF, "COPY command byte");
         Encoding.DecodeResult res = Encoding.decodeDelta(d);
@@ -1179,7 +1179,7 @@ public class TestDelta {
     static void testLargeFormatAddRoundtrip() {
         byte[] payload = "world".getBytes();
         List<PlacedCommand> cmds = List.of(new PlacedAdd(0, payload));
-        byte[] d = Encoding.encodeDeltaLarge(cmds, false, payload.length, ZH, ZH);
+        byte[] d = Encoding.encodeDeltaLarge(cmds, false, payload.length, ZH, ZH, false);
         Encoding.DecodeResult res = Encoding.decodeDelta(d);
         byte[] out = new byte[res.versionSize()];
         Apply.applyPlacedTo(new byte[0], res.commands(), out);
@@ -1193,7 +1193,7 @@ public class TestDelta {
             new PlacedAdd(0, hello),
             new PlacedMove(0, 5, hello.length)
         );
-        byte[] d = Encoding.encodeDeltaLarge(cmds, false, 10, ZH, ZH);
+        byte[] d = Encoding.encodeDeltaLarge(cmds, false, 10, ZH, ZH, false);
         Encoding.DecodeResult res = Encoding.decodeDelta(d);
         byte[] out = new byte[res.versionSize()];
         Apply.applyPlacedTo(new byte[0], res.commands(), out);
@@ -1205,7 +1205,7 @@ public class TestDelta {
             new PlacedAdd(0, new byte[]{'x'}),
             new PlacedMove(0, 1, 1)
         );
-        byte[] d = Encoding.encodeDeltaLarge(cmds, false, 2, ZH, ZH);
+        byte[] d = Encoding.encodeDeltaLarge(cmds, false, 2, ZH, ZH, false);
         // After header(29) + ADD type(1) + ADD header(8) + data(1) = 39
         int moveOff = DELTA_HEADER_SIZE_LARGE + 1 + DELTA_ADD_HEADER + 1;
         assertEquals(DELTA_CMD_MOVE, d[moveOff] & 0xFF, "MOVE command byte");
@@ -1302,7 +1302,7 @@ public class TestDelta {
         byte[] v = "the slow brown fox".getBytes();
         List<Types.Command> cmds = Diff.diff(algo, r, v, opts(4));
         List<PlacedCommand> placed = Apply.placeCommands(cmds);
-        byte[] d = Encoding.encodeDeltaLarge(placed, false, v.length, ZH, ZH);
+        byte[] d = Encoding.encodeDeltaLarge(placed, false, v.length, ZH, ZH, false);
         Encoding.DecodeResult res = Encoding.decodeDelta(d);
         byte[] out = new byte[res.versionSize()];
         Apply.applyPlacedTo(r, res.commands(), out);

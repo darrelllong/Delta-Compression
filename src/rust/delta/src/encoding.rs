@@ -81,6 +81,7 @@ pub fn encode_delta_large(
     version_size: usize,
     src_crc: &[u8; DELTA_CRC_SIZE],
     dst_crc: &[u8; DELTA_CRC_SIZE],
+    force_large: bool,
 ) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(DELTA_MAGIC_LARGE);
@@ -92,10 +93,10 @@ pub fn encode_delta_large(
     for cmd in commands {
         match cmd {
             PlacedCommand::Copy { src, dst, length } => {
-                encode_3field(&mut out, DELTA_CMD_COPY, DELTA_CMD_BIGCOPY, *src, *dst, *length);
+                encode_3field(&mut out, DELTA_CMD_COPY, DELTA_CMD_BIGCOPY, *src, *dst, *length, force_large);
             }
             PlacedCommand::Add { dst, data } => {
-                if *dst <= U32_MAX && data.len() <= U32_MAX {
+                if !force_large && *dst <= U32_MAX && data.len() <= U32_MAX {
                     out.push(DELTA_CMD_ADD);
                     out.extend_from_slice(&(*dst       as u32).to_be_bytes());
                     out.extend_from_slice(&(data.len() as u32).to_be_bytes());
@@ -107,7 +108,7 @@ pub fn encode_delta_large(
                 out.extend_from_slice(data);
             }
             PlacedCommand::Move { src, dst, length } => {
-                encode_3field(&mut out, DELTA_CMD_MOVE, DELTA_CMD_BIGMOVE, *src, *dst, *length);
+                encode_3field(&mut out, DELTA_CMD_MOVE, DELTA_CMD_BIGMOVE, *src, *dst, *length, force_large);
             }
         }
     }
@@ -119,9 +120,10 @@ pub fn encode_delta_large(
 /// Emit a 3-field command (src, dst, length) using small (u32) or big (u64) variant.
 ///
 /// Used for COPY/BIGCOPY and MOVE/BIGMOVE, which share identical wire shapes.
+/// When force_large is true the big variant is always emitted.
 #[inline]
-fn encode_3field(out: &mut Vec<u8>, small: u8, big: u8, a: usize, b: usize, c: usize) {
-    if a <= U32_MAX && b <= U32_MAX && c <= U32_MAX {
+fn encode_3field(out: &mut Vec<u8>, small: u8, big: u8, a: usize, b: usize, c: usize, force_large: bool) {
+    if !force_large && a <= U32_MAX && b <= U32_MAX && c <= U32_MAX {
         out.push(small);
         out.extend_from_slice(&(a as u32).to_be_bytes());
         out.extend_from_slice(&(b as u32).to_be_bytes());

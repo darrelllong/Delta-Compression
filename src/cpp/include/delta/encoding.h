@@ -33,12 +33,14 @@ std::vector<uint8_t> encode_delta(
 
 /// Encode placed commands to DLT\x04 format (u64 fields, PlacedMove support).
 /// Per-command size selection: small (u32) or big (u64) fields based on value.
+/// When force_large is true the 64-bit variant is always emitted.
 std::vector<uint8_t> encode_delta_large(
     const std::vector<PlacedCommand>& commands,
     bool inplace,
     size_t version_size,
     const std::array<uint8_t, DELTA_CRC_SIZE>& src_crc,
-    const std::array<uint8_t, DELTA_CRC_SIZE>& dst_crc);
+    const std::array<uint8_t, DELTA_CRC_SIZE>& dst_crc,
+    bool force_large = false);
 
 /// Decode DLT\x03 or DLT\x04 format. Dispatches on magic bytes.
 /// Returns (commands, inplace, version_size, src_crc, dst_crc).

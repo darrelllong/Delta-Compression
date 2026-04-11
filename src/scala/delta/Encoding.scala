@@ -64,15 +64,18 @@ def encodeDelta(commands: List[PlacedCommand], inplace: Boolean,
 
 /**
  * Encode placed commands to DLT\x04 format (u64 fields, Move support).
- * Scala/JVM Int fields always fit in u32, so COPY/ADD/MOVE variants are emitted.
+ * When forceLarge is false, Scala/JVM Int fields always fit in u32 so
+ * COPY/ADD/MOVE variants are emitted.  When forceLarge is true,
+ * BIGCOPY/BIGADD/BIGMOVE with u64 fields are always emitted.
  */
 def encodeDeltaLarge(commands: List[PlacedCommand], inplace: Boolean,
-                     versionSize: Int, srcCrc: Array[Byte], dstCrc: Array[Byte]): Array[Byte] = {
+                     versionSize: Int, srcCrc: Array[Byte], dstCrc: Array[Byte],
+                     forceLarge: Boolean = false): Array[Byte] = {
   var est = deltaHeaderSizeLarge + 1
   for cmd <- commands do est += (cmd match {
-    case _: PlacedCommand.Copy => 1 + deltaCopyPayload
-    case c: PlacedCommand.Add  => 1 + deltaAddHeader + c.data.length
-    case _: PlacedCommand.Move => 1 + deltaCopyPayload
+    case _: PlacedCommand.Copy => if forceLarge then 1 + deltaBigcopyPayload else 1 + deltaCopyPayload
+    case c: PlacedCommand.Add  => if forceLarge then 1 + deltaBigaddHeader + c.data.length else 1 + deltaAddHeader + c.data.length
+    case _: PlacedCommand.Move => if forceLarge then 1 + deltaBigcopyPayload else 1 + deltaCopyPayload
   })
   val out = new Array[Byte](est)
   var pos = 0
@@ -85,21 +88,40 @@ def encodeDeltaLarge(commands: List[PlacedCommand], inplace: Boolean,
 
   for cmd <- commands do cmd match {
     case c: PlacedCommand.Copy =>
-      // Scala/JVM Int <= Integer.MAX_VALUE <= UINT32_MAX; always emit COPY form
-      out(pos) = deltaCmdCopy.toByte; pos += 1
-      putU32BE(out, pos, c.src);    pos += deltaU32Size
-      putU32BE(out, pos, c.dst);    pos += deltaU32Size
-      putU32BE(out, pos, c.length); pos += deltaU32Size
+      if forceLarge then {
+        out(pos) = deltaCmdBigcopy.toByte; pos += 1
+        putU64BE(out, pos, Integer.toUnsignedLong(c.src));    pos += deltaU64Size
+        putU64BE(out, pos, Integer.toUnsignedLong(c.dst));    pos += deltaU64Size
+        putU64BE(out, pos, Integer.toUnsignedLong(c.length)); pos += deltaU64Size
+      } else {
+        out(pos) = deltaCmdCopy.toByte; pos += 1
+        putU32BE(out, pos, c.src);    pos += deltaU32Size
+        putU32BE(out, pos, c.dst);    pos += deltaU32Size
+        putU32BE(out, pos, c.length); pos += deltaU32Size
+      }
     case c: PlacedCommand.Add =>
-      out(pos) = deltaCmdAdd.toByte; pos += 1
-      putU32BE(out, pos, c.dst);         pos += deltaU32Size
-      putU32BE(out, pos, c.data.length); pos += deltaU32Size
+      if forceLarge then {
+        out(pos) = deltaCmdBigadd.toByte; pos += 1
+        putU64BE(out, pos, Integer.toUnsignedLong(c.dst));         pos += deltaU64Size
+        putU64BE(out, pos, Integer.toUnsignedLong(c.data.length)); pos += deltaU64Size
+      } else {
+        out(pos) = deltaCmdAdd.toByte; pos += 1
+        putU32BE(out, pos, c.dst);         pos += deltaU32Size
+        putU32BE(out, pos, c.data.length); pos += deltaU32Size
+      }
       c.data.copyToArray(out, pos); pos += c.data.length
     case c: PlacedCommand.Move =>
-      out(pos) = deltaCmdMove.toByte; pos += 1
-      putU32BE(out, pos, c.src);    pos += deltaU32Size
-      putU32BE(out, pos, c.dst);    pos += deltaU32Size
-      putU32BE(out, pos, c.length); pos += deltaU32Size
+      if forceLarge then {
+        out(pos) = deltaCmdBigmove.toByte; pos += 1
+        putU64BE(out, pos, Integer.toUnsignedLong(c.src));    pos += deltaU64Size
+        putU64BE(out, pos, Integer.toUnsignedLong(c.dst));    pos += deltaU64Size
+        putU64BE(out, pos, Integer.toUnsignedLong(c.length)); pos += deltaU64Size
+      } else {
+        out(pos) = deltaCmdMove.toByte; pos += 1
+        putU32BE(out, pos, c.src);    pos += deltaU32Size
+        putU32BE(out, pos, c.dst);    pos += deltaU32Size
+        putU32BE(out, pos, c.length); pos += deltaU32Size
+      }
   }
 
   out(pos) = deltaCmdEnd.toByte; pos += 1

@@ -69,9 +69,10 @@ private def cmdEncode(args: Array[String]): Unit = {
   val verPath   = args(3)
   val deltaPath = args(4)
 
-  var opts    = DiffOptions()
-  var inplace = false
-  var policy  = CyclePolicy.Localmin
+  var opts       = DiffOptions()
+  var inplace    = false
+  var forceLarge = false
+  var policy     = CyclePolicy.Localmin
 
   var i = 5
   while i < args.length do {
@@ -86,6 +87,7 @@ private def cmdEncode(args: Array[String]): Unit = {
         if i + 1 >= args.length then throw new IllegalArgumentException("--max-table: missing value")
         i += 1; opts = opts.copy(maxTable = parseSizeSuffix(args(i)))
       case "--inplace"    => inplace = true
+      case "--large"      => forceLarge = true
       case "--policy" =>
         if i + 1 >= args.length then throw new IllegalArgumentException("--policy: missing value")
         i += 1; policy = parsePolicy(args(i))
@@ -108,7 +110,7 @@ private def cmdEncode(args: Array[String]): Unit = {
   val placed   = if inplace then makeInplace(r, commands, policy) else placeCommands(commands)
   val elapsed  = System.nanoTime() - t0
 
-  val deltaBytes = encodeDeltaLarge(placed, inplace, v.length, srcCrc, dstCrc)
+  val deltaBytes = encodeDeltaLarge(placed, inplace, v.length, srcCrc, dstCrc, forceLarge)
   writeFile(deltaPath, deltaBytes)
 
   val stats    = placedSummary(placed)
@@ -222,6 +224,8 @@ private def cmdInplace(args: Array[String]): Unit = {
   var policy       = CyclePolicy.Localmin
   var policyStr    = "localmin"
 
+  var forceLargeIP = false
+
   var i = 4
   while i < args.length do {
     args(i) match {
@@ -230,7 +234,8 @@ private def cmdInplace(args: Array[String]): Unit = {
         i += 1
         policy    = parsePolicy(args(i))
         policyStr = policy.toString.toLowerCase
-      case other => throw new IllegalArgumentException(s"Unknown inplace option: $other")
+      case "--large" => forceLargeIP = true
+      case other     => throw new IllegalArgumentException(s"Unknown inplace option: $other")
     }
     i += 1
   }
@@ -259,7 +264,7 @@ private def cmdInplace(args: Array[String]): Unit = {
   val ipPlaced = makeInplace(r, commands, policy)
   val elapsed  = System.nanoTime() - t0
 
-  val ipDelta = encodeDeltaLarge(ipPlaced, true, result.versionSize, result.srcCrc, result.dstCrc)
+  val ipDelta = encodeDeltaLarge(ipPlaced, true, result.versionSize, result.srcCrc, result.dstCrc, forceLargeIP)
   writeFile(deltaOutPath, ipDelta)
 
   val stats = placedSummary(ipPlaced)

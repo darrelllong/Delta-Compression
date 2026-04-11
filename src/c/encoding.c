@@ -146,7 +146,8 @@ delta_buffer_t
 delta_encode_large(const delta_placed_commands_t *cmds, bool inplace,
                 size_t version_size,
                 const uint8_t src_crc[DELTA_CRC_SIZE],
-                const uint8_t dst_crc[DELTA_CRC_SIZE])
+                const uint8_t dst_crc[DELTA_CRC_SIZE],
+                bool force_large)
 {
 	// Estimate size: V4 header + per-cmd big overhead
 	size_t est = DELTA_HEADER_SIZE_LARGE + cmds->len * 26 + 1;
@@ -173,7 +174,8 @@ delta_encode_large(const delta_placed_commands_t *cmds, bool inplace,
 	for (i = 0; i < cmds->len; i++) {
 		const delta_placed_command_t *cmd = &cmds->data[i];
 		if (cmd->tag == PCMD_COPY) {
-			if (cmd->copy.src  <= UINT32_MAX &&
+			if (!force_large &&
+			    cmd->copy.src  <= UINT32_MAX &&
 			    cmd->copy.dst  <= UINT32_MAX &&
 			    cmd->copy.length <= UINT32_MAX) {
 				*p++ = DELTA_CMD_COPY;
@@ -187,7 +189,8 @@ delta_encode_large(const delta_placed_commands_t *cmds, bool inplace,
 				write_u64_be(&p, (uint64_t)cmd->copy.length);
 			}
 		} else if (cmd->tag == PCMD_ADD) {
-			if (cmd->add.dst    <= UINT32_MAX &&
+			if (!force_large &&
+			    cmd->add.dst    <= UINT32_MAX &&
 			    cmd->add.length <= UINT32_MAX) {
 				*p++ = DELTA_CMD_ADD;
 				write_u32_be(&p, (uint32_t)cmd->add.dst);
@@ -200,7 +203,8 @@ delta_encode_large(const delta_placed_commands_t *cmds, bool inplace,
 			memcpy(p, cmd->add.data, cmd->add.length);
 			p += cmd->add.length;
 		} else { /* PCMD_MOVE */
-			if (cmd->move.src  <= UINT32_MAX &&
+			if (!force_large &&
+			    cmd->move.src  <= UINT32_MAX &&
 			    cmd->move.dst  <= UINT32_MAX &&
 			    cmd->move.length <= UINT32_MAX) {
 				*p++ = DELTA_CMD_MOVE;

@@ -84,6 +84,7 @@ public final class Delta {
 
         DiffOptions opts = new DiffOptions();
         boolean inplace = false;
+        boolean forceLarge = false;
         CyclePolicy policy = CyclePolicy.LOCALMIN;
 
         for (int i = 5; i < args.length; i++) {
@@ -101,6 +102,7 @@ public final class Delta {
                     opts.maxTable = parseSizeSuffix(args[i]);
                 }
                 case "--inplace"    -> inplace = true;
+                case "--large"      -> forceLarge = true;
                 case "--policy" -> {
                     if (++i >= args.length) throw new IllegalArgumentException("--policy: missing value");
                     policy = parsePolicy(args[i]);
@@ -128,7 +130,7 @@ public final class Delta {
             : Apply.placeCommands(commands);
         long elapsed = System.nanoTime() - t0;
 
-        byte[] deltaBytes = Encoding.encodeDeltaLarge(placed, inplace, v.length, srcCrc, dstCrc);
+        byte[] deltaBytes = Encoding.encodeDeltaLarge(placed, inplace, v.length, srcCrc, dstCrc, forceLarge);
         writeFile(deltaPath, deltaBytes);
 
         PlacedSummary stats = Apply.placedSummary(placed);
@@ -252,11 +254,15 @@ public final class Delta {
         CyclePolicy policy = CyclePolicy.LOCALMIN;
         String policyStr   = "localmin";
 
+        boolean forceLargeIP = false;
+
         for (int i = 4; i < args.length; i++) {
             if ("--policy".equals(args[i])) {
                 if (++i >= args.length) throw new IllegalArgumentException("--policy: missing value");
                 policy = parsePolicy(args[i]);
                 policyStr = policy.name().toLowerCase();
+            } else if ("--large".equals(args[i])) {
+                forceLargeIP = true;
             } else {
                 throw new IllegalArgumentException("Unknown inplace option: " + args[i]);
             }
@@ -288,7 +294,7 @@ public final class Delta {
         long elapsed = System.nanoTime() - t0;
 
         byte[] ipDelta = Encoding.encodeDeltaLarge(ipPlaced, true, result.versionSize(),
-                                                    result.srcCrc(), result.dstCrc());
+                                                    result.srcCrc(), result.dstCrc(), forceLargeIP);
         writeFile(deltaOutPath, ipDelta);
 
         PlacedSummary stats = Apply.placedSummary(ipPlaced);

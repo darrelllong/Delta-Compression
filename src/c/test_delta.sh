@@ -1453,6 +1453,222 @@ else
 fi
 
 echo ""
+echo "=== --large flag: force 64-bit BIGCOPY/BIGADD commands ==="
+
+# check_big_cmd verifies that the first command byte in a DLT\x04 delta
+# is a 64-bit variant (BIGCOPY=03, BIGADD=04, BIGMOVE=06).
+# The DLT\x04 header is 29 bytes so the first command byte is at offset 29.
+check_big_cmd() {
+    local label="$1" delta_file="$2"
+    TESTS=$((TESTS + 1))
+    local cmd_byte
+    cmd_byte=$(od -An -tx1 -j29 -N1 "$delta_file" 2>/dev/null | tr -d ' \n')
+    case "$cmd_byte" in
+        "03"|"04"|"06")
+            PASS=$((PASS + 1))
+            printf "  ok  %s\n" "$label"
+            ;;
+        *)
+            FAIL=$((FAIL + 1))
+            printf "FAIL  %s (got cmd byte: 0x%s, want 03/04/06)\n" "$label" "$cmd_byte"
+            ;;
+    esac
+}
+
+# C
+large_c="$tmpdir/large-c.delta"; large_c_out="$tmpdir/large-c.out"
+$DELTA encode greedy "$ref" "$ver" "$large_c" --large
+check_big_cmd "C --large: first cmd is BIGCOPY/BIGADD" "$large_c"
+$DELTA decode "$ref" "$large_c" "$large_c_out"
+check "C --large roundtrip" diff -q "$ver" "$large_c_out"
+
+large_ip_c="$tmpdir/large-ip-c.delta"; large_ip_c_out="$tmpdir/large-ip-c.out"
+$DELTA encode greedy "$ref" "$ver" "$large_ip_c" --inplace --large
+check_big_cmd "C --inplace --large: first cmd is BIGCOPY/BIGADD" "$large_ip_c"
+$DELTA decode "$ref" "$large_ip_c" "$large_ip_c_out"
+check "C --inplace --large roundtrip" diff -q "$ver" "$large_ip_c_out"
+
+# Go
+if [ -n "$GO_DELTA" ]; then
+    large_go="$tmpdir/large-go.delta"; large_go_out="$tmpdir/large-go.out"
+    $GO_DELTA encode greedy "$ref" "$ver" "$large_go" --large
+    check_big_cmd "Go --large: first cmd is BIGCOPY/BIGADD" "$large_go"
+    $GO_DELTA decode "$ref" "$large_go" "$large_go_out"
+    check "Go --large roundtrip" diff -q "$ver" "$large_go_out"
+
+    large_ip_go="$tmpdir/large-ip-go.delta"; large_ip_go_out="$tmpdir/large-ip-go.out"
+    $GO_DELTA encode greedy "$ref" "$ver" "$large_ip_go" --inplace --large
+    check_big_cmd "Go --inplace --large: first cmd is BIGCOPY/BIGADD" "$large_ip_go"
+    $GO_DELTA decode "$ref" "$large_ip_go" "$large_ip_go_out"
+    check "Go --inplace --large roundtrip" diff -q "$ver" "$large_ip_go_out"
+else
+    SKIP=$((SKIP + 4)); echo "  SKIP  Go --large tests (binary not found)"
+fi
+
+# Rust
+if [ -n "$RUST_DELTA" ]; then
+    large_rs="$tmpdir/large-rs.delta"; large_rs_out="$tmpdir/large-rs.out"
+    $RUST_DELTA encode greedy "$ref" "$ver" "$large_rs" --large
+    check_big_cmd "Rust --large: first cmd is BIGCOPY/BIGADD" "$large_rs"
+    $RUST_DELTA decode "$ref" "$large_rs" "$large_rs_out"
+    check "Rust --large roundtrip" diff -q "$ver" "$large_rs_out"
+
+    large_ip_rs="$tmpdir/large-ip-rs.delta"; large_ip_rs_out="$tmpdir/large-ip-rs.out"
+    $RUST_DELTA encode greedy "$ref" "$ver" "$large_ip_rs" --inplace --large
+    check_big_cmd "Rust --inplace --large: first cmd is BIGCOPY/BIGADD" "$large_ip_rs"
+    $RUST_DELTA decode "$ref" "$large_ip_rs" "$large_ip_rs_out"
+    check "Rust --inplace --large roundtrip" diff -q "$ver" "$large_ip_rs_out"
+else
+    SKIP=$((SKIP + 4)); echo "  SKIP  Rust --large tests (binary not found)"
+fi
+
+# C++
+if [ -n "$CPP_DELTA" ]; then
+    large_cpp="$tmpdir/large-cpp.delta"; large_cpp_out="$tmpdir/large-cpp.out"
+    $CPP_DELTA encode greedy "$ref" "$ver" "$large_cpp" --large
+    check_big_cmd "C++ --large: first cmd is BIGCOPY/BIGADD" "$large_cpp"
+    $CPP_DELTA decode "$ref" "$large_cpp" "$large_cpp_out"
+    check "C++ --large roundtrip" diff -q "$ver" "$large_cpp_out"
+
+    large_ip_cpp="$tmpdir/large-ip-cpp.delta"; large_ip_cpp_out="$tmpdir/large-ip-cpp.out"
+    $CPP_DELTA encode greedy "$ref" "$ver" "$large_ip_cpp" --inplace --large
+    check_big_cmd "C++ --inplace --large: first cmd is BIGCOPY/BIGADD" "$large_ip_cpp"
+    $CPP_DELTA decode "$ref" "$large_ip_cpp" "$large_ip_cpp_out"
+    check "C++ --inplace --large roundtrip" diff -q "$ver" "$large_ip_cpp_out"
+else
+    SKIP=$((SKIP + 4)); echo "  SKIP  C++ --large tests (binary not found)"
+fi
+
+# Python
+if [ -n "$PY_DELTA" ]; then
+    large_py="$tmpdir/large-py.delta"; large_py_out="$tmpdir/large-py.out"
+    $PY_DELTA encode greedy "$ref" "$ver" "$large_py" --large
+    check_big_cmd "Python --large: first cmd is BIGCOPY/BIGADD" "$large_py"
+    $PY_DELTA decode "$ref" "$large_py" "$large_py_out"
+    check "Python --large roundtrip" diff -q "$ver" "$large_py_out"
+
+    large_ip_py="$tmpdir/large-ip-py.delta"; large_ip_py_out="$tmpdir/large-ip-py.out"
+    $PY_DELTA encode greedy "$ref" "$ver" "$large_ip_py" --inplace --large
+    check_big_cmd "Python --inplace --large: first cmd is BIGCOPY/BIGADD" "$large_ip_py"
+    $PY_DELTA decode "$ref" "$large_ip_py" "$large_ip_py_out"
+    check "Python --inplace --large roundtrip" diff -q "$ver" "$large_ip_py_out"
+else
+    SKIP=$((SKIP + 4)); echo "  SKIP  Python --large tests (not found)"
+fi
+
+# Java
+if [ -n "$JAVA_DELTA" ]; then
+    large_java="$tmpdir/large-java.delta"; large_java_out="$tmpdir/large-java.out"
+    $JAVA_DELTA encode greedy "$ref" "$ver" "$large_java" --large
+    check_big_cmd "Java --large: first cmd is BIGCOPY/BIGADD" "$large_java"
+    $JAVA_DELTA decode "$ref" "$large_java" "$large_java_out"
+    check "Java --large roundtrip" diff -q "$ver" "$large_java_out"
+
+    large_ip_java="$tmpdir/large-ip-java.delta"; large_ip_java_out="$tmpdir/large-ip-java.out"
+    $JAVA_DELTA encode greedy "$ref" "$ver" "$large_ip_java" --inplace --large
+    check_big_cmd "Java --inplace --large: first cmd is BIGCOPY/BIGADD" "$large_ip_java"
+    $JAVA_DELTA decode "$ref" "$large_ip_java" "$large_ip_java_out"
+    check "Java --inplace --large roundtrip" diff -q "$ver" "$large_ip_java_out"
+else
+    SKIP=$((SKIP + 4)); echo "  SKIP  Java --large tests (not found)"
+fi
+
+# Kotlin
+if [ -n "$KT_DELTA" ]; then
+    large_kt="$tmpdir/large-kt.delta"; large_kt_out="$tmpdir/large-kt.out"
+    $KT_DELTA encode greedy "$ref" "$ver" "$large_kt" --large
+    check_big_cmd "Kotlin --large: first cmd is BIGCOPY/BIGADD" "$large_kt"
+    $KT_DELTA decode "$ref" "$large_kt" "$large_kt_out"
+    check "Kotlin --large roundtrip" diff -q "$ver" "$large_kt_out"
+
+    large_ip_kt="$tmpdir/large-ip-kt.delta"; large_ip_kt_out="$tmpdir/large-ip-kt.out"
+    $KT_DELTA encode greedy "$ref" "$ver" "$large_ip_kt" --inplace --large
+    check_big_cmd "Kotlin --inplace --large: first cmd is BIGCOPY/BIGADD" "$large_ip_kt"
+    $KT_DELTA decode "$ref" "$large_ip_kt" "$large_ip_kt_out"
+    check "Kotlin --inplace --large roundtrip" diff -q "$ver" "$large_ip_kt_out"
+else
+    SKIP=$((SKIP + 4)); echo "  SKIP  Kotlin --large tests (JAR not found)"
+fi
+
+# Scala
+if [ -n "$SCALA_DELTA" ]; then
+    large_sc="$tmpdir/large-sc.delta"; large_sc_out="$tmpdir/large-sc.out"
+    $SCALA_DELTA encode greedy "$ref" "$ver" "$large_sc" --large
+    check_big_cmd "Scala --large: first cmd is BIGCOPY/BIGADD" "$large_sc"
+    $SCALA_DELTA decode "$ref" "$large_sc" "$large_sc_out"
+    check "Scala --large roundtrip" diff -q "$ver" "$large_sc_out"
+
+    large_ip_sc="$tmpdir/large-ip-sc.delta"; large_ip_sc_out="$tmpdir/large-ip-sc.out"
+    $SCALA_DELTA encode greedy "$ref" "$ver" "$large_ip_sc" --inplace --large
+    check_big_cmd "Scala --inplace --large: first cmd is BIGCOPY/BIGADD" "$large_ip_sc"
+    $SCALA_DELTA decode "$ref" "$large_ip_sc" "$large_ip_sc_out"
+    check "Scala --inplace --large roundtrip" diff -q "$ver" "$large_ip_sc_out"
+else
+    SKIP=$((SKIP + 4)); echo "  SKIP  Scala --large tests (JAR not found)"
+fi
+
+echo ""
+echo "=== --large cross-language interop ==="
+
+# C --large → Go decode
+if [ -n "$GO_DELTA" ]; then
+    xl_go_out="$tmpdir/xl-large-c-go.out"
+    $GO_DELTA decode "$ref" "$large_c" "$xl_go_out"
+    check "--large: C encode → Go decode" diff -q "$ver" "$xl_go_out"
+
+    xl_ip_go_out="$tmpdir/xl-large-ip-c-go.out"
+    $GO_DELTA decode "$ref" "$large_ip_c" "$xl_ip_go_out"
+    check "--large inplace: C encode → Go decode" diff -q "$ver" "$xl_ip_go_out"
+else
+    SKIP=$((SKIP + 2)); echo "  SKIP  --large C→Go (Go binary not found)"
+fi
+
+# Go --large → Rust decode
+if [ -n "$GO_DELTA" ] && [ -n "$RUST_DELTA" ]; then
+    xl_rs_out="$tmpdir/xl-large-go-rs.out"
+    $RUST_DELTA decode "$ref" "$large_go" "$xl_rs_out"
+    check "--large: Go encode → Rust decode" diff -q "$ver" "$xl_rs_out"
+else
+    SKIP=$((SKIP + 1)); echo "  SKIP  --large Go→Rust (binary not found)"
+fi
+
+# Rust --large → C++ decode
+if [ -n "$RUST_DELTA" ] && [ -n "$CPP_DELTA" ]; then
+    xl_cpp_out="$tmpdir/xl-large-rs-cpp.out"
+    $CPP_DELTA decode "$ref" "$large_rs" "$xl_cpp_out"
+    check "--large: Rust encode → C++ decode" diff -q "$ver" "$xl_cpp_out"
+else
+    SKIP=$((SKIP + 1)); echo "  SKIP  --large Rust→C++ (binary not found)"
+fi
+
+# Java --large → Kotlin decode
+if [ -n "$JAVA_DELTA" ] && [ -n "$KT_DELTA" ]; then
+    xl_kt_out="$tmpdir/xl-large-java-kt.out"
+    $KT_DELTA decode "$ref" "$large_java" "$xl_kt_out"
+    check "--large: Java encode → Kotlin decode" diff -q "$ver" "$xl_kt_out"
+else
+    SKIP=$((SKIP + 1)); echo "  SKIP  --large Java→Kotlin (binary not found)"
+fi
+
+# Scala --large → Java decode
+if [ -n "$SCALA_DELTA" ] && [ -n "$JAVA_DELTA" ]; then
+    xl_java_out="$tmpdir/xl-large-sc-java.out"
+    $JAVA_DELTA decode "$ref" "$large_sc" "$xl_java_out"
+    check "--large: Scala encode → Java decode" diff -q "$ver" "$xl_java_out"
+else
+    SKIP=$((SKIP + 1)); echo "  SKIP  --large Scala→Java (binary not found)"
+fi
+
+# Python --large → C decode
+if [ -n "$PY_DELTA" ]; then
+    xl_c_out="$tmpdir/xl-large-py-c.out"
+    $DELTA decode "$ref" "$large_py" "$xl_c_out"
+    check "--large: Python encode → C decode" diff -q "$ver" "$xl_c_out"
+else
+    SKIP=$((SKIP + 1)); echo "  SKIP  --large Python→C (not found)"
+fi
+
+echo ""
 echo "========================================"
 printf "Results: %d passed, %d failed, %d skipped (of %d)\n" "$PASS" "$FAIL" "$SKIP" "$TESTS"
 echo "========================================"

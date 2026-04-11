@@ -80,6 +80,7 @@ private fun encode(args: Array<String>) {
 
     var opts   = DiffOptions()
     var inplace = false
+    var forceLarge = false
     var policy  = CyclePolicy.LOCALMIN
 
     var i = 5
@@ -98,6 +99,7 @@ private fun encode(args: Array<String>) {
                 opts = opts.copy(maxTable = parseSizeSuffix(args[++i]))
             }
             "--inplace"    -> { inplace = true }
+            "--large"      -> { forceLarge = true }
             "--policy" -> {
                 if (i + 1 >= args.size) throw IllegalArgumentException("--policy: missing value")
                 policy = parsePolicy(args[++i])
@@ -121,7 +123,7 @@ private fun encode(args: Array<String>) {
     val placed   = if (inplace) makeInplace(r, commands, policy) else placeCommands(commands)
     val elapsed  = System.nanoTime() - t0
 
-    val deltaBytes = encodeDeltaLarge(placed, inplace, v.size, srcCrc, dstCrc)
+    val deltaBytes = encodeDeltaLarge(placed, inplace, v.size, srcCrc, dstCrc, forceLarge)
     writeFile(deltaPath, deltaBytes)
 
     val stats    = placedSummary(placed)
@@ -239,6 +241,8 @@ private fun inplace(args: Array<String>) {
     var policy       = CyclePolicy.LOCALMIN
     var policyStr    = "localmin"
 
+    var forceLargeIP = false
+
     var i = 4
     while (i < args.size) {
         when (args[i]) {
@@ -247,6 +251,7 @@ private fun inplace(args: Array<String>) {
                 policy    = parsePolicy(args[++i])
                 policyStr = policy.name.lowercase()
             }
+            "--large" -> { forceLargeIP = true }
             else -> throw IllegalArgumentException("Unknown inplace option: ${args[i]}")
         }
         i++
@@ -268,7 +273,7 @@ private fun inplace(args: Array<String>) {
     val ipPlaced = makeInplace(r, commands, policy)
     val elapsed  = System.nanoTime() - t0
 
-    val ipDelta = encodeDeltaLarge(ipPlaced, true, result.versionSize, result.srcCrc, result.dstCrc)
+    val ipDelta = encodeDeltaLarge(ipPlaced, true, result.versionSize, result.srcCrc, result.dstCrc, forceLargeIP)
     writeFile(deltaOutPath, ipDelta)
 
     val stats = placedSummary(ipPlaced)

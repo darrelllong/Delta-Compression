@@ -249,12 +249,14 @@ cmd_encode(int argc, char **argv)
 	delta_flags_t flags = 0;
 	delta_cycle_policy_t policy = POLICY_LOCALMIN;
 	const char *policy_str = "localmin";
+	bool force_large = false;
 
 	static struct option long_opts[] = {
 		{"seed-len",   required_argument, NULL, 's'},
 		{"table-size", required_argument, NULL, 't'},
 		{"max-table",  required_argument, NULL, 'x'},
 		{"inplace",    no_argument,       NULL, 'i'},
+		{"large",      no_argument,       NULL, 'L'},
 		{"policy",     required_argument, NULL, 'p'},
 		{"verbose",    no_argument,       NULL, 'v'},
 		{"splay",      no_argument,       NULL, 'y'},
@@ -269,6 +271,7 @@ cmd_encode(int argc, char **argv)
 		case 't': table_size = parse_size_suffix(optarg); break;
 		case 'x': max_table  = parse_size_suffix(optarg); break;
 		case 'i': flags = delta_flag_set(flags, DELTA_OPT_INPLACE); break;
+		case 'L': force_large = true; break;
 		case 'p':
 			policy_str = optarg;
 			policy = parse_policy(optarg);
@@ -324,7 +327,8 @@ cmd_encode(int argc, char **argv)
 	double elapsed = elapsed_sec(&t0, &t1);
 
 	delta_buffer_t delta_buf = delta_encode_large(&placed, inplace,
-	                                             v_file.size, src_crc, dst_crc);
+	                                             v_file.size, src_crc, dst_crc,
+	                                             force_large);
 	write_file(delta_path, delta_buf.data, delta_buf.len);
 
 	delta_summary_t stats = delta_placed_summary(&placed);
@@ -484,6 +488,7 @@ cmd_inplace(int argc, char **argv)
 
 	delta_cycle_policy_t policy = POLICY_LOCALMIN;
 	const char *policy_str = "localmin";
+	bool force_large_ip = false;
 
 	for (int a = 5; a < argc; a++) {
 		if (strcmp(argv[a], "--policy") == 0) {
@@ -493,6 +498,8 @@ cmd_inplace(int argc, char **argv)
 			}
 			policy_str = argv[++a];
 			policy = parse_policy(policy_str);
+		} else if (strcmp(argv[a], "--large") == 0) {
+			force_large_ip = true;
 		} else {
 			fprintf(stderr, "error: unknown inplace option: %s\n", argv[a]);
 			exit(1);
@@ -528,7 +535,8 @@ cmd_inplace(int argc, char **argv)
 
 	delta_buffer_t ip_buf = delta_encode_large(&ip_placed, true,
 	                                          dr.version_size,
-	                                          dr.src_crc, dr.dst_crc);
+	                                          dr.src_crc, dr.dst_crc,
+	                                          force_large_ip);
 	write_file(delta_out_path, ip_buf.data, ip_buf.len);
 
 	delta_summary_t stats = delta_placed_summary(&ip_placed);

@@ -1056,11 +1056,13 @@ def encode_delta(commands: List[PlacedCommand], *,
 
 def encode_delta_large(commands: List[PlacedCommand], *,
                        inplace: bool = False, version_size: int,
-                       src_crc: bytes, dst_crc: bytes) -> bytes:
+                       src_crc: bytes, dst_crc: bytes,
+                       force_large: bool = False) -> bytes:
     """Encode placed commands to DLT\\x04 format (u64 fields, MOVE/BIGMOVE support).
 
     Per-command size selection: COPY/BIGCOPY, ADD/BIGADD, MOVE/BIGMOVE chosen
-    based on whether all fields fit in u32.
+    based on whether all fields fit in u32.  When force_large is True the
+    64-bit variant is always emitted regardless of field values.
     """
     out = bytearray()
     out.extend(DELTA_MAGIC_LARGE)
@@ -1071,14 +1073,14 @@ def encode_delta_large(commands: List[PlacedCommand], *,
 
     for cmd in commands:
         if isinstance(cmd, PlacedCopy):
-            if cmd.src <= _U32_MAX and cmd.dst <= _U32_MAX and cmd.length <= _U32_MAX:
+            if not force_large and cmd.src <= _U32_MAX and cmd.dst <= _U32_MAX and cmd.length <= _U32_MAX:
                 out.append(DELTA_CMD_COPY)
                 out.extend(struct.pack('>III', cmd.src, cmd.dst, cmd.length))
             else:
                 out.append(DELTA_CMD_BIGCOPY)
                 out.extend(struct.pack('>QQQ', cmd.src, cmd.dst, cmd.length))
         elif isinstance(cmd, PlacedAdd):
-            if cmd.dst <= _U32_MAX and len(cmd.data) <= _U32_MAX:
+            if not force_large and cmd.dst <= _U32_MAX and len(cmd.data) <= _U32_MAX:
                 out.append(DELTA_CMD_ADD)
                 out.extend(struct.pack('>II', cmd.dst, len(cmd.data)))
                 out.extend(cmd.data)
@@ -1087,7 +1089,7 @@ def encode_delta_large(commands: List[PlacedCommand], *,
                 out.extend(struct.pack('>QQ', cmd.dst, len(cmd.data)))
                 out.extend(cmd.data)
         elif isinstance(cmd, PlacedMove):
-            if cmd.src <= _U32_MAX and cmd.dst <= _U32_MAX and cmd.length <= _U32_MAX:
+            if not force_large and cmd.src <= _U32_MAX and cmd.dst <= _U32_MAX and cmd.length <= _U32_MAX:
                 out.append(DELTA_CMD_MOVE)
                 out.extend(struct.pack('>III', cmd.src, cmd.dst, cmd.length))
             else:
@@ -1916,7 +1918,8 @@ def cmd_encode(args):
     elapsed = time.time() - t0
 
     delta = encode_delta_large(placed, inplace=args.inplace, version_size=len(V),
-                               src_crc=src_crc, dst_crc=dst_crc)
+                               src_crc=src_crc, dst_crc=dst_crc,
+                               force_large=args.large)
     with open(args.delta, 'wb') as f:
         f.write(delta)
 
@@ -2034,7 +2037,8 @@ def cmd_inplace(args):
 
     # Preserve the original src_crc and dst_crc from the input delta.
     ip_delta = encode_delta_large(ip_placed, inplace=True, version_size=version_size,
-                                  src_crc=src_crc, dst_crc=dst_crc)
+                                  src_crc=src_crc, dst_crc=dst_crc,
+                                  force_large=args.large)
     with open(args.delta_out, 'wb') as f:
         f.write(ip_delta)
 
@@ -2066,6 +2070,8 @@ def main():
                      metavar='N', help='Max hash table size (k/M/B suffix: 512M, 2B)')
     enc.add_argument('--inplace', action='store_true',
                      help='Produce in-place reconstructible delta')
+    enc.add_argument('--large', action='store_true',
+                     help='Force 64-bit (BIGCOPY/BIGADD/BIGMOVE) commands')
     enc.add_argument('--policy', choices=['localmin', 'constant'],
                      default='localmin',
                      help='Cycle-breaking policy for --inplace (default: localmin)')
@@ -2096,6 +2102,8 @@ def main():
     inp.add_argument('--policy', choices=['localmin', 'constant'],
                      default='localmin',
                      help='Cycle-breaking policy (default: localmin)')
+    inp.add_argument('--large', action='store_true',
+                     help='Force 64-bit (BIGCOPY/BIGADD/BIGMOVE) commands')
     inp.set_defaults(func=cmd_inplace)
 
     args = ap.parse_args()
