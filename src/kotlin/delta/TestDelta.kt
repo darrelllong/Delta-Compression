@@ -794,6 +794,268 @@ fun testRealDataRoundtrip() {
     }
 }
 
+// ── DLT\x04 large format ─────────────────────────────────────────────────────
+
+fun testLargeFormatMagic() {
+    val encoded = encodeDeltaLarge(emptyList(), false, 0, ZERO_HASH, ZERO_HASH)
+    assertTrue(encoded.size >= 4, "large format must be at least 4 bytes")
+    assertTrue(encoded[0] == 'D'.code.toByte() &&
+               encoded[1] == 'L'.code.toByte() &&
+               encoded[2] == 'T'.code.toByte() &&
+               encoded[3] == 0x04.toByte(), "large format must start with DLT\\x04")
+}
+
+fun testLargeFormatHeaderSize() {
+    val encoded = encodeDeltaLarge(emptyList(), false, 0, ZERO_HASH, ZERO_HASH)
+    // 29-byte header + 1-byte END command
+    assertEquals(30L, encoded.size.toLong(), "large format header size")
+}
+
+fun testLargeFormatVersionSizeRoundtrip() {
+    for (sz in intArrayOf(0, 1, 127, 256, 65536, 1_000_000, Int.MAX_VALUE / 2)) {
+        val encoded = encodeDeltaLarge(emptyList(), false, sz, ZERO_HASH, ZERO_HASH)
+        val res = decodeDelta(encoded)
+        assertEquals(sz.toLong(), res.versionSize.toLong(), "large format version_size=$sz")
+        assertEquals(0L, res.commands.size.toLong(), "no commands at version_size=$sz")
+    }
+}
+
+fun testLargeFormatCopyRoundtrip() {
+    val placed = listOf(PlacedCommand.Copy(100, 0, 50))
+    val encoded = encodeDeltaLarge(placed, false, 50, ZERO_HASH, ZERO_HASH)
+    val res = decodeDelta(encoded)
+    assertEquals(1L, res.commands.size.toLong(), "command count")
+    val c = res.commands[0] as PlacedCommand.Copy
+    assertEquals(100L, c.src.toLong(), "copy src")
+    assertEquals(0L,   c.dst.toLong(), "copy dst")
+    assertEquals(50L,  c.length.toLong(), "copy length")
+}
+
+fun testLargeFormatAddRoundtrip() {
+    val payload = ByteArray(32) { i -> (i * 7).toByte() }
+    val placed = listOf(PlacedCommand.Add(0, payload))
+    val encoded = encodeDeltaLarge(placed, false, payload.size, ZERO_HASH, ZERO_HASH)
+    val res = decodeDelta(encoded)
+    assertEquals(1L, res.commands.size.toLong(), "command count")
+    val a = res.commands[0] as PlacedCommand.Add
+    assertEquals(0L, a.dst.toLong(), "add dst")
+    assertArrayEquals(payload, a.data, "add data")
+}
+
+fun testLargeFormatMoveRoundtrip() {
+    // MOVE: copy from already-written output; src+length <= dst
+    val placed = listOf(PlacedCommand.Move(0, 10, 5))
+    val encoded = encodeDeltaLarge(placed, false, 15, ZERO_HASH, ZERO_HASH)
+    val res = decodeDelta(encoded)
+    assertEquals(1L, res.commands.size.toLong(), "command count")
+    val m = res.commands[0] as PlacedCommand.Move
+    assertEquals(0L,  m.src.toLong(), "move src")
+    assertEquals(10L, m.dst.toLong(), "move dst")
+    assertEquals(5L,  m.length.toLong(), "move length")
+}
+
+fun testLargeFormatMoveApply() {
+    // Write known bytes to output at dst=0 via ADD, then MOVE copies them to dst=10
+    val src = ByteArray(5) { i -> (0xA0 + i).toByte() }
+    val placed = listOf(
+        PlacedCommand.Add(0, src),
+        PlacedCommand.Move(0, 10, 5)
+    )
+    val encoded = encodeDeltaLarge(placed, false, 15, ZERO_HASH, ZERO_HASH)
+    val res = decodeDelta(encoded)
+    val r = ByteArray(0)
+    val out = ByteArray(15)
+    applyPlacedTo(r, res.commands, out)
+    assertArrayEquals(src, out.copyOfRange(0, 5), "add bytes at dst=0")
+    assertArrayEquals(src, out.copyOfRange(10, 15), "move bytes at dst=10")
+}
+
+fun testLargeFormatIsInplace() {
+    val standard = encodeDeltaLarge(emptyList(), false, 0, ZERO_HASH, ZERO_HASH)
+    val inplace  = encodeDeltaLarge(emptyList(), true,  0, ZERO_HASH, ZERO_HASH)
+    assertFalse(isInplaceDelta(standard), "large standard should not be inplace")
+    assertTrue( isInplaceDelta(inplace),  "large inplace should be inplace")
+    val r1 = decodeDelta(standard); val r2 = decodeDelta(inplace)
+    assertFalse(r1.inplace, "standard decoded inplace flag")
+    assertTrue( r2.inplace, "inplace decoded inplace flag")
+}
+
+fun testLargeFormatEncoderRejectsMoveInSmall() {
+    val placed = listOf(PlacedCommand.Move(0, 10, 5))
+    var threw = false
+    try {
+        encodeDelta(placed, false, 15, ZERO_HASH, ZERO_HASH)
+    } catch (e: IllegalArgumentException) {
+        threw = true
+    }
+    assertTrue(threw, "encodeDelta must reject PlacedCommand.Move")
+}
+
+fun testLargeFormatSmallDecoderRejectsLargeCommands() {
+    // Manually craft a DLT\x03 with command byte 3 (BIGCOPY)
+    val header = encodeDelta(emptyList(), false, 0, ZERO_HASH, ZERO_HASH)
+    val bad = header.copyOf(header.size + 1)
+    // Replace END (last byte) with BIGCOPY cmd then add new END
+    bad[header.size - 1] = 3  // DELTA_CMD_BIGCOPY
+    var threw = false
+    try { decodeDelta(bad) } catch (e: IllegalArgumentException) { threw = true }
+    assertTrue(threw, "small decoder must reject BIGCOPY command")
+}
+
+fun testLargeFormatVersionSizeOverflowRejected() {
+    // Craft a DLT\x04 with version_size = Long.MAX_VALUE (too large for Int)
+    val template = encodeDeltaLarge(emptyList(), false, 0, ZERO_HASH, ZERO_HASH)
+    // Bytes 5..12 are the version_size u64; set to 2^63-1
+    val bad = template.copyOf()
+    bad[5] = 0x7F; for (i in 6..12) bad[i] = 0xFF.toByte()
+    var threw = false
+    try { decodeDelta(bad) } catch (e: IllegalArgumentException) { threw = true }
+    assertTrue(threw, "version_size > Int.MAX_VALUE must be rejected")
+}
+
+fun testLargeFormatValidateMoveRejectsOverlap() {
+    // src=0, length=10, dst=5 — src+length(10) > dst(5): ordering violation
+    val cmd = listOf(PlacedCommand.Move(0, 5, 10))
+    var threw = false
+    try { validatePlacedCommands(cmd, 100, 15, false) }
+    catch (e: IllegalArgumentException) { threw = true }
+    assertTrue(threw, "MOVE with src+length > dst must be rejected")
+}
+
+fun testLargeFormatValidateMoveAcceptsGoodCommand() {
+    // src=0, length=5, dst=10 — src+length(5) <= dst(10): valid
+    val cmd = listOf(PlacedCommand.Move(0, 10, 5))
+    validatePlacedCommands(cmd, 0, 15, false)  // must not throw
+}
+
+fun testLargeFormatUnplaceMoveThrows() {
+    val placed = listOf(PlacedCommand.Move(0, 10, 5))
+    var threw = false
+    try { unplaceCommands(placed) } catch (e: IllegalArgumentException) { threw = true }
+    assertTrue(threw, "unplaceCommands must throw on PlacedCommand.Move")
+}
+
+fun testLargeFormatPlacedSummaryCountsMoves() {
+    val commands = listOf(
+        PlacedCommand.Copy(0, 0, 10),
+        PlacedCommand.Add(10, ByteArray(5)),
+        PlacedCommand.Move(0, 15, 8)
+    )
+    val s = placedSummary(commands)
+    assertEquals(3L, s.numCommands.toLong(),      "numCommands")
+    assertEquals(2L, s.numCopies.toLong(),         "numCopies (COPY+MOVE)")
+    assertEquals(1L, s.numAdds.toLong(),           "numAdds")
+    assertEquals(18L, s.copyBytes,                 "copyBytes (10+8)")
+    assertEquals(5L,  s.addBytes,                  "addBytes")
+    assertEquals(23L, s.totalOutputBytes,           "totalOutputBytes")
+}
+
+fun testLargeFormatAllAlgorithmsRoundtrip() {
+    val r = repeatBytes(b("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), 50)
+    val v = repeatBytes(b("0123EFGHIJKLMNOPQRS456ABCDEFGHIJKL789"), 50)
+    for (algo in ALL_ALGOS) {
+        val cmds = diff(algo, r, v, opts(4))
+        val placed = placeCommands(cmds)
+        val encoded = encodeDeltaLarge(placed, false, v.size, ZERO_HASH, ZERO_HASH)
+        val res = decodeDelta(encoded)
+        val out = ByteArray(res.versionSize)
+        applyPlacedTo(r, res.commands, out)
+        assertArrayEquals(v, out, "$algo large format roundtrip")
+    }
+}
+
+fun testLargeFormatMixedCommands() {
+    // Manually construct a mix: ADD at 0, COPY from ref at 10, MOVE from output at 20
+    val addData = ByteArray(10) { i -> (i + 1).toByte() }
+    val r = ByteArray(30) { i -> (i * 2).toByte() }
+    val placed = listOf(
+        PlacedCommand.Add(0, addData),         // dst=0..9
+        PlacedCommand.Copy(0, 10, 10),         // copy r[0..9] to out[10..19]
+        PlacedCommand.Move(0, 20, 10)          // copy out[0..9] (ADD bytes) to out[20..29]
+    )
+    val encoded = encodeDeltaLarge(placed, false, 30, ZERO_HASH, ZERO_HASH)
+    val res = decodeDelta(encoded)
+    val out = ByteArray(30)
+    applyPlacedTo(r, res.commands, out)
+    assertArrayEquals(addData, out.copyOfRange(0, 10),  "ADD at 0")
+    assertArrayEquals(r.copyOfRange(0, 10), out.copyOfRange(10, 20), "COPY from ref")
+    assertArrayEquals(addData, out.copyOfRange(20, 30), "MOVE copies ADD output")
+}
+
+fun testLargeFormatBigcopySynthetic() {
+    // Hand-craft a DLT\x04 with a BIGCOPY (cmd=3, 24-byte payload) and verify decode
+    val template = encodeDeltaLarge(emptyList(), false, 50, ZERO_HASH, ZERO_HASH)
+    val out = ByteArray(template.size - 1 + 1 + DELTA_BIGCOPY_PAYLOAD + 1)
+    template.copyInto(out, 0, 0, template.size - 1)  // header without END
+    var p = template.size - 1
+    out[p++] = DELTA_CMD_BIGCOPY.toByte()
+    for (i in 0..7) out[p++] = 0               // src=0
+    for (i in 0..7) out[p++] = 0               // dst=0
+    for (i in 0..6) out[p++] = 0; out[p++] = 10 // length=10
+    out[p++] = DELTA_CMD_END.toByte()
+    val res = decodeDelta(out)
+    assertEquals(1L, res.commands.size.toLong(), "BIGCOPY command count")
+    val c = res.commands[0] as PlacedCommand.Copy
+    assertEquals(0L,  c.src.toLong(), "BIGCOPY src")
+    assertEquals(0L,  c.dst.toLong(), "BIGCOPY dst")
+    assertEquals(10L, c.length.toLong(), "BIGCOPY length")
+}
+
+fun testLargeFormatBigaddSynthetic() {
+    // Hand-craft a DLT\x04 with a BIGADD (cmd=4, 16-byte header + payload)
+    val payload = ByteArray(8) { i -> (0xCA + i).toByte() }
+    val template = encodeDeltaLarge(emptyList(), false, 8, ZERO_HASH, ZERO_HASH)
+    val out = ByteArray(template.size - 1 + 1 + DELTA_BIGADD_HEADER + payload.size + 1)
+    template.copyInto(out, 0, 0, template.size - 1)  // header without END
+    var p = template.size - 1
+    out[p++] = DELTA_CMD_BIGADD.toByte()
+    for (i in 0..7) out[p++] = 0               // dst=0 (u64)
+    for (i in 0..6) out[p++] = 0; out[p++] = payload.size.toByte() // length (u64)
+    payload.copyInto(out, p); p += payload.size
+    out[p++] = DELTA_CMD_END.toByte()
+    val res = decodeDelta(out)
+    assertEquals(1L, res.commands.size.toLong(), "BIGADD command count")
+    val a = res.commands[0] as PlacedCommand.Add
+    assertEquals(0L, a.dst.toLong(), "BIGADD dst")
+    assertArrayEquals(payload, a.data, "BIGADD payload")
+}
+
+fun testLargeFormatBigmoveSynthetic() {
+    // Hand-craft a DLT\x04 with a BIGMOVE (cmd=6, 24-byte payload)
+    // version_size=20; src=0, dst=10, length=10 — ordering satisfied
+    val template = encodeDeltaLarge(emptyList(), false, 20, ZERO_HASH, ZERO_HASH)
+    val out = ByteArray(template.size - 1 + 1 + DELTA_BIGCOPY_PAYLOAD + 1)
+    template.copyInto(out, 0, 0, template.size - 1)  // header without END
+    var p = template.size - 1
+    out[p++] = DELTA_CMD_BIGMOVE.toByte()
+    for (i in 0..7) out[p++] = 0                // src=0 (u64)
+    for (i in 0..6) out[p++] = 0; out[p++] = 10 // dst=10 (u64)
+    for (i in 0..6) out[p++] = 0; out[p++] = 10 // length=10 (u64)
+    out[p++] = DELTA_CMD_END.toByte()
+    val res = decodeDelta(out)
+    assertEquals(1L, res.commands.size.toLong(), "BIGMOVE command count")
+    val m = res.commands[0] as PlacedCommand.Move
+    assertEquals(0L,  m.src.toLong(), "BIGMOVE src")
+    assertEquals(10L, m.dst.toLong(), "BIGMOVE dst")
+    assertEquals(10L, m.length.toLong(), "BIGMOVE length")
+}
+
+fun testLargeFormatBigmoveRejectsOverlap() {
+    // BIGMOVE with src=0, dst=5, length=10: src+length(10) > dst(5) — must throw
+    val template = encodeDeltaLarge(emptyList(), false, 15, ZERO_HASH, ZERO_HASH)
+    val out = ByteArray(template.size - 1 + 1 + DELTA_BIGCOPY_PAYLOAD + 1)
+    template.copyInto(out, 0, 0, template.size - 1)
+    var p = template.size - 1
+    out[p++] = DELTA_CMD_BIGMOVE.toByte()
+    for (i in 0..7) out[p++] = 0                // src=0 (u64)
+    for (i in 0..6) out[p++] = 0; out[p++] = 5  // dst=5 (u64)
+    for (i in 0..6) out[p++] = 0; out[p++] = 10 // length=10 (u64)
+    out[p++] = DELTA_CMD_END.toByte()
+    var threw = false
+    try { decodeDelta(out) } catch (e: IllegalArgumentException) { threw = true }
+    assertTrue(threw, "BIGMOVE with src+length > dst must be rejected")
+}
+
 // ── main ──────────────────────────────────────────────────────────────────────
 
 fun main() {
@@ -874,6 +1136,29 @@ fun main() {
     check("inplace: |V|=|R| same-size swap",  ::testInplaceVersionSameSizeTight)
     check("inplace: version is 1 byte",       ::testInplaceVersionOneByteMin)
     check("seed length at boundaries",         ::testSeedLengthBoundaries)
+
+    println("\n=== DLT\\x04 large format ===")
+    check("large format magic bytes",               ::testLargeFormatMagic)
+    check("large format header size 29",            ::testLargeFormatHeaderSize)
+    check("large format version_size roundtrip",    ::testLargeFormatVersionSizeRoundtrip)
+    check("large format COPY roundtrip",            ::testLargeFormatCopyRoundtrip)
+    check("large format ADD roundtrip",             ::testLargeFormatAddRoundtrip)
+    check("large format MOVE roundtrip",            ::testLargeFormatMoveRoundtrip)
+    check("large format MOVE apply",                ::testLargeFormatMoveApply)
+    check("large format isInplace",                 ::testLargeFormatIsInplace)
+    check("encodeDelta rejects Move",               ::testLargeFormatEncoderRejectsMoveInSmall)
+    check("small decoder rejects large commands",   ::testLargeFormatSmallDecoderRejectsLargeCommands)
+    check("version_size overflow rejected",         ::testLargeFormatVersionSizeOverflowRejected)
+    check("validate MOVE rejects overlap",          ::testLargeFormatValidateMoveRejectsOverlap)
+    check("validate MOVE accepts good command",     ::testLargeFormatValidateMoveAcceptsGoodCommand)
+    check("unplaceCommands throws on Move",         ::testLargeFormatUnplaceMoveThrows)
+    check("placedSummary counts MOVE as copy",      ::testLargeFormatPlacedSummaryCountsMoves)
+    check("all algorithms large format roundtrip",  ::testLargeFormatAllAlgorithmsRoundtrip)
+    check("large format mixed COPY/ADD/MOVE",       ::testLargeFormatMixedCommands)
+    check("BIGCOPY synthetic decode",               ::testLargeFormatBigcopySynthetic)
+    check("BIGADD synthetic decode",                ::testLargeFormatBigaddSynthetic)
+    check("BIGMOVE synthetic decode",               ::testLargeFormatBigmoveSynthetic)
+    check("BIGMOVE rejects src+length > dst",       ::testLargeFormatBigmoveRejectsOverlap)
 
     println("\n========================================")
     System.out.printf("Results: %d passed, %d failed (of %d)%n", pass, fail, tests)

@@ -128,7 +128,7 @@ public final class Delta {
             : Apply.placeCommands(commands);
         long elapsed = System.nanoTime() - t0;
 
-        byte[] deltaBytes = Encoding.encodeDelta(placed, inplace, v.length, srcCrc, dstCrc);
+        byte[] deltaBytes = Encoding.encodeDeltaLarge(placed, inplace, v.length, srcCrc, dstCrc);
         writeFile(deltaPath, deltaBytes);
 
         PlacedSummary stats = Apply.placedSummary(placed);
@@ -287,8 +287,8 @@ public final class Delta {
         List<PlacedCommand> ipPlaced = Apply.makeInplace(r, commands, policy);
         long elapsed = System.nanoTime() - t0;
 
-        byte[] ipDelta = Encoding.encodeDelta(ipPlaced, true, result.versionSize(),
-                                               result.srcCrc(), result.dstCrc());
+        byte[] ipDelta = Encoding.encodeDeltaLarge(ipPlaced, true, result.versionSize(),
+                                                    result.srcCrc(), result.dstCrc());
         writeFile(deltaOutPath, ipDelta);
 
         PlacedSummary stats = Apply.placedSummary(ipPlaced);

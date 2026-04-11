@@ -1915,8 +1915,8 @@ def cmd_encode(args):
         placed = place_commands(commands)
     elapsed = time.time() - t0
 
-    delta = encode_delta(placed, inplace=args.inplace, version_size=len(V),
-                         src_crc=src_crc, dst_crc=dst_crc)
+    delta = encode_delta_large(placed, inplace=args.inplace, version_size=len(V),
+                               src_crc=src_crc, dst_crc=dst_crc)
     with open(args.delta, 'wb') as f:
         f.write(delta)
 
@@ -2033,8 +2033,8 @@ def cmd_inplace(args):
     elapsed = time.time() - t0
 
     # Preserve the original src_crc and dst_crc from the input delta.
-    ip_delta = encode_delta(ip_placed, inplace=True, version_size=version_size,
-                            src_crc=src_crc, dst_crc=dst_crc)
+    ip_delta = encode_delta_large(ip_placed, inplace=True, version_size=version_size,
+                                  src_crc=src_crc, dst_crc=dst_crc)
     with open(args.delta_out, 'wb') as f:
         f.write(ip_delta)
 

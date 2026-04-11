@@ -237,7 +237,7 @@ int main(int argc, char** argv) {
         auto t1 = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(t1 - t0).count();
 
-        auto delta_bytes = encode_delta(placed, enc_inplace, v.size(), src_crc, dst_crc);
+        auto delta_bytes = encode_delta_large(placed, enc_inplace, v.size(), src_crc, dst_crc);
         write_file(enc_delta, delta_bytes);
 
         auto stats = placed_summary(placed);
@@ -365,7 +365,7 @@ int main(int argc, char** argv) {
         auto t1 = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(t1 - t0).count();
 
-        auto ip_delta = encode_delta(ip_placed, true, version_size, src_crc, dst_crc);
+        auto ip_delta = encode_delta_large(ip_placed, true, version_size, src_crc, dst_crc);
         write_file(inp_delta_out, ip_delta);
 
         auto stats = placed_summary(ip_placed);

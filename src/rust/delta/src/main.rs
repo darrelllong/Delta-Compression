@@ -8,7 +8,7 @@ use memmap2::MmapMut;
 use delta::{
     Algorithm, CyclePolicy, DiffOptions,
     apply_placed_inplace_to, apply_placed_to, validate_placed_commands,
-    crc64_xz, decode_delta, encode_delta,
+    crc64_xz, decode_delta, encode_delta_large,
     make_inplace, place_commands, unplace_commands,
     placed_summary,
 };
@@ -247,8 +247,7 @@ fn main() {
             };
             let elapsed = t0.elapsed();
 
-            let delta_bytes = encode_delta(&placed, inplace, v.len(), &src_crc, &dst_crc)
-                .unwrap_or_else(|e| { eprintln!("Error encoding delta: {e}"); process::exit(1) });
+            let delta_bytes = encode_delta_large(&placed, inplace, v.len(), &src_crc, &dst_crc);
             fs::write(&delta_file, &delta_bytes).unwrap_or_else(|e| {
                 eprintln!("Error writing {}: {}", delta_file, e);
                 process::exit(1);
@@ -465,8 +464,7 @@ fn main() {
             let elapsed = t0.elapsed();
 
             // Preserve the original src_crc and dst_crc from the input delta.
-            let ip_delta = encode_delta(&ip_placed, true, version_size, &src_crc, &dst_crc)
-                .unwrap_or_else(|e| { eprintln!("Error encoding delta: {e}"); process::exit(1) });
+            let ip_delta = encode_delta_large(&ip_placed, true, version_size, &src_crc, &dst_crc);
             fs::write(&delta_out, &ip_delta).unwrap_or_else(|e| {
                 eprintln!("Error writing {}: {}", delta_out, e);
                 process::exit(1);

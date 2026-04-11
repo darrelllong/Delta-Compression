@@ -1,5 +1,8 @@
 package delta
 
+import scala.util.boundary
+import scala.util.boundary.break
+
 // ── Karp-Rabin rolling hash (Karp & Rabin 1987; Section 2.1.3) ────────────
 
 /** Reduce 128-bit value (hi:lo) modulo 2^61-1. */
@@ -100,21 +103,23 @@ def isPrime(n: Long): Boolean = {
   var r   = 0; while !nm1.testBit(r) do r += 1  // lowest set bit = trailing zeros
   val d   = nm1 >> r
 
-  for a <- mrWitnesses do {
-    if a >= n then return true
-    var x = BigInt(a).modPow(d, bn)
-    if x != 1 && x != nm1 then {
-      var found = false
-      var j     = 0
-      while !found && j < r - 1 do {
-        x = x.modPow(BigInt(2), bn)
-        if x == nm1 then found = true
-        j += 1
+  boundary {
+    for a <- mrWitnesses do {
+      if a >= n then break(true)
+      var x = BigInt(a).modPow(d, bn)
+      if x != 1 && x != nm1 then {
+        var found = false
+        var j     = 0
+        while !found && j < r - 1 do {
+          x = x.modPow(BigInt(2), bn)
+          if x == nm1 then found = true
+          j += 1
+        }
+        if !found then break(false)
       }
-      if !found then return false
     }
+    true
   }
-  true
 }
 
 /** Smallest prime >= n. */

@@ -16,17 +16,26 @@ val hashBase     = 263L
 val hashMod      = (1L << 61) - 1L // Mersenne prime 2^61-1
 
 // Binary delta format
-val deltaMagic       = Array[Byte]('D'.toByte, 'L'.toByte, 'T'.toByte, 0x03)
+val deltaMagic            = Array[Byte]('D'.toByte, 'L'.toByte, 'T'.toByte, 0x03)
+val deltaMagicLarge       = Array[Byte]('D'.toByte, 'L'.toByte, 'T'.toByte, 0x04)
 val deltaFlagInplace: Byte = 0x01
-val deltaCmdEnd      = 0
-val deltaCmdCopy     = 1
-val deltaCmdAdd      = 2
-val deltaCrcSize     = 8      // CRC-64/XZ digest bytes
-val deltaHeaderSize  = 25     // magic(4)+flags(1)+version_size(4)+src_crc(8)+dst_crc(8)
-val deltaU32Size     = 4
-val deltaCopyPayload = 12     // src(4) + dst(4) + len(4)
-val deltaAddHeader   = 8      // dst(4) + len(4)
-val deltaBufCap      = 256
+val deltaCmdEnd       = 0
+val deltaCmdCopy      = 1
+val deltaCmdAdd       = 2
+val deltaCmdBigcopy   = 3  // DLT\x04: COPY with u64 fields
+val deltaCmdBigadd    = 4  // DLT\x04: ADD with u64 dst/len header
+val deltaCmdMove      = 5  // DLT\x04: copy from already-written output (u32)
+val deltaCmdBigmove   = 6  // DLT\x04: MOVE with u64 fields
+val deltaCrcSize          = 8    // CRC-64/XZ digest bytes
+val deltaHeaderSize       = 25   // magic(4)+flags(1)+version_size(u32 BE)+crcs(16)
+val deltaHeaderSizeLarge  = 29   // magic(4)+flags(1)+version_size(u64 BE)+crcs(16)
+val deltaU32Size          = 4
+val deltaU64Size          = 8
+val deltaCopyPayload      = 12   // src(4)+dst(4)+len(4)
+val deltaAddHeader        = 8    // dst(4)+len(4)
+val deltaBigcopyPayload   = 24   // src(8)+dst(8)+len(8)
+val deltaBigaddHeader     = 16   // dst(8)+len(8)
+val deltaBufCap           = 256
 
 // ── Delta commands (Section 2.1.1) ─────────────────────────────────────────
 
@@ -56,6 +65,12 @@ object PlacedCommand:
   case class Copy(src: Int, dst: Int, length: Int) extends PlacedCommand
   /** Write literal bytes to dst in the output. */
   case class Add(dst: Int, data: Array[Byte]) extends PlacedCommand
+  /**
+   * Copy length bytes from src in the already-written output to dst.
+   * The encoder guarantees src+length <= dst (source fully written before it is read).
+   * Only valid in DLT\x04 format; use encodeDeltaLarge to encode Move commands.
+   */
+  case class Move(src: Int, dst: Int, length: Int) extends PlacedCommand
 
 // ── Enums ──────────────────────────────────────────────────────────────────
 

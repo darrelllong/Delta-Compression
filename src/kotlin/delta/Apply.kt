@@ -29,6 +29,7 @@ fun placeCommands(commands: List<Command>): List<PlacedCommand> {
         when (cmd) {
             is Command.Copy -> { placed.add(PlacedCommand.Copy(cmd.offset, dst, cmd.length)); dst += cmd.length }
             is Command.Add  -> { placed.add(PlacedCommand.Add(dst, cmd.data));                dst += cmd.data.size }
+            else -> error("unhandled Command type: ${cmd::class.simpleName}")
         }
     }
     return placed
@@ -49,6 +50,13 @@ fun applyPlacedTo(r: ByteArray, commands: List<PlacedCommand>, out: ByteArray): 
                 val end = cmd.dst + cmd.data.size
                 if (end > maxWritten) maxWritten = end
             }
+            is PlacedCommand.Move -> {
+                // src+length <= dst guaranteed by encoder; no overlap, copyInto is safe
+                out.copyInto(out, cmd.dst, cmd.src, cmd.src + cmd.length)
+                val end = cmd.dst + cmd.length
+                if (end > maxWritten) maxWritten = end
+            }
+            else -> error("unhandled PlacedCommand type: ${cmd::class.simpleName}")
         }
     }
     return maxWritten
@@ -60,6 +68,8 @@ fun applyPlacedInplaceTo(commands: List<PlacedCommand>, buf: ByteArray) {
         when (cmd) {
             is PlacedCommand.Copy -> buf.copyInto(buf, cmd.dst, cmd.src, cmd.src + cmd.length)
             is PlacedCommand.Add  -> cmd.data.copyInto(buf, cmd.dst)
+            is PlacedCommand.Move -> buf.copyInto(buf, cmd.dst, cmd.src, cmd.src + cmd.length)
+            else -> error("unhandled PlacedCommand type: ${cmd::class.simpleName}")
         }
     }
 }
@@ -75,6 +85,13 @@ fun validatePlacedCommands(commands: List<PlacedCommand>, referenceSize: Int,
                 validateRange(cmd.src, cmd.length, sourceLimit, "copy source")
             }
             is PlacedCommand.Add -> validateRange(cmd.dst, cmd.data.size, versionSize, "add destination")
+            is PlacedCommand.Move -> {
+                if (cmd.src < 0) throw IllegalArgumentException("move src out of range")
+                validateRange(cmd.dst, cmd.length, versionSize, "move destination")
+                if (cmd.src.toLong() + cmd.length.toLong() > cmd.dst.toLong())
+                    throw IllegalArgumentException("move src+length > dst: ordering constraint violated")
+            }
+            else -> error("unhandled PlacedCommand type: ${cmd::class.simpleName}")
         }
     }
 }
@@ -87,6 +104,7 @@ fun applyDelta(r: ByteArray, commands: List<Command>): ByteArray {
         when (cmd) {
             is Command.Copy -> { r.copyInto(out, pos, cmd.offset, cmd.offset + cmd.length); pos += cmd.length }
             is Command.Add  -> { cmd.data.copyInto(out, pos);                                pos += cmd.data.size }
+            else -> error("unhandled Command type: ${cmd::class.simpleName}")
         }
     }
     return out
@@ -116,12 +134,15 @@ fun unplaceCommands(placed: List<PlacedCommand>): List<Command> {
         when (cmd) {
             is PlacedCommand.Copy -> cmd.dst
             is PlacedCommand.Add  -> cmd.dst
+            is PlacedCommand.Move -> cmd.dst
         }
     }
     return sorted.map { cmd ->
         when (cmd) {
             is PlacedCommand.Copy -> Command.Copy(cmd.src, cmd.length)
             is PlacedCommand.Add  -> Command.Add(cmd.data)
+            is PlacedCommand.Move -> throw IllegalArgumentException(
+                "cannot unplace PlacedCommand.Move: no algorithm-level equivalent")
         }
     }
 }
@@ -340,6 +361,7 @@ fun makeInplace(r: ByteArray, commands: List<Command>, policy: CyclePolicy): Lis
         when (cmd) {
             is Command.Copy -> { copyBuf.add(CopyInfo(cmd.offset, writePos, cmd.length)); writePos += cmd.length }
             is Command.Add  -> { adds.add(PlacedCommand.Add(writePos, cmd.data));          writePos += cmd.data.size }
+            else -> error("unhandled Command type: ${cmd::class.simpleName}")
         }
     }
     val copies = copyBuf.toList()
@@ -482,6 +504,8 @@ fun placedSummary(commands: List<PlacedCommand>): PlacedSummary {
         when (cmd) {
             is PlacedCommand.Copy -> { numCopies++; copyBytes += cmd.length }
             is PlacedCommand.Add  -> { numAdds++;   addBytes  += cmd.data.size }
+            is PlacedCommand.Move -> { numCopies++; copyBytes += cmd.length }
+            else -> error("unhandled PlacedCommand type: ${cmd::class.simpleName}")
         }
     }
     return PlacedSummary(commands.size, numCopies, numAdds, copyBytes, addBytes, copyBytes + addBytes)

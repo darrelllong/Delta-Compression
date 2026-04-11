@@ -121,7 +121,7 @@ private fun encode(args: Array<String>) {
     val placed   = if (inplace) makeInplace(r, commands, policy) else placeCommands(commands)
     val elapsed  = System.nanoTime() - t0
 
-    val deltaBytes = encodeDelta(placed, inplace, v.size, srcCrc, dstCrc)
+    val deltaBytes = encodeDeltaLarge(placed, inplace, v.size, srcCrc, dstCrc)
     writeFile(deltaPath, deltaBytes)
 
     val stats    = placedSummary(placed)
@@ -268,7 +268,7 @@ private fun inplace(args: Array<String>) {
     val ipPlaced = makeInplace(r, commands, policy)
     val elapsed  = System.nanoTime() - t0
 
-    val ipDelta = encodeDelta(ipPlaced, true, result.versionSize, result.srcCrc, result.dstCrc)
+    val ipDelta = encodeDeltaLarge(ipPlaced, true, result.versionSize, result.srcCrc, result.dstCrc)
     writeFile(deltaOutPath, ipDelta)
 
     val stats = placedSummary(ipPlaced)

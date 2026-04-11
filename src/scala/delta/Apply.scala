@@ -42,6 +42,11 @@ def applyPlacedTo(r: Array[Byte], commands: List[PlacedCommand], out: Array[Byte
       c.data.copyToArray(out, c.dst)
       val end = c.dst + c.data.length
       if end > maxWritten then maxWritten = end
+    case c: PlacedCommand.Move =>
+      // src+length <= dst guaranteed by encoder; no overlap, Array.copy is safe
+      Array.copy(out, c.src, out, c.dst, c.length)
+      val end = c.dst + c.length
+      if end > maxWritten then maxWritten = end
   }
   maxWritten
 }
@@ -51,6 +56,7 @@ def applyPlacedInplaceTo(commands: List[PlacedCommand], buf: Array[Byte]): Unit 
   for cmd <- commands do cmd match {
     case c: PlacedCommand.Copy => Array.copy(buf, c.src, buf, c.dst, c.length)
     case c: PlacedCommand.Add  => c.data.copyToArray(buf, c.dst)
+    case c: PlacedCommand.Move => Array.copy(buf, c.src, buf, c.dst, c.length)
   }
 
 /** Validate placed commands before apply so malformed deltas fail cleanly. */
@@ -63,6 +69,11 @@ def validatePlacedCommands(commands: List[PlacedCommand], referenceSize: Int,
       validateRange(c.src, c.length, sourceLimit, "copy source")
     case c: PlacedCommand.Add =>
       validateRange(c.dst, c.data.length, versionSize, "add destination")
+    case c: PlacedCommand.Move =>
+      if c.src < 0 then throw new IllegalArgumentException("move src out of range")
+      validateRange(c.dst, c.length, versionSize, "move destination")
+      if c.src.toLong + c.length.toLong > c.dst.toLong then
+        throw new IllegalArgumentException("move src+length > dst: ordering constraint violated")
   }
 }
 
@@ -88,8 +99,12 @@ def applyDeltaInplace(r: Array[Byte], commands: List[PlacedCommand], versionSize
   if buf.length != versionSize then buf.take(versionSize) else buf
 }
 
+/** Shared predicate: rejects negative fields and overflows past limit. */
+def outOfBounds(start: Int, len: Int, limit: Int): Boolean =
+  start < 0 || len < 0 || start > limit || len > limit - start
+
 private def validateRange(start: Int, len: Int, limit: Int, label: String): Unit =
-  if start < 0 || len < 0 || start > limit || len > limit - start then
+  if outOfBounds(start, len, limit) then
     throw new IllegalArgumentException(s"$label out of range")
 
 /**
@@ -100,10 +115,13 @@ def unplaceCommands(placed: List[PlacedCommand]): List[Command] = {
   val sorted = placed.sortBy {
     case c: PlacedCommand.Copy => c.dst
     case c: PlacedCommand.Add  => c.dst
+    case c: PlacedCommand.Move => c.dst
   }
   sorted.map {
     case c: PlacedCommand.Copy => Command.Copy(c.src, c.length)
     case c: PlacedCommand.Add  => Command.Add(c.data)
+    case _: PlacedCommand.Move => throw new IllegalArgumentException(
+      "cannot unplace PlacedCommand.Move: no algorithm-level equivalent")
   }
 }
 
@@ -455,11 +473,11 @@ private def findCycleInScc(
         if !advanced && found.isEmpty then {
           stack.removeLast()
           color(v) = ColorDone  // Fully explored — persists across calls.
-          if path.nonEmpty && path.last == v then path.trimEnd(1)
+          if path.nonEmpty && path.last == v then path.dropRightInPlace(1)
         }
       }
 
-      if found.nonEmpty then return (found, scan)
+      if found.isDefined then return (found, scan)
       scan += 1
     }
   }
@@ -474,6 +492,7 @@ def placedSummary(commands: List[PlacedCommand]): PlacedSummary = {
   for cmd <- commands do cmd match {
     case c: PlacedCommand.Copy => numCopies += 1; copyBytes += c.length
     case c: PlacedCommand.Add  => numAdds   += 1; addBytes  += c.data.length
+    case c: PlacedCommand.Move => numCopies += 1; copyBytes += c.length
   }
   PlacedSummary(commands.length, numCopies, numAdds, copyBytes, addBytes, copyBytes + addBytes)
 }

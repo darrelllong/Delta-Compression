@@ -16,17 +16,26 @@ const val HASH_BASE        = 263L
 const val HASH_MOD         = (1L shl 61) - 1L  // Mersenne prime 2^61-1
 
 // Binary delta format
-val DELTA_MAGIC = byteArrayOf('D'.code.toByte(), 'L'.code.toByte(), 'T'.code.toByte(), 0x03)
+val DELTA_MAGIC       = byteArrayOf('D'.code.toByte(), 'L'.code.toByte(), 'T'.code.toByte(), 0x03)
+val DELTA_MAGIC_LARGE = byteArrayOf('D'.code.toByte(), 'L'.code.toByte(), 'T'.code.toByte(), 0x04)
 const val DELTA_FLAG_INPLACE: Byte = 0x01
-const val DELTA_CMD_END    = 0
-const val DELTA_CMD_COPY   = 1
-const val DELTA_CMD_ADD    = 2
-const val DELTA_CRC_SIZE   = 8       // CRC-64/XZ digest bytes
-const val DELTA_HEADER_SIZE = 25     // magic(4)+flags(1)+version_size(4)+src_crc(8)+dst_crc(8)
-const val DELTA_U32_SIZE   = 4
-const val DELTA_COPY_PAYLOAD = 12    // src(4) + dst(4) + len(4)
-const val DELTA_ADD_HEADER  = 8      // dst(4) + len(4)
-const val DELTA_BUF_CAP     = 256
+const val DELTA_CMD_END     = 0
+const val DELTA_CMD_COPY    = 1
+const val DELTA_CMD_ADD     = 2
+const val DELTA_CMD_BIGCOPY = 3 // DLT\x04: COPY with u64 fields
+const val DELTA_CMD_BIGADD  = 4 // DLT\x04: ADD with u64 dst/len header
+const val DELTA_CMD_MOVE    = 5 // DLT\x04: copy from already-written output (u32)
+const val DELTA_CMD_BIGMOVE = 6 // DLT\x04: MOVE with u64 fields
+const val DELTA_CRC_SIZE          = 8   // CRC-64/XZ digest bytes
+const val DELTA_HEADER_SIZE       = 25  // magic(4)+flags(1)+version_size(4)+crcs(16)
+const val DELTA_HEADER_SIZE_LARGE = 29  // magic(4)+flags(1)+version_size(8)+crcs(16)
+const val DELTA_U32_SIZE          = 4
+const val DELTA_U64_SIZE          = 8
+const val DELTA_COPY_PAYLOAD      = 12  // src(4)+dst(4)+len(4)
+const val DELTA_ADD_HEADER        = 8   // dst(4)+len(4)
+const val DELTA_BIGCOPY_PAYLOAD   = 24  // src(8)+dst(8)+len(8)
+const val DELTA_BIGADD_HEADER     = 16  // dst(8)+len(8)
+const val DELTA_BUF_CAP           = 256
 
 // ── Delta commands (Section 2.1.1) ─────────────────────────────────────────
 
@@ -55,6 +64,12 @@ sealed class PlacedCommand {
     data class Copy(val src: Int, val dst: Int, val length: Int) : PlacedCommand()
     /** Write literal bytes to [dst] in the output. */
     class Add(val dst: Int, val data: ByteArray) : PlacedCommand()
+    /**
+     * Copy [length] bytes from [src] in the already-written output to [dst].
+     * The encoder guarantees src+length <= dst (source fully written before it is read).
+     * Only valid in DLT\x04 format; use encodeDeltaLarge to encode Move commands.
+     */
+    data class Move(val src: Int, val dst: Int, val length: Int) : PlacedCommand()
 }
 
 // ── Enums ──────────────────────────────────────────────────────────────────

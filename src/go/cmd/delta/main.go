@@ -219,10 +219,7 @@ func cmdEncode(args []string) error {
 	}
 	elapsed := since(t0)
 
-	deltaBytes, err := delta.EncodeDelta(placed, inplace, len(v), srcCrc, dstCrc)
-	if err != nil {
-		return err
-	}
+	deltaBytes := delta.EncodeDeltaLarge(placed, inplace, len(v), srcCrc, dstCrc)
 	if err := writeFile(deltaPath, deltaBytes); err != nil {
 		return err
 	}
@@ -436,10 +433,7 @@ func cmdInplace(args []string) error {
 	ipPlaced := delta.MakeInplace(r, commands, policy)
 	elapsed := since(t0)
 
-	ipDelta, err := delta.EncodeDelta(ipPlaced, true, result.VersionSize, result.SrcCrc, result.DstCrc)
-	if err != nil {
-		return err
-	}
+	ipDelta := delta.EncodeDeltaLarge(ipPlaced, true, result.VersionSize, result.SrcCrc, result.DstCrc)
 	if err := writeFile(deltaOutPath, ipDelta); err != nil {
 		return err
 	}

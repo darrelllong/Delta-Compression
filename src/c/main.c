@@ -323,8 +323,8 @@ cmd_encode(int argc, char **argv)
 	clock_gettime(CLOCK_MONOTONIC, &t1);
 	double elapsed = elapsed_sec(&t0, &t1);
 
-	delta_buffer_t delta_buf = delta_encode(&placed, inplace,
-	                                        v_file.size, src_crc, dst_crc);
+	delta_buffer_t delta_buf = delta_encode_large(&placed, inplace,
+	                                             v_file.size, src_crc, dst_crc);
 	write_file(delta_path, delta_buf.data, delta_buf.len);
 
 	delta_summary_t stats = delta_placed_summary(&placed);
@@ -526,9 +526,9 @@ cmd_inplace(int argc, char **argv)
 	clock_gettime(CLOCK_MONOTONIC, &t1);
 	double elapsed = elapsed_sec(&t0, &t1);
 
-	delta_buffer_t ip_buf = delta_encode(&ip_placed, true,
-	                                     dr.version_size,
-	                                     dr.src_crc, dr.dst_crc);
+	delta_buffer_t ip_buf = delta_encode_large(&ip_placed, true,
+	                                          dr.version_size,
+	                                          dr.src_crc, dr.dst_crc);
 	write_file(delta_out_path, ip_buf.data, ip_buf.len);
 
 	delta_summary_t stats = delta_placed_summary(&ip_placed);

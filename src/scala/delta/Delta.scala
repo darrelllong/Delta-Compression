@@ -108,7 +108,7 @@ private def cmdEncode(args: Array[String]): Unit = {
   val placed   = if inplace then makeInplace(r, commands, policy) else placeCommands(commands)
   val elapsed  = System.nanoTime() - t0
 
-  val deltaBytes = encodeDelta(placed, inplace, v.length, srcCrc, dstCrc)
+  val deltaBytes = encodeDeltaLarge(placed, inplace, v.length, srcCrc, dstCrc)
   writeFile(deltaPath, deltaBytes)
 
   val stats    = placedSummary(placed)
@@ -259,7 +259,7 @@ private def cmdInplace(args: Array[String]): Unit = {
   val ipPlaced = makeInplace(r, commands, policy)
   val elapsed  = System.nanoTime() - t0
 
-  val ipDelta = encodeDelta(ipPlaced, true, result.versionSize, result.srcCrc, result.dstCrc)
+  val ipDelta = encodeDeltaLarge(ipPlaced, true, result.versionSize, result.srcCrc, result.dstCrc)
   writeFile(deltaOutPath, ipDelta)
 
   val stats = placedSummary(ipPlaced)
