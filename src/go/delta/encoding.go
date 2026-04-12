@@ -333,7 +333,7 @@ func decodeDeltaLarge(data []byte) (DecodeResult, error) {
 			if err != nil {
 				return DecodeResult{}, fmt.Errorf("bigadd length: %w", err)
 			}
-			if pos+length > len(data) {
+			if length > len(data)-pos {
 				return DecodeResult{}, fmt.Errorf("unexpected EOF")
 			}
 			if err := validatePlacedRange(dst, length, versionSize, "bigadd"); err != nil {
@@ -473,7 +473,7 @@ func parseAdd(data []byte, pos, versionSize int) (PlacedAdd, int, error) {
 	}
 	dst := getU32BE(data, pos); pos += DeltaU32Size
 	length := getU32BE(data, pos); pos += DeltaU32Size
-	if pos+length > len(data) {
+	if length > len(data)-pos {
 		return PlacedAdd{}, pos, fmt.Errorf("unexpected EOF")
 	}
 	if err := validatePlacedRange(dst, length, versionSize, "add"); err != nil {

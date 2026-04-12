@@ -192,7 +192,7 @@ fn decode_small(
                 if pos + DELTA_ADD_HEADER > data.len() { return Err(DeltaError::UnexpectedEof); }
                 let dst    = read_u32(data, pos); pos += DELTA_U32_SIZE;
                 let length = read_u32(data, pos); pos += DELTA_U32_SIZE;
-                if pos + length > data.len() { return Err(DeltaError::UnexpectedEof); }
+                if length > data.len() - pos { return Err(DeltaError::UnexpectedEof); }
                 validate_placed_range(dst, length, version_size, "add")?;
                 commands.push(PlacedCommand::Add { dst, data: data[pos..pos + length].to_vec() });
                 pos += length;
@@ -256,7 +256,7 @@ fn decode_large(
                 if pos + DELTA_ADD_HEADER > data.len() { return Err(DeltaError::UnexpectedEof); }
                 let dst    = read_u32(data, pos); pos += DELTA_U32_SIZE;
                 let length = read_u32(data, pos); pos += DELTA_U32_SIZE;
-                if pos + length > data.len() { return Err(DeltaError::UnexpectedEof); }
+                if length > data.len() - pos { return Err(DeltaError::UnexpectedEof); }
                 validate_placed_range(dst, length, version_size, "add")?;
                 commands.push(PlacedCommand::Add { dst, data: data[pos..pos + length].to_vec() });
                 pos += length;
@@ -275,7 +275,7 @@ fn decode_large(
                 if pos + DELTA_BIGADD_HEADER > data.len() { return Err(DeltaError::UnexpectedEof); }
                 let dst    = read_u64(data, pos); pos += DELTA_U64_SIZE;
                 let length = read_u64(data, pos); pos += DELTA_U64_SIZE;
-                if pos + length > data.len() { return Err(DeltaError::UnexpectedEof); }
+                if length > data.len() - pos { return Err(DeltaError::UnexpectedEof); }
                 validate_placed_range(dst, length, version_size, "bigadd")?;
                 commands.push(PlacedCommand::Add { dst, data: data[pos..pos + length].to_vec() });
                 pos += length;

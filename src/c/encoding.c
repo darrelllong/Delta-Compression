@@ -289,7 +289,7 @@ consume_add_u32(delta_decode_result_t *result,
 	dlen         = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
 	cmd->add.length = dlen;
 	validate_range(result, cmd->add.dst, dlen, result->version_size, "ADD");
-	if (pos + dlen > len)
+	if (dlen > len - pos)
 		decode_fail(result, "truncated ADD data");
 	cmd->add.data = delta_malloc(dlen);
 	if (dlen > 0) memcpy(cmd->add.data, &data[pos], dlen);
@@ -369,7 +369,7 @@ decode_commands_large(delta_decode_result_t *result,
 			cmd.add.length = dlen;
 			validate_range(result, cmd.add.dst, dlen,
 			               result->version_size, "BIGADD");
-			if (pos + dlen > len)
+			if (dlen > len - pos)
 				decode_fail(result, "truncated BIGADD data");
 			cmd.add.data = delta_malloc(dlen);
 			if (dlen > 0) memcpy(cmd.add.data, &data[pos], dlen);

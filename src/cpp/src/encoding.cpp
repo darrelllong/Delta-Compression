@@ -82,7 +82,7 @@ static PlacedAdd parse_add(std::span<const uint8_t> data, size_t& pos, size_t ve
         throw DeltaError("unexpected end of delta data");
     size_t dst    = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
     size_t length = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-    if (pos + length > data.size())
+    if (length > data.size() - pos)
         throw DeltaError("unexpected end of delta data");
     validate_placed_range(dst, length, version_size, "add");
     std::vector<uint8_t> payload(data.begin() + pos, data.begin() + pos + length);
@@ -285,7 +285,7 @@ static DecodeResult decode_delta_large(std::span<const uint8_t> data) {
                 throw DeltaError("unexpected end of delta data");
             size_t dst    = check_u64_fits(read_u64_be(&data[pos]), "bigadd dst");    pos += DELTA_U64_SIZE;
             size_t length = check_u64_fits(read_u64_be(&data[pos]), "bigadd length"); pos += DELTA_U64_SIZE;
-            if (pos + length > data.size())
+            if (length > data.size() - pos)
                 throw DeltaError("unexpected end of delta data");
             validate_placed_range(dst, length, version_size, "bigadd");
             std::vector<uint8_t> payload(data.begin() + pos, data.begin() + pos + length);

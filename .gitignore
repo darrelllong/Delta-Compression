@@ -33,10 +33,15 @@ src/cpp/fuzz/crashes/
 src/cpp/build-fuzz/
 src/rust/delta/fuzz/corpus/
 src/rust/delta/fuzz/artifacts/
+src/rust/delta/fuzz-*.log
 src/c/fuzz/corpus/
 src/c/fuzz/findings/
 src/c/fuzz/fuzz_decode
 src/c/fuzz/fuzz_decode_lf
+src/c/fuzz/fuzz_decode_afl
+src/c/fuzz/fuzz_decode_afl_posix
+src/c/fuzz/*.dSYM/
+src/c/crash-*
 testdata/fuzz/
 
 # Pilot benchmark output directories
