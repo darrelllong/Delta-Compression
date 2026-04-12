@@ -27,35 +27,6 @@ fi
 
 JAVA=$(command -v java 2>/dev/null || true)
 
-# ── Locate Scala library ──────────────────────────────────────────────────────
-# Try (1) the Makefile path, then (2) derive from wherever scalac lives.
-
-_find_scala_lib() {
-    local mk_lib; mk_lib=$(grep 'SCALA_LIB\s*=' "$REPO_ROOT/src/scala/Makefile" \
-                           | head -1 | sed 's/.*= *//')
-    [[ -f "$mk_lib" ]] && { echo "$mk_lib"; return; }
-
-    local scalac; scalac=$(command -v scalac 2>/dev/null) || return 1
-    local real; real=$(readlink -f "$scalac" 2>/dev/null || echo "$scalac")
-    local scala_home; scala_home=$(dirname "$(dirname "$real")")
-
-    # Scala 3: runtime split across two maven2 jars
-    local s3j s2j
-    s3j=$(find "$scala_home/maven2/org/scala-lang/scala3-library_3" \
-               -name "scala3-library_3-*.jar" 2>/dev/null | sort -V | tail -1)
-    s2j=$(find "$scala_home/maven2/org/scala-lang/scala-library" \
-               -name "scala-library-*.jar" 2>/dev/null | sort -V | tail -1)
-    [[ -f "$s3j" && -f "$s2j" ]] && { echo "${s3j}:${s2j}"; return; }
-
-    # Scala 2 / Homebrew: single scala.jar
-    local d; for d in "$scala_home/libexec/lib" "$scala_home/lib"; do
-        [[ -f "$d/scala.jar" ]] && { echo "$d/scala.jar"; return; }
-    done
-    return 1
-}
-
-SCALA_LIB=$(_find_scala_lib 2>/dev/null || true)
-
 # ── Measure helper ────────────────────────────────────────────────────────────
 
 measure() {
@@ -95,12 +66,6 @@ measure "Cpp-co"      Cpp     correcting
 if [[ -n "$JAVA" && -x "$JAVA" ]]; then
     measure "Java-op"     Java    onepass
     measure "Java-co"     Java    correcting
-    measure "Kotlin-op"   Kotlin  onepass
-    measure "Kotlin-co"   Kotlin  correcting
-    if [[ -n "$SCALA_LIB" ]]; then
-        measure "Scala-op"    Scala   onepass
-        measure "Scala-co"    Scala   correcting
-    fi
 fi
 
 GO_BIN="$REPO_ROOT/src/go/delta/delta"
@@ -109,14 +74,6 @@ if [[ -x "$GO_BIN" ]]; then
     measure "Go-co"       Go      correcting
 else
     echo "# Go: skipped (binary not found: $GO_BIN)"
-fi
-
-HS_BIN="$REPO_ROOT/src/haskell/delta-hs"
-if [[ -x "$HS_BIN" ]]; then
-    measure "Haskell-op"  Haskell onepass
-    measure "Haskell-co"  Haskell correcting
-else
-    echo "# Haskell: skipped (binary not found: $HS_BIN)"
 fi
 
 echo ""

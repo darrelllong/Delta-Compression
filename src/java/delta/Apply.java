@@ -20,8 +20,8 @@ public final class Apply {
     private Apply() {}
 
     /** Compute total output size of algorithm commands. */
-    public static int outputSize(List<Command> commands) {
-        int size = 0;
+    public static long outputSize(List<Command> commands) {
+        long size = 0;
         for (Command cmd : commands) {
             if (cmd instanceof CopyCmd c) size += c.length();
             else if (cmd instanceof AddCmd a) size += a.data().length;
@@ -32,7 +32,7 @@ public final class Apply {
     /** Convert algorithm commands to placed commands with sequential destinations. */
     public static List<PlacedCommand> placeCommands(List<Command> commands) {
         List<PlacedCommand> placed = new ArrayList<>(commands.size());
-        int dst = 0;
+        long dst = 0;
         for (Command cmd : commands) {
             if (cmd instanceof CopyCmd c) {
                 placed.add(new PlacedCopy(c.offset(), dst, c.length()));
@@ -46,21 +46,20 @@ public final class Apply {
     }
 
     /** Apply placed commands in standard mode: read from R, write to out. */
-    public static int applyPlacedTo(byte[] r, List<PlacedCommand> commands, byte[] out) {
-        int maxWritten = 0;
+    public static long applyPlacedTo(byte[] r, List<PlacedCommand> commands, byte[] out) {
+        long maxWritten = 0;
         for (PlacedCommand cmd : commands) {
             if (cmd instanceof PlacedCopy c) {
-                System.arraycopy(r, c.src(), out, c.dst(), c.length());
-                int end = c.dst() + c.length();
+                System.arraycopy(r, (int) c.src(), out, (int) c.dst(), (int) c.length());
+                long end = c.dst() + c.length();
                 if (end > maxWritten) maxWritten = end;
             } else if (cmd instanceof PlacedAdd a) {
-                System.arraycopy(a.data(), 0, out, a.dst(), a.data().length);
-                int end = a.dst() + a.data().length;
+                System.arraycopy(a.data(), 0, out, (int) a.dst(), a.data().length);
+                long end = a.dst() + a.data().length;
                 if (end > maxWritten) maxWritten = end;
             } else if (cmd instanceof PlacedMove m) {
-                // src+length <= dst guaranteed by encoder; read from already-written output
-                System.arraycopy(out, m.src(), out, m.dst(), m.length());
-                int end = m.dst() + m.length();
+                System.arraycopy(out, (int) m.src(), out, (int) m.dst(), (int) m.length());
+                long end = m.dst() + m.length();
                 if (end > maxWritten) maxWritten = end;
             }
         }
@@ -71,20 +70,20 @@ public final class Apply {
     public static void applyPlacedInplaceTo(List<PlacedCommand> commands, byte[] buf) {
         for (PlacedCommand cmd : commands) {
             if (cmd instanceof PlacedCopy c) {
-                System.arraycopy(buf, c.src(), buf, c.dst(), c.length());
+                System.arraycopy(buf, (int) c.src(), buf, (int) c.dst(), (int) c.length());
             } else if (cmd instanceof PlacedAdd a) {
-                System.arraycopy(a.data(), 0, buf, a.dst(), a.data().length);
+                System.arraycopy(a.data(), 0, buf, (int) a.dst(), a.data().length);
             } else if (cmd instanceof PlacedMove m) {
-                System.arraycopy(buf, m.src(), buf, m.dst(), m.length());
+                System.arraycopy(buf, (int) m.src(), buf, (int) m.dst(), (int) m.length());
             }
         }
     }
 
     /** Validate placed commands before apply so malformed deltas fail cleanly. */
     public static void validatePlacedCommands(List<PlacedCommand> commands,
-                                              int referenceSize, int versionSize,
+                                              long referenceSize, long versionSize,
                                               boolean inplace) {
-        int sourceLimit = inplace ? Math.max(referenceSize, versionSize) : referenceSize;
+        long sourceLimit = inplace ? Math.max(referenceSize, versionSize) : referenceSize;
         for (PlacedCommand cmd : commands) {
             if (cmd instanceof PlacedCopy c) {
                 validateRange(c.dst(), c.length(), versionSize, "copy destination");
@@ -93,8 +92,7 @@ public final class Apply {
                 validateRange(a.dst(), a.data().length, versionSize, "add destination");
             } else if (cmd instanceof PlacedMove m) {
                 validateRange(m.dst(), m.length(), versionSize, "move destination");
-                // Use compareUnsigned to avoid signed int overflow in src+length.
-                if (Integer.compareUnsigned(m.src() + m.length(), m.dst()) > 0)
+                if (m.src() + m.length() > m.dst())
                     throw new IllegalArgumentException(
                         "MOVE src+length > dst: encoder ordering constraint violated");
             }
@@ -103,12 +101,15 @@ public final class Apply {
 
     /** Reconstruct version from reference + algorithm commands. */
     public static byte[] applyDelta(byte[] r, List<Command> commands) {
-        byte[] out = new byte[outputSize(commands)];
+        long sz = outputSize(commands);
+        if (sz > Integer.MAX_VALUE)
+            throw new IllegalArgumentException("output size too large for JVM");
+        byte[] out = new byte[(int) sz];
         int pos = 0;
         for (Command cmd : commands) {
             if (cmd instanceof CopyCmd c) {
-                System.arraycopy(r, c.offset(), out, pos, c.length());
-                pos += c.length();
+                System.arraycopy(r, (int) c.offset(), out, pos, (int) c.length());
+                pos += (int) c.length();
             } else if (cmd instanceof AddCmd a) {
                 System.arraycopy(a.data(), 0, out, pos, a.data().length);
                 pos += a.data().length;
@@ -119,18 +120,21 @@ public final class Apply {
 
     /** Apply placed in-place commands to a buffer initialized with R. */
     public static byte[] applyDeltaInplace(byte[] r, List<PlacedCommand> commands,
-                                           int versionSize) {
-        int bufSize = Math.max(r.length, versionSize);
+                                           long versionSize) {
+        long bufSizeLong = Math.max((long) r.length, versionSize);
+        if (bufSizeLong > Integer.MAX_VALUE)
+            throw new IllegalArgumentException("buffer size too large for JVM");
+        int bufSize = (int) bufSizeLong;
         byte[] buf = new byte[bufSize];
         System.arraycopy(r, 0, buf, 0, r.length);
         applyPlacedInplaceTo(commands, buf);
-        if (buf.length != versionSize) {
-            return Arrays.copyOf(buf, versionSize);
+        if (buf.length != (int) versionSize) {
+            return Arrays.copyOf(buf, (int) versionSize);
         }
         return buf;
     }
 
-    private static void validateRange(int start, int len, int limit, String label) {
+    private static void validateRange(long start, long len, long limit, String label) {
         if (start < 0 || len < 0 || start > limit || len > limit - start) {
             throw new IllegalArgumentException(label + " out of range");
         }
@@ -143,7 +147,7 @@ public final class Apply {
      */
     public static List<Command> unplaceCommands(List<PlacedCommand> placed) {
         List<PlacedCommand> sorted = new ArrayList<>(placed);
-        sorted.sort(Comparator.comparingInt(c -> {
+        sorted.sort(Comparator.comparingLong(c -> {
             if (c instanceof PlacedCopy pc)  return pc.dst();
             if (c instanceof PlacedAdd  pa)  return pa.dst();
             return ((PlacedMove) c).dst();
@@ -160,7 +164,7 @@ public final class Apply {
     // ── In-place reordering (Burns, Long, Stockmeyer, IEEE TKDE 2003) ──
 
     /** Source offset, destination offset, and length of one copy command. */
-    private record CopyInfo(int src, int dst, int length) {}
+    private record CopyInfo(long src, long dst, long length) {}
 
     /** Non-trivial SCCs with per-SCC active counts and vertex-to-SCC mapping. */
     private record SccData(List<List<Integer>> sccs, int[] active, int[] id) {}
@@ -195,19 +199,15 @@ public final class Apply {
         List<List<Integer>> adj = new ArrayList<>();
         for (int i = 0; i < n; i++) adj.add(new ArrayList<>());
 
-        // Sort copy write-intervals by start; binary-search for each read interval.
         Integer[] writeSorted = new Integer[n];
         for (int i = 0; i < n; i++) writeSorted[i] = i;
-        Arrays.sort(writeSorted, Comparator.comparingInt(a -> copies.get(a).dst()));
-        int[] writeStarts = new int[n];
+        Arrays.sort(writeSorted, Comparator.comparingLong(a -> copies.get(a).dst()));
+        long[] writeStarts = new long[n];
         for (int k = 0; k < n; k++) writeStarts[k] = copies.get(writeSorted[k]).dst();
 
         for (int i = 0; i < n; i++) {
-            int src = copies.get(i).src(), len = copies.get(i).length();
-            int readEnd = src + len;
-            // lo = first write with dst >= src; hi = first write with dst >= readEnd.
-            // Writes in [lo, hi) start inside [src, readEnd) — they always overlap.
-            // The write at lo-1 starts before src; overlaps iff its end exceeds src.
+            long src = copies.get(i).src(), len = copies.get(i).length();
+            long readEnd = src + len;
             int lo = 0; { int a = 0, b = n;
                 while (a < b) { int m = a + (b - a) / 2;
                     if (writeStarts[m] < src) a = m + 1; else b = m; }
@@ -219,7 +219,7 @@ public final class Apply {
             if (lo > 0) {
                 int j = writeSorted[lo - 1];
                 if (j != i) {
-                    int dj = copies.get(j).dst(), lj = copies.get(j).length();
+                    long dj = copies.get(j).dst(), lj = copies.get(j).length();
                     if (dj + lj > src) adj.get(i).add(j);
                 }
             }
@@ -250,18 +250,12 @@ public final class Apply {
         return new SccData(sccs, active, id);
     }
 
-    /**
-     * Select a victim copy to break a cycle when Kahn's algorithm stalls.
-     *
-     * Constant: first remaining vertex.  Localmin: minimum-length copy in a cycle.
-     * cur.sccPtr and cur.scanPos are advanced in place across repeated calls.
-     */
     private static int pickVictim(List<CopyInfo> copies, List<List<Integer>> adj,
             SccData scc, boolean[] removed, int[] color, ScanCursor cur,
             CyclePolicy policy, int n) {
         if (policy == CyclePolicy.CONSTANT) {
             for (int i = 0; i < n; i++) { if (!removed[i]) return i; }
-            return -1; // unreachable: called only when processed < n
+            return -1;
         }
         int victim = -1;
         while (victim == -1) {
@@ -290,10 +284,6 @@ public final class Apply {
         return victim;
     }
 
-    /**
-     * Run Kahn topological sort; when the heap stalls, call pickVictim to break
-     * the cycle by materialising one copy as a literal add.
-     */
     private static List<Integer> runKahn(List<CopyInfo> copies, List<List<Integer>> adj,
             SccData scc, byte[] r, List<PlacedAdd> adds, CyclePolicy policy, int n) {
         int[] inDeg = new int[n];
@@ -301,20 +291,22 @@ public final class Apply {
 
         boolean[] removed  = new boolean[n];
         List<Integer> topo = new ArrayList<>();
-        int[] color        = new int[n];   // COLOR_UNVISITED initially
+        int[] color        = new int[n];
         ScanCursor cursor  = new ScanCursor();
 
-        PriorityQueue<int[]> heap = new PriorityQueue<>(
-            Comparator.<int[]>comparingInt(e -> e[0]).thenComparingInt(e -> e[1]));
+        PriorityQueue<long[]> heap = new PriorityQueue<>((a, b) -> {
+            int cmp = Long.compare(a[0], b[0]);
+            return cmp != 0 ? cmp : Long.compare(a[1], b[1]);
+        });
         for (int i = 0; i < n; i++) {
-            if (inDeg[i] == 0) heap.add(new int[]{copies.get(i).length(), i});
+            if (inDeg[i] == 0) heap.add(new long[]{copies.get(i).length(), i});
         }
         int processed = 0;
 
         while (processed < n) {
             while (!heap.isEmpty()) {
-                int[] entry = heap.poll();
-                int v = entry[1];
+                long[] entry = heap.poll();
+                int v = (int) entry[1];
                 if (removed[v]) continue;
                 removed[v] = true;
                 topo.add(v);
@@ -323,7 +315,7 @@ public final class Apply {
                 for (int w : adj.get(v)) {
                     if (!removed[w]) {
                         inDeg[w]--;
-                        if (inDeg[w] == 0) heap.add(new int[]{copies.get(w).length(), w});
+                        if (inDeg[w] == 0) heap.add(new long[]{copies.get(w).length(), w});
                     }
                 }
             }
@@ -332,8 +324,9 @@ public final class Apply {
 
             int victim = pickVictim(copies, adj, scc, removed, color, cursor, policy, n);
             CopyInfo ci = copies.get(victim);
-            byte[] data = new byte[ci.length()];
-            System.arraycopy(r, ci.src(), data, 0, ci.length());
+            int len = (int) ci.length();
+            byte[] data = new byte[len];
+            System.arraycopy(r, (int) ci.src(), data, 0, len);
             adds.add(new PlacedAdd(ci.dst(), data));
             removed[victim] = true;
             processed++;
@@ -341,7 +334,7 @@ public final class Apply {
             for (int w : adj.get(victim)) {
                 if (!removed[w]) {
                     inDeg[w]--;
-                    if (inDeg[w] == 0) heap.add(new int[]{copies.get(w).length(), w});
+                    if (inDeg[w] == 0) heap.add(new long[]{copies.get(w).length(), w});
                 }
             }
         }
@@ -350,14 +343,6 @@ public final class Apply {
 
     /**
      * Convert standard delta commands to in-place executable commands.
-     *
-     * A CRWI (Copy-Read/Write-Intersection) edge i→j means copy i reads
-     * from a region that copy j will overwrite, so i must execute before j.
-     * When the digraph is acyclic, a topological order gives a valid serial
-     * schedule and no conversion is needed.  A cycle i₁→i₂→…→iₖ→i₁ creates
-     * a circular dependency with no valid schedule; breaking it materializes
-     * one copy as a literal add (reading source bytes from R before they are
-     * overwritten).
      *
      * Algorithm (Burns, Long, Stockmeyer, IEEE TKDE 2003):
      *   1. Annotate each command with its write offset
@@ -370,10 +355,9 @@ public final class Apply {
                                                    CyclePolicy policy) {
         if (commands.isEmpty()) return new ArrayList<>();
 
-        // Step 1: compute write offsets
         List<CopyInfo> copies = new ArrayList<>();
         List<PlacedAdd> adds  = new ArrayList<>();
-        int writePos = 0;
+        long writePos = 0;
         for (Command cmd : commands) {
             if (cmd instanceof CopyCmd c) {
                 copies.add(new CopyInfo(c.offset(), writePos, c.length()));
@@ -386,12 +370,10 @@ public final class Apply {
         int n = copies.size();
         if (n == 0) return new ArrayList<>(adds);
 
-        // Steps 2-3: build digraph, topological sort, break cycles
         List<List<Integer>> adj = buildCrwiDigraph(copies, n);
         SccData scc             = buildSccList(adj, n);
         List<Integer> topoOrder = runKahn(copies, adj, scc, r, adds, policy, n);
 
-        // Step 4: assemble result — copies in topo order, then all adds
         List<PlacedCommand> result = new ArrayList<>();
         for (int i : topoOrder) {
             CopyInfo ci = copies.get(i);
@@ -401,18 +383,9 @@ public final class Apply {
         return result;
     }
 
-    /**
-     * Compute SCCs using iterative Tarjan's algorithm.
-     *
-     * Returns SCCs in reverse topological order (sinks first); caller
-     * reverses for source-first processing order.
-     *
-     * R.E. Tarjan, "Depth-first search and linear graph algorithms,"
-     * SIAM Journal on Computing, 1(2):146-160, June 1972.
-     */
     private static List<List<Integer>> tarjanScc(List<List<Integer>> adj, int n) {
         int[] index = new int[n];
-        Arrays.fill(index, NO_SCC); // NO_SCC = unvisited
+        Arrays.fill(index, NO_SCC);
         int[] lowlink = new int[n];
         boolean[] onStack = new boolean[n];
         Deque<Integer> tarjanStack = new ArrayDeque<>();
@@ -436,13 +409,11 @@ public final class Apply {
                 if (frame.ni < neighbors.size()) {
                     int w = neighbors.get(frame.ni++);
                     if (index[w] == NO_SCC) {
-                        // Tree edge: descend into w
                         index[w] = lowlink[w] = counter++;
                         onStack[w] = true;
                         tarjanStack.push(w);
                         callStack.push(new DfsFrame(w));
                     } else if (onStack[w]) {
-                        // Back-edge into current SCC
                         if (index[w] < lowlink[v]) lowlink[v] = index[w];
                     }
                 } else {
@@ -465,22 +436,9 @@ public final class Apply {
                 }
             }
         }
-        return sccs; // sinks first; caller reverses for source-first order
+        return sccs;
     }
 
-    /**
-     * Find a cycle in the active subgraph of one SCC.
-     *
-     * Three amortizations give O(|SCC| + E_SCC) total work per SCC:
-     *   1. sccId filter: O(1) per neighbor check, no O(|SCC|) set/clear sweep.
-     *   2. color persistence: color=2 (fully explored) persists across calls;
-     *      vertex removal can only reduce edges, so color=2 is monotone-correct.
-     *   3. scanStart: outer loop resumes from last position, O(|SCC|) total.
-     *
-     * Returns a CycleResult whose cycle is non-null on cycle found (path color=1
-     * vertices reset to 0), or null when the SCC subgraph is acyclic.  newScan
-     * is the updated scan position for the next call.
-     */
     private static CycleResult findCycleInScc(
             List<List<Integer>> adj, List<Integer> scc, int sid,
             int[] sccId, boolean[] removed, int[] color, int scanStart) {
@@ -508,7 +466,6 @@ public final class Apply {
                     int w = neighbors.get(frame.ni++);
                     if (sccId[w] != sid || removed[w]) { continue; }
                     if (color[w] == COLOR_ON_PATH) {
-                        // Back-edge: cycle found.
                         int pos = path.indexOf(w);
                         List<Integer> cycle = new ArrayList<>(path.subList(pos, path.size()));
                         for (int u : path) { color[u] = COLOR_UNVISITED; }
@@ -524,11 +481,10 @@ public final class Apply {
                 }
                 if (!advanced) {
                     stack.pop();
-                    color[v] = COLOR_DONE; // Fully explored — persists across calls.
+                    color[v] = COLOR_DONE;
                     path.remove(path.size() - 1);
                 }
             }
-            // start's reachable SCC-subgraph fully explored; no cycle.
             scan++;
         }
 
@@ -547,7 +503,7 @@ public final class Apply {
                 numAdds++;
                 addBytes += a.data().length;
             } else if (cmd instanceof PlacedMove m) {
-                numCopies++; // MOVE counted with copies
+                numCopies++;
                 copyBytes += m.length();
             }
         }

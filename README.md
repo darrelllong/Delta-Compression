@@ -5,7 +5,7 @@ reconstructed from the old file plus the (small) delta.  Supports
 in-place reconstruction — the new version can be rebuilt directly in
 the buffer holding the old version, with no scratch space.
 
-Eight implementations — Python, Rust, C++, C, Java, Go, Kotlin, and Scala —
+Six implementations — Python, Rust, C++, C, Java, and Go —
 producing byte-identical binary deltas.  Encode with any one, decode with
 any other.
 
@@ -76,25 +76,6 @@ go build ./cmd/delta
 ./delta decode old.bin delta.bin recovered.bin
 ```
 
-### Kotlin
-
-```bash
-cd src/kotlin
-make
-java -cp delta.jar delta.Delta encode onepass old.bin new.bin delta.bin
-java -cp delta.jar delta.Delta decode old.bin delta.bin recovered.bin
-```
-
-### Scala
-
-```bash
-cd src/scala
-make
-# SCALA_LIB = /path/to/scala/lib/scala.jar (set in Makefile)
-java -cp delta.jar:$SCALA_LIB delta.Delta encode onepass old.bin new.bin delta.bin
-java -cp delta.jar:$SCALA_LIB delta.Delta decode old.bin delta.bin recovered.bin
-```
-
 ## Algorithms
 
 | Algorithm | Time | Space | Best for |
@@ -151,7 +132,7 @@ Cycle-breaking policies:
 
 ## Binary delta format
 
-Unified format used by all eight implementations:
+Unified format used by all six implementations:
 
 ```
 Header (25 bytes):
@@ -195,8 +176,6 @@ Individual suites:
 | C | 91 | `cd src/c && make && bash test_delta.sh` |
 | Java | 57 | `cd src/java && make test` |
 | Go | 63 | `cd src/go && go test ./delta/...` |
-| Kotlin | 57 | `cd src/kotlin && make test` |
-| Scala | 57 | `cd src/scala && make test` |
 
 Tests cover all three algorithms, binary round-trips, paper examples,
 edge cases (empty/identical/completely different files), in-place
@@ -205,7 +184,7 @@ transpositions (8–64 blocks with controlled transpositions),
 checkpointing correctness, and cross-language compatibility.
 A kernel tarball benchmark (`tests/kernel-delta-test.sh`) exercises
 onepass and correcting on ~871 MB inputs.  On linux-5.1 → 5.1.1, all
-eight implementations are byte-compatible.  See `ANALYSIS.md` for
+six implementations are byte-compatible.  See `ANALYSIS.md` for
 tables and details.
 
 ## Project layout
@@ -218,10 +197,8 @@ src/
   c/              Makefile project — single-header API + CLI + 91 tests
   java/           Makefile project — library + CLI + 57 tests
   go/             Go module — library + CLI + 63 tests
-  kotlin/         Makefile project (JVM) — library + CLI + 57 tests
-  scala/          Makefile project (JVM/Scala 3) — library + CLI + 57 tests
 tests/
-  correctness.sh          Run all unit + cross-language tests (all 8 implementations)
+  correctness.sh          Run all unit + cross-language tests (all 6 implementations)
   kernel-delta-test.sh    Kernel tarball benchmark
   transposition-benchmark.sh  Synthetic permutation benchmark
 pubs/                     Ajtai et al. 2002, Burns et al. 2003 (PDFs)
@@ -234,7 +211,7 @@ listings and library API examples.
 
 ## Code architecture
 
-The same pipeline runs in all eight implementations:
+The same pipeline runs in all six implementations:
 
 ```
 R, V (byte arrays)

@@ -1288,7 +1288,7 @@ fn test_encode_delta_rejects_add_dst_overflow() {
 #[test]
 fn test_large_header_magic() {
     let z = [0u8; 8];
-    let bytes = encode_delta_large(&[], false, 0, &z, &z);
+    let bytes = encode_delta_large(&[], false, 0, &z, &z, false);
     assert_eq!(&bytes[..4], DELTA_MAGIC_LARGE, "DLT\\x04 magic");
     assert_eq!(bytes.len(), DELTA_HEADER_SIZE_LARGE + 1); // header + END byte
 }
@@ -1297,7 +1297,7 @@ fn test_large_header_magic() {
 fn test_large_header_version_size_u64() {
     let z = [0u8; 8];
     let vs: usize = (u32::MAX as usize) + 1; // 2^32; doesn't fit in u32
-    let bytes = encode_delta_large(&[], false, vs, &z, &z);
+    let bytes = encode_delta_large(&[], false, vs, &z, &z, false);
     let decoded = u64::from_be_bytes([
         bytes[5], bytes[6], bytes[7], bytes[8],
         bytes[9], bytes[10], bytes[11], bytes[12],
@@ -1309,7 +1309,7 @@ fn test_large_header_version_size_u64() {
 fn test_large_header_crcs_preserved() {
     let src_crc = [1u8, 2, 3, 4, 5, 6, 7, 8];
     let dst_crc = [9u8, 10, 11, 12, 13, 14, 15, 16];
-    let bytes = encode_delta_large(&[], false, 0, &src_crc, &dst_crc);
+    let bytes = encode_delta_large(&[], false, 0, &src_crc, &dst_crc, false);
     assert_eq!(&bytes[13..21], &src_crc);
     assert_eq!(&bytes[21..29], &dst_crc);
 }
@@ -1317,8 +1317,8 @@ fn test_large_header_crcs_preserved() {
 #[test]
 fn test_large_inplace_flag() {
     let z = [0u8; 8];
-    let standard = encode_delta_large(&[], false, 0, &z, &z);
-    let inplace  = encode_delta_large(&[], true,  0, &z, &z);
+    let standard = encode_delta_large(&[], false, 0, &z, &z, false);
+    let inplace  = encode_delta_large(&[], true,  0, &z, &z, false);
     assert_eq!(standard[4], 0x00);
     assert_eq!(inplace[4],  0x01);
 }
@@ -1327,7 +1327,7 @@ fn test_large_inplace_flag() {
 fn test_large_decode_roundtrip_header() {
     let src_crc = [0xABu8; 8];
     let dst_crc = [0xCDu8; 8];
-    let bytes = encode_delta_large(&[], false, 42, &src_crc, &dst_crc);
+    let bytes = encode_delta_large(&[], false, 42, &src_crc, &dst_crc, false);
     let (cmds, ip, vs, sc, dc) = decode_delta(&bytes).unwrap();
     assert!(cmds.is_empty());
     assert!(!ip);
@@ -1342,7 +1342,7 @@ fn test_large_decode_roundtrip_header() {
 fn test_large_copy_small_roundtrip() {
     let z = [0u8; 8];
     let cmd = PlacedCommand::Copy { src: 0, dst: 0, length: 5 };
-    let bytes = encode_delta_large(&[cmd.clone()], false, 5, &z, &z);
+    let bytes = encode_delta_large(&[cmd.clone()], false, 5, &z, &z, false);
     let (cmds, _, _, _, _) = decode_delta(&bytes).unwrap();
     assert_eq!(cmds, vec![cmd]);
 }
@@ -1353,7 +1353,7 @@ fn test_large_copy_u32_max_boundary() {
     let max = u32::MAX as usize;
     let cmd = PlacedCommand::Copy { src: max, dst: 0, length: 0 };
     // Zero-length copy — just check it encodes/decodes without overflow error.
-    let bytes = encode_delta_large(&[cmd.clone()], false, 0, &z, &z);
+    let bytes = encode_delta_large(&[cmd.clone()], false, 0, &z, &z, false);
     // decode validates dst+length <= version_size; length=0 so dst=0 is fine.
     let (cmds, _, _, _, _) = decode_delta(&bytes).unwrap();
     assert_eq!(cmds, vec![cmd]);
@@ -1366,7 +1366,7 @@ fn test_large_add_small_roundtrip() {
     let z = [0u8; 8];
     let data = b"hello".to_vec();
     let cmd = PlacedCommand::Add { dst: 0, data: data.clone() };
-    let bytes = encode_delta_large(&[cmd.clone()], false, data.len(), &z, &z);
+    let bytes = encode_delta_large(&[cmd.clone()], false, data.len(), &z, &z, false);
     let (cmds, _, _, _, _) = decode_delta(&bytes).unwrap();
     assert_eq!(cmds, vec![cmd]);
 }
@@ -1377,7 +1377,7 @@ fn test_large_add_payload_intact() {
     let payload: Vec<u8> = (0u8..=255).collect();
     let len = payload.len();
     let cmd = PlacedCommand::Add { dst: 0, data: payload.clone() };
-    let bytes = encode_delta_large(&[cmd], false, len, &z, &z);
+    let bytes = encode_delta_large(&[cmd], false, len, &z, &z, false);
     let (cmds, _, _, _, _) = decode_delta(&bytes).unwrap();
     if let PlacedCommand::Add { data, .. } = &cmds[0] {
         assert_eq!(data, &payload);
@@ -1392,7 +1392,7 @@ fn test_large_add_payload_intact() {
 fn test_large_move_roundtrip() {
     let z = [0u8; 8];
     let cmd = PlacedCommand::Move { src: 0, dst: 5, length: 5 };
-    let bytes = encode_delta_large(&[cmd.clone()], false, 10, &z, &z);
+    let bytes = encode_delta_large(&[cmd.clone()], false, 10, &z, &z, false);
     let (cmds, _, _, _, _) = decode_delta(&bytes).unwrap();
     assert_eq!(cmds, vec![cmd]);
 }
@@ -1429,7 +1429,7 @@ fn test_large_move_apply_standard() {
         PlacedCommand::Add  { dst: 0, data: b"hello".to_vec() },
         PlacedCommand::Move { src: 0, dst: 5, length: 5 },
     ];
-    let bytes = encode_delta_large(&cmds, false, 10, &z, &z);
+    let bytes = encode_delta_large(&cmds, false, 10, &z, &z, false);
     let (decoded, _, vs, _, _) = decode_delta(&bytes).unwrap();
     let mut out = vec![0u8; vs];
     apply_placed_to(&[], &decoded, &mut out);
@@ -1469,7 +1469,7 @@ fn test_large_bigcopy_roundtrip() {
     let big = (u32::MAX as usize) + 1; // 2^32 — forces BIGCOPY
     // Zero-length BIGCOPY: src at 2^32, dst=0, length=0 — no bounds violation.
     let cmd = PlacedCommand::Copy { src: big, dst: 0, length: 0 };
-    let bytes = encode_delta_large(&[cmd.clone()], false, 0, &z, &z);
+    let bytes = encode_delta_large(&[cmd.clone()], false, 0, &z, &z, false);
     assert_eq!(bytes[DELTA_HEADER_SIZE_LARGE], 3); // DELTA_CMD_BIGCOPY = 3
     let (cmds, _, _, _, _) = decode_delta(&bytes).unwrap();
     assert_eq!(cmds, vec![cmd]);
@@ -1486,7 +1486,7 @@ fn test_large_bigadd_encoder_path() {
     let data = b"hello".to_vec();
     let cmd = PlacedCommand::Add { dst: big_dst, data: data.clone() };
     let version_size = big_dst + data.len();
-    let bytes = encode_delta_large(&[cmd.clone()], false, version_size, &z, &z);
+    let bytes = encode_delta_large(&[cmd.clone()], false, version_size, &z, &z, false);
     assert_eq!(bytes[DELTA_HEADER_SIZE_LARGE], 4, "expected DELTA_CMD_BIGADD=4");
     let (cmds, _, _, _, _) = decode_delta(&bytes).unwrap();
     assert_eq!(cmds, vec![cmd]);
@@ -1498,7 +1498,7 @@ fn test_large_bigmove_roundtrip() {
     let big = (u32::MAX as usize) + 1; // forces BIGMOVE
     // src=0, dst=2^32, length=0 — no bounds violation with version_size=big.
     let cmd = PlacedCommand::Move { src: 0, dst: big, length: 0 };
-    let bytes = encode_delta_large(&[cmd.clone()], false, big, &z, &z);
+    let bytes = encode_delta_large(&[cmd.clone()], false, big, &z, &z, false);
     assert_eq!(bytes[DELTA_HEADER_SIZE_LARGE], 6); // DELTA_CMD_BIGMOVE = 6
     let (cmds, _, _, _, _) = decode_delta(&bytes).unwrap();
     assert_eq!(cmds, vec![cmd]);
@@ -1509,8 +1509,8 @@ fn test_large_bigmove_roundtrip() {
 #[test]
 fn test_large_is_inplace_detected() {
     let z = [0u8; 8];
-    let standard = encode_delta_large(&[], false, 0, &z, &z);
-    let inplace  = encode_delta_large(&[], true,  0, &z, &z);
+    let standard = encode_delta_large(&[], false, 0, &z, &z, false);
+    let inplace  = encode_delta_large(&[], true,  0, &z, &z, false);
     assert!(!is_inplace_delta(&standard));
     assert!( is_inplace_delta(&inplace));
 }
@@ -1524,7 +1524,7 @@ fn test_large_algo_roundtrip_greedy() {
     let z = crc64_xz(r);
     let cmds = diff_greedy(r, v, &DiffOptions::default());
     let placed = place_commands(cmds);
-    let bytes = encode_delta_large(&placed, false, v.len(), &z, &crc64_xz(v));
+    let bytes = encode_delta_large(&placed, false, v.len(), &z, &crc64_xz(v), false);
     let (decoded, _, vs, _, _) = decode_delta(&bytes).unwrap();
     let mut out = vec![0u8; vs];
     apply_placed_to(r, &decoded, &mut out);
@@ -1538,7 +1538,7 @@ fn test_large_algo_roundtrip_onepass() {
     let z_r = crc64_xz(r);
     let z_v = crc64_xz(v);
     let placed = place_commands(diff_onepass(r, v, &DiffOptions { p: 2, ..DiffOptions::default() }));
-    let bytes = encode_delta_large(&placed, false, v.len(), &z_r, &z_v);
+    let bytes = encode_delta_large(&placed, false, v.len(), &z_r, &z_v, false);
     let (decoded, _, vs, sc, dc) = decode_delta(&bytes).unwrap();
     assert_eq!(sc, z_r);
     assert_eq!(dc, z_v);
@@ -1555,7 +1555,7 @@ fn test_large_algo_roundtrip_correcting() {
     let z_r = crc64_xz(&r);
     let z_v = crc64_xz(&v);
     let placed = place_commands(diff_correcting(&r, &v, &DiffOptions::default()));
-    let bytes = encode_delta_large(&placed, false, v.len(), &z_r, &z_v);
+    let bytes = encode_delta_large(&placed, false, v.len(), &z_r, &z_v, false);
     let (decoded, _, vs, _, _) = decode_delta(&bytes).unwrap();
     let mut out = vec![0u8; vs];
     apply_placed_to(&r, &decoded, &mut out);

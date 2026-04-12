@@ -62,10 +62,10 @@ public final class Types {
     public sealed interface Command permits CopyCmd, AddCmd {}
 
     /** Copy {@code length} bytes starting at {@code offset} in the reference R. */
-    public record CopyCmd(int offset, int length) implements Command {}
+    public record CopyCmd(long offset, long length) implements Command {}
 
     /** Append literal bytes from V that could not be matched in R. */
-    public record AddCmd(byte[] data)             implements Command {}
+    public record AddCmd(byte[] data)               implements Command {}
 
     // ── Placed commands (explicit src/dst for binary encoding) ──
 
@@ -78,17 +78,17 @@ public final class Types {
     public sealed interface PlacedCommand permits PlacedCopy, PlacedAdd, PlacedMove {}
 
     /** Copy {@code length} bytes from {@code src} in R (or working buffer) to {@code dst} in output. */
-    public record PlacedCopy(int src, int dst, int length) implements PlacedCommand {}
+    public record PlacedCopy(long src, long dst, long length) implements PlacedCommand {}
 
     /** Write literal bytes to {@code dst} in the output. */
-    public record PlacedAdd(int dst, byte[] data)          implements PlacedCommand {}
+    public record PlacedAdd(long dst, byte[] data)            implements PlacedCommand {}
 
     /**
      * Copy {@code length} bytes from {@code src} in the already-written output to {@code dst}.
      * The encoder guarantees {@code src + length <= dst} (source fully written before it is read).
      * Only valid in DLT\x04 format; use {@code encodeDeltaLarge} to encode PlacedMove commands.
      */
-    public record PlacedMove(int src, int dst, int length) implements PlacedCommand {}
+    public record PlacedMove(long src, long dst, long length) implements PlacedCommand {}
 
     // ── Diff options (mutable — not a record) ──
 

@@ -33,13 +33,17 @@ if [ -f "../python/delta.py" ]; then
     PY_DELTA="python3 ../python/delta.py"
 fi
 
-if [ -d "../java/out" ] && [ -f "../java/out/delta/Delta.class" ]; then
+if [ -d "../java" ]; then
     # Prefer the same Java used to compile (Makefile sets JAVA=/opt/homebrew/opt/openjdk@17/bin/java).
     JAVA_BIN="${JAVA:-java}"
     if [ "$JAVA_BIN" = "java" ] && [ -x "/opt/homebrew/opt/openjdk@17/bin/java" ]; then
         JAVA_BIN="/opt/homebrew/opt/openjdk@17/bin/java"
     fi
-    JAVA_DELTA="$JAVA_BIN -cp ../java/out delta.Delta"
+    # Always rebuild to avoid stale bytecode.
+    if make -s -C ../java JAVA="$JAVA_BIN" JAVAC="${JAVA_BIN%java}javac" 2>/dev/null \
+       && [ -f "../java/out/delta/Delta.class" ]; then
+        JAVA_DELTA="$JAVA_BIN -cp ../java/out delta.Delta"
+    fi
 fi
 
 GO_DELTA=""
@@ -47,19 +51,6 @@ if [ -x "../go/delta/delta" ]; then
     GO_DELTA="../go/delta/delta"
 fi
 
-KT_DELTA=""
-if [ -f "../kotlin/delta.jar" ]; then
-    KT_DELTA="java -cp ../kotlin/delta.jar delta.Delta"
-fi
-
-SCALA_DELTA=""
-if [ -f "../scala/delta.jar" ]; then
-    SCALA_JAVA="${JAVA:-/opt/homebrew/opt/openjdk@17/bin/java}"
-    SCALA_LIB="/opt/homebrew/opt/scala/libexec/lib/scala.jar"
-    if [ -x "$SCALA_JAVA" ] && [ -f "$SCALA_LIB" ]; then
-        SCALA_DELTA="$SCALA_JAVA -cp ../scala/delta.jar:$SCALA_LIB delta.Delta"
-    fi
-fi
 
 check() {
     TESTS=$((TESTS + 1))
@@ -287,50 +278,6 @@ else
     echo "  (Go inplace: not found)"
 fi
 
-if [ -n "$KT_DELTA" ]; then
-    for algo in greedy onepass correcting; do
-        c_std="$tmpdir/c-std-kt-${algo}.delta"
-        kt_ip="$tmpdir/kt-ip-from-c-${algo}.delta"
-        c_out="$tmpdir/c-out-from-kt-ip-${algo}.out"
-        $DELTA encode $algo "$ref" "$ver" "$c_std"
-        $KT_DELTA inplace "$ref" "$c_std" "$kt_ip"
-        $DELTA decode "$ref" "$kt_ip" "$c_out"
-        check "C encode -> Kotlin inplace -> C decode ($algo)" diff -q "$ver" "$c_out"
-
-        kt_std="$tmpdir/kt-std-${algo}.delta"
-        c_ip="$tmpdir/c-ip-from-kt-${algo}.delta"
-        kt_out="$tmpdir/kt-out-from-c-ip-${algo}.out"
-        $KT_DELTA encode $algo "$ref" "$ver" "$kt_std"
-        $DELTA inplace "$ref" "$kt_std" "$c_ip"
-        $KT_DELTA decode "$ref" "$c_ip" "$kt_out"
-        check "Kotlin encode -> C inplace -> Kotlin decode ($algo)" diff -q "$ver" "$kt_out"
-    done
-else
-    echo "  (Kotlin inplace: not found)"
-fi
-
-if [ -n "$SCALA_DELTA" ]; then
-    for algo in greedy onepass correcting; do
-        c_std="$tmpdir/c-std-sc-${algo}.delta"
-        sc_ip="$tmpdir/sc-ip-from-c-${algo}.delta"
-        c_out="$tmpdir/c-out-from-sc-ip-${algo}.out"
-        $DELTA encode $algo "$ref" "$ver" "$c_std"
-        $SCALA_DELTA inplace "$ref" "$c_std" "$sc_ip"
-        $DELTA decode "$ref" "$sc_ip" "$c_out"
-        check "C encode -> Scala inplace -> C decode ($algo)" diff -q "$ver" "$c_out"
-
-        sc_std="$tmpdir/sc-std-${algo}.delta"
-        c_ip="$tmpdir/c-ip-from-sc-${algo}.delta"
-        sc_out="$tmpdir/sc-out-from-c-ip-${algo}.out"
-        $SCALA_DELTA encode $algo "$ref" "$ver" "$sc_std"
-        $DELTA inplace "$ref" "$sc_std" "$c_ip"
-        $SCALA_DELTA decode "$ref" "$c_ip" "$sc_out"
-        check "Scala encode -> C inplace -> Scala decode ($algo)" diff -q "$ver" "$sc_out"
-    done
-else
-    echo "  (Scala inplace: not found)"
-fi
-
 echo ""
 echo "=== Byte-identical deltas (C vs other implementations) ==="
 
@@ -380,30 +327,6 @@ if [ -n "$JAVA_DELTA" ]; then
     done
 else
     echo "  (C vs Java byte-identical: not found)"
-fi
-
-if [ -n "$KT_DELTA" ]; then
-    for algo in greedy onepass correcting; do
-        c_d="$tmpdir/c-${algo}5.delta"
-        kt_d="$tmpdir/kotlin-${algo}.delta"
-        $DELTA encode $algo "$ref" "$ver" "$c_d"
-        $KT_DELTA encode $algo "$ref" "$ver" "$kt_d"
-        check "C vs Kotlin $algo byte-identical" diff -q "$c_d" "$kt_d"
-    done
-else
-    echo "  (C vs Kotlin byte-identical: not found)"
-fi
-
-if [ -n "$SCALA_DELTA" ]; then
-    for algo in greedy onepass correcting; do
-        c_d="$tmpdir/c-${algo}6.delta"
-        sc_d="$tmpdir/scala-${algo}.delta"
-        $DELTA encode $algo "$ref" "$ver" "$c_d"
-        $SCALA_DELTA encode $algo "$ref" "$ver" "$sc_d"
-        check "C vs Scala $algo byte-identical" diff -q "$c_d" "$sc_d"
-    done
-else
-    echo "  (C vs Scala byte-identical: not found)"
 fi
 
 if [ -n "$GO_DELTA" ]; then
@@ -497,26 +420,6 @@ else
     echo "  (DLT\\x04 header Java: not found)"
 fi
 
-if [ -n "$KT_DELTA" ]; then
-    d_enc="$tmpdir/magic-kotlin-enc.delta"; d_ip="$tmpdir/magic-kotlin-ip.delta"
-    $KT_DELTA encode onepass "$magic_ref" "$magic_ver" "$d_enc" > /dev/null 2>&1
-    check_v4_header "Kotlin" "$d_enc" "encode"
-    $KT_DELTA inplace "$magic_ref" "$d_enc" "$d_ip" > /dev/null 2>&1
-    check_v4_header "Kotlin" "$d_ip" "inplace"
-else
-    echo "  (DLT\\x04 header Kotlin: not found)"
-fi
-
-if [ -n "$SCALA_DELTA" ]; then
-    d_enc="$tmpdir/magic-scala-enc.delta"; d_ip="$tmpdir/magic-scala-ip.delta"
-    $SCALA_DELTA encode onepass "$magic_ref" "$magic_ver" "$d_enc" > /dev/null 2>&1
-    check_v4_header "Scala" "$d_enc" "encode"
-    $SCALA_DELTA inplace "$magic_ref" "$d_enc" "$d_ip" > /dev/null 2>&1
-    check_v4_header "Scala" "$d_ip" "inplace"
-else
-    echo "  (DLT\\x04 header Scala: not found)"
-fi
-
 if [ -n "$PY_DELTA" ]; then
     d_enc="$tmpdir/magic-python-enc.delta"; d_ip="$tmpdir/magic-python-ip.delta"
     $PY_DELTA encode onepass "$magic_ref" "$magic_ver" "$d_enc" > /dev/null 2>&1
@@ -560,30 +463,6 @@ if [ -n "$GO_DELTA" ] && [ -n "$CPP_DELTA" ] && [ -n "$RUST_DELTA" ]; then
     check "Go encode -> C++ inplace -> Rust decode" diff -q "$xip_ver" "$xip_out"
 else
     echo "  (Go->C++->Rust inplace chain: not found)"
-fi
-
-# Java encode → Kotlin inplace → Scala decode
-if [ -n "$JAVA_DELTA" ] && [ -n "$KT_DELTA" ] && [ -n "$SCALA_DELTA" ]; then
-    xip_d="$tmpdir/xip-java-std.delta"; xip_ip="$tmpdir/xip-java-kt-ip.delta"
-    xip_out="$tmpdir/xip-java-kt-scala.out"
-    $JAVA_DELTA encode onepass "$xip_ref" "$xip_ver" "$xip_d" > /dev/null 2>&1
-    $KT_DELTA inplace "$xip_ref" "$xip_d" "$xip_ip" > /dev/null 2>&1
-    $SCALA_DELTA decode "$xip_ref" "$xip_ip" "$xip_out" > /dev/null 2>&1
-    check "Java encode -> Kotlin inplace -> Scala decode" diff -q "$xip_ver" "$xip_out"
-else
-    echo "  (Java->Kotlin->Scala inplace chain: not found)"
-fi
-
-# C++ encode → Scala inplace → Kotlin decode
-if [ -n "$CPP_DELTA" ] && [ -n "$SCALA_DELTA" ] && [ -n "$KT_DELTA" ]; then
-    xip_d="$tmpdir/xip-cpp-std.delta"; xip_ip="$tmpdir/xip-cpp-scala-ip.delta"
-    xip_out="$tmpdir/xip-cpp-scala-kt.out"
-    $CPP_DELTA encode onepass "$xip_ref" "$xip_ver" "$xip_d" > /dev/null 2>&1
-    $SCALA_DELTA inplace "$xip_ref" "$xip_d" "$xip_ip" > /dev/null 2>&1
-    $KT_DELTA decode "$xip_ref" "$xip_ip" "$xip_out" > /dev/null 2>&1
-    check "C++ encode -> Scala inplace -> Kotlin decode" diff -q "$xip_ver" "$xip_out"
-else
-    echo "  (C++->Scala->Kotlin inplace chain: not found)"
 fi
 
 # C encode → Python inplace → Rust decode
@@ -649,44 +528,6 @@ if [ -n "$JAVA_DELTA" ]; then
     done
 else
     echo "  (Java cross-decode: not found)"
-fi
-
-if [ -n "$KT_DELTA" ]; then
-    for algo in greedy onepass correcting; do
-        c_d="$tmpdir/c-ktdec-${algo}.delta"
-        kt_out="$tmpdir/kotlin-from-c-${algo}.out"
-        $DELTA encode $algo "$ref" "$ver" "$c_d"
-        $KT_DELTA decode "$ref" "$c_d" "$kt_out"
-        check "C encode -> Kotlin decode ($algo)" diff -q "$ver" "$kt_out"
-    done
-    for algo in greedy onepass correcting; do
-        kt_d="$tmpdir/kotlin-cdec-${algo}.delta"
-        c_out="$tmpdir/c-from-kotlin-${algo}.out"
-        $KT_DELTA encode $algo "$ref" "$ver" "$kt_d"
-        $DELTA decode "$ref" "$kt_d" "$c_out"
-        check "Kotlin encode -> C decode ($algo)" diff -q "$ver" "$c_out"
-    done
-else
-    echo "  (Kotlin cross-decode: not found)"
-fi
-
-if [ -n "$SCALA_DELTA" ]; then
-    for algo in greedy onepass correcting; do
-        c_d="$tmpdir/c-scdec-${algo}.delta"
-        sc_out="$tmpdir/scala-from-c-${algo}.out"
-        $DELTA encode $algo "$ref" "$ver" "$c_d"
-        $SCALA_DELTA decode "$ref" "$c_d" "$sc_out"
-        check "C encode -> Scala decode ($algo)" diff -q "$ver" "$sc_out"
-    done
-    for algo in greedy onepass correcting; do
-        sc_d="$tmpdir/scala-cdec-${algo}.delta"
-        c_out="$tmpdir/c-from-scala-${algo}.out"
-        $SCALA_DELTA encode $algo "$ref" "$ver" "$sc_d"
-        $DELTA decode "$ref" "$sc_d" "$c_out"
-        check "Scala encode -> C decode ($algo)" diff -q "$ver" "$c_out"
-    done
-else
-    echo "  (Scala cross-decode: not found)"
 fi
 
 if [ -n "$GO_DELTA" ]; then
@@ -813,29 +654,6 @@ if $have_sh; then
     else
         echo "  (Shakespeare C->Java: not found)"
     fi
-    if [ -n "$KT_DELTA" ]; then
-        for algo in greedy onepass correcting; do
-            sh_d="$tmpdir/sh-c-${algo}.delta"
-            $DELTA encode $algo "$sh_ref" "$sh_ver" "$sh_d"
-            out="$tmpdir/sh-c-kt-${algo}.out"
-            $KT_DELTA decode "$sh_ref" "$sh_d" "$out"
-            check "Shakespeare C encode -> Kotlin decode ($algo)" diff -q "$sh_ver" "$out"
-        done
-    else
-        echo "  (Shakespeare C->Kotlin: not found)"
-    fi
-    if [ -n "$SCALA_DELTA" ]; then
-        for algo in greedy onepass correcting; do
-            sh_d="$tmpdir/sh-c-${algo}.delta"
-            $DELTA encode $algo "$sh_ref" "$sh_ver" "$sh_d"
-            out="$tmpdir/sh-c-sc-${algo}.out"
-            $SCALA_DELTA decode "$sh_ref" "$sh_d" "$out"
-            check "Shakespeare C encode -> Scala decode ($algo)" diff -q "$sh_ver" "$out"
-        done
-    else
-        echo "  (Shakespeare C->Scala: not found)"
-    fi
-
     # Each non-C language encodes; C decodes.
     if [ -n "$RUST_DELTA" ]; then
         for algo in greedy onepass correcting; do
@@ -881,29 +699,6 @@ if $have_sh; then
     else
         echo "  (Shakespeare Java->C: not found)"
     fi
-    if [ -n "$KT_DELTA" ]; then
-        for algo in greedy onepass correcting; do
-            sh_d="$tmpdir/sh-kt-${algo}.delta"
-            out="$tmpdir/sh-kt-c-${algo}.out"
-            $KT_DELTA encode $algo "$sh_ref" "$sh_ver" "$sh_d"
-            $DELTA decode "$sh_ref" "$sh_d" "$out"
-            check "Shakespeare Kotlin encode -> C decode ($algo)" diff -q "$sh_ver" "$out"
-        done
-    else
-        echo "  (Shakespeare Kotlin->C: not found)"
-    fi
-    if [ -n "$SCALA_DELTA" ]; then
-        for algo in greedy onepass correcting; do
-            sh_d="$tmpdir/sh-sc-${algo}.delta"
-            out="$tmpdir/sh-sc-c-${algo}.out"
-            $SCALA_DELTA encode $algo "$sh_ref" "$sh_ver" "$sh_d"
-            $DELTA decode "$sh_ref" "$sh_d" "$out"
-            check "Shakespeare Scala encode -> C decode ($algo)" diff -q "$sh_ver" "$out"
-        done
-    else
-        echo "  (Shakespeare Scala->C: not found)"
-    fi
-
     # Non-C cross-language pairs (ring topology, catches shared encoder/decoder bugs).
     if [ -n "$GO_DELTA" ] && [ -n "$RUST_DELTA" ]; then
         for algo in greedy onepass correcting; do
@@ -914,15 +709,6 @@ if $have_sh; then
             check "Shakespeare Go encode -> Rust decode ($algo)" diff -q "$sh_ver" "$out"
         done
     fi
-    if [ -n "$RUST_DELTA" ] && [ -n "$KT_DELTA" ]; then
-        for algo in greedy onepass correcting; do
-            sh_d="$tmpdir/sh-rust-kt-${algo}.delta"
-            out="$tmpdir/sh-rust-kt-${algo}.out"
-            $RUST_DELTA encode $algo "$sh_ref" "$sh_ver" "$sh_d"
-            $KT_DELTA decode "$sh_ref" "$sh_d" "$out"
-            check "Shakespeare Rust encode -> Kotlin decode ($algo)" diff -q "$sh_ver" "$out"
-        done
-    fi
     if [ -n "$JAVA_DELTA" ] && [ -n "$GO_DELTA" ]; then
         for algo in greedy onepass correcting; do
             sh_d="$tmpdir/sh-java-go-${algo}.delta"
@@ -930,24 +716,6 @@ if $have_sh; then
             $JAVA_DELTA encode $algo "$sh_ref" "$sh_ver" "$sh_d"
             $GO_DELTA decode "$sh_ref" "$sh_d" "$out"
             check "Shakespeare Java encode -> Go decode ($algo)" diff -q "$sh_ver" "$out"
-        done
-    fi
-    if [ -n "$KT_DELTA" ] && [ -n "$SCALA_DELTA" ]; then
-        for algo in greedy onepass correcting; do
-            sh_d="$tmpdir/sh-kt-sc-${algo}.delta"
-            out="$tmpdir/sh-kt-sc-${algo}.out"
-            $KT_DELTA encode $algo "$sh_ref" "$sh_ver" "$sh_d"
-            $SCALA_DELTA decode "$sh_ref" "$sh_d" "$out"
-            check "Shakespeare Kotlin encode -> Scala decode ($algo)" diff -q "$sh_ver" "$out"
-        done
-    fi
-    if [ -n "$SCALA_DELTA" ] && [ -n "$CPP_DELTA" ]; then
-        for algo in greedy onepass correcting; do
-            sh_d="$tmpdir/sh-sc-cpp-${algo}.delta"
-            out="$tmpdir/sh-sc-cpp-${algo}.out"
-            $SCALA_DELTA encode $algo "$sh_ref" "$sh_ver" "$sh_d"
-            $CPP_DELTA decode "$sh_ref" "$sh_d" "$out"
-            check "Shakespeare Scala encode -> C++ decode ($algo)" diff -q "$sh_ver" "$out"
         done
     fi
     if [ -n "$CPP_DELTA" ] && [ -n "$JAVA_DELTA" ]; then
@@ -960,7 +728,7 @@ if $have_sh; then
         done
     fi
 else
-    # Count skipped tests: 12 star pairs + 6 ring pairs = 18 language pairs × 3 algos
+    # Count skipped tests: 10 star pairs + 4 ring pairs = 14 language pairs × 3 algos
     echo "  (Shakespeare tests: not found)"
 fi
 
@@ -1094,18 +862,6 @@ if $have_v3; then
         run_v3_tests Java    $JAVA_DELTA decode
     else
         echo "  (DLT\\x03 Java: not found)"
-    fi
-
-    if [ -n "$KT_DELTA" ]; then
-        run_v3_tests Kotlin  $KT_DELTA decode
-    else
-        echo "  (DLT\\x03 Kotlin: not found)"
-    fi
-
-    if [ -n "$SCALA_DELTA" ]; then
-        run_v3_tests Scala   $SCALA_DELTA decode
-    else
-        echo "  (DLT\\x03 Scala: not found)"
     fi
 
     if [ -n "$PY_DELTA" ]; then
@@ -1276,17 +1032,6 @@ if $have_v4; then
         echo "  (DLT\\x04 Java: not found)"
     fi
 
-    if [ -n "$KT_DELTA" ]; then
-        run_v4_tests Kotlin  $KT_DELTA decode
-    else
-        echo "  (DLT\\x04 Kotlin: not found)"
-    fi
-
-    if [ -n "$SCALA_DELTA" ]; then
-        run_v4_tests Scala   $SCALA_DELTA decode
-    else
-        echo "  (DLT\\x04 Scala: not found)"
-    fi
 else
     echo "  (DLT\\x04 tests: not found)"
 fi
@@ -1410,30 +1155,6 @@ if $have_crc_neg; then
         check "--ignore-hash bypasses dst_crc (Java)"   diff -q "$crc_ver" "$out_dst2"
     else
         echo "  (CRC mismatch Java: not found)"
-    fi
-
-    if [ -n "$KT_DELTA" ]; then
-        out_src="$tmpdir/crc-kt-badsrc.out"; out_dst2="$tmpdir/crc-kt-baddst2.out"
-        check_fails "src_crc mismatch rejected (Kotlin)" $KT_DELTA decode "$crc_ref" "$crc_bad_src" /dev/null
-        check_fails "dst_crc mismatch rejected (Kotlin)" $KT_DELTA decode "$crc_ref" "$crc_bad_dst" "$tmpdir/crc-kt-baddst.out"
-        $KT_DELTA decode "$crc_ref" "$crc_bad_src" "$out_src" --ignore-hash 2>/dev/null
-        check "--ignore-hash bypasses src_crc (Kotlin)" diff -q "$crc_ver" "$out_src"
-        $KT_DELTA decode "$crc_ref" "$crc_bad_dst" "$out_dst2" --ignore-hash 2>/dev/null
-        check "--ignore-hash bypasses dst_crc (Kotlin)" diff -q "$crc_ver" "$out_dst2"
-    else
-        echo "  (CRC mismatch Kotlin: not found)"
-    fi
-
-    if [ -n "$SCALA_DELTA" ]; then
-        out_src="$tmpdir/crc-scala-badsrc.out"; out_dst2="$tmpdir/crc-scala-baddst2.out"
-        check_fails "src_crc mismatch rejected (Scala)"  $SCALA_DELTA decode "$crc_ref" "$crc_bad_src" /dev/null
-        check_fails "dst_crc mismatch rejected (Scala)"  $SCALA_DELTA decode "$crc_ref" "$crc_bad_dst" "$tmpdir/crc-scala-baddst.out"
-        $SCALA_DELTA decode "$crc_ref" "$crc_bad_src" "$out_src" --ignore-hash 2>/dev/null
-        check "--ignore-hash bypasses src_crc (Scala)"  diff -q "$crc_ver" "$out_src"
-        $SCALA_DELTA decode "$crc_ref" "$crc_bad_dst" "$out_dst2" --ignore-hash 2>/dev/null
-        check "--ignore-hash bypasses dst_crc (Scala)"  diff -q "$crc_ver" "$out_dst2"
-    else
-        echo "  (CRC mismatch Scala: not found)"
     fi
 
     if [ -n "$PY_DELTA" ]; then
@@ -1572,40 +1293,6 @@ else
     echo "  (Java --large tests: not found)"
 fi
 
-# Kotlin
-if [ -n "$KT_DELTA" ]; then
-    large_kt="$tmpdir/large-kt.delta"; large_kt_out="$tmpdir/large-kt.out"
-    $KT_DELTA encode greedy "$ref" "$ver" "$large_kt" --large
-    check_big_cmd "Kotlin --large: first cmd is BIGCOPY/BIGADD" "$large_kt"
-    $KT_DELTA decode "$ref" "$large_kt" "$large_kt_out"
-    check "Kotlin --large roundtrip" diff -q "$ver" "$large_kt_out"
-
-    large_ip_kt="$tmpdir/large-ip-kt.delta"; large_ip_kt_out="$tmpdir/large-ip-kt.out"
-    $KT_DELTA encode greedy "$ref" "$ver" "$large_ip_kt" --inplace --large
-    check_big_cmd "Kotlin --inplace --large: first cmd is BIGCOPY/BIGADD" "$large_ip_kt"
-    $KT_DELTA decode "$ref" "$large_ip_kt" "$large_ip_kt_out"
-    check "Kotlin --inplace --large roundtrip" diff -q "$ver" "$large_ip_kt_out"
-else
-    echo "  (Kotlin --large tests: not found)"
-fi
-
-# Scala
-if [ -n "$SCALA_DELTA" ]; then
-    large_sc="$tmpdir/large-sc.delta"; large_sc_out="$tmpdir/large-sc.out"
-    $SCALA_DELTA encode greedy "$ref" "$ver" "$large_sc" --large
-    check_big_cmd "Scala --large: first cmd is BIGCOPY/BIGADD" "$large_sc"
-    $SCALA_DELTA decode "$ref" "$large_sc" "$large_sc_out"
-    check "Scala --large roundtrip" diff -q "$ver" "$large_sc_out"
-
-    large_ip_sc="$tmpdir/large-ip-sc.delta"; large_ip_sc_out="$tmpdir/large-ip-sc.out"
-    $SCALA_DELTA encode greedy "$ref" "$ver" "$large_ip_sc" --inplace --large
-    check_big_cmd "Scala --inplace --large: first cmd is BIGCOPY/BIGADD" "$large_ip_sc"
-    $SCALA_DELTA decode "$ref" "$large_ip_sc" "$large_ip_sc_out"
-    check "Scala --inplace --large roundtrip" diff -q "$ver" "$large_ip_sc_out"
-else
-    echo "  (Scala --large tests: not found)"
-fi
-
 echo ""
 echo "=== --large cross-language interop ==="
 
@@ -1640,22 +1327,13 @@ else
     echo "  (--large Rust→C++: not found)"
 fi
 
-# Java --large → Kotlin decode
-if [ -n "$JAVA_DELTA" ] && [ -n "$KT_DELTA" ]; then
-    xl_kt_out="$tmpdir/xl-large-java-kt.out"
-    $KT_DELTA decode "$ref" "$large_java" "$xl_kt_out"
-    check "--large: Java encode → Kotlin decode" diff -q "$ver" "$xl_kt_out"
+# Java --large → C decode
+if [ -n "$JAVA_DELTA" ]; then
+    xl_java_c_out="$tmpdir/xl-large-java-c.out"
+    $DELTA decode "$ref" "$large_java" "$xl_java_c_out"
+    check "--large: Java encode → C decode" diff -q "$ver" "$xl_java_c_out"
 else
-    echo "  (--large Java→Kotlin: not found)"
-fi
-
-# Scala --large → Java decode
-if [ -n "$SCALA_DELTA" ] && [ -n "$JAVA_DELTA" ]; then
-    xl_java_out="$tmpdir/xl-large-sc-java.out"
-    $JAVA_DELTA decode "$ref" "$large_sc" "$xl_java_out"
-    check "--large: Scala encode → Java decode" diff -q "$ver" "$xl_java_out"
-else
-    echo "  (--large Scala→Java: not found)"
+    echo "  (--large Java→C: not found)"
 fi
 
 # Python --large → C decode

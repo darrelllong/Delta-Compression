@@ -17,6 +17,8 @@ import static delta.Types.*;
 public final class Encoding {
     private Encoding() {}
 
+    private static final long U32_MAX = 0xFFFFFFFFL;
+
     /**
      * Decoded delta file content.
      *
@@ -29,7 +31,7 @@ public final class Encoding {
     public record DecodeResult(
         List<PlacedCommand> commands,
         boolean inplace,
-        int versionSize,
+        long versionSize,
         byte[] srcCrc,
         byte[] dstCrc
     ) {}
@@ -40,8 +42,10 @@ public final class Encoding {
      * Use {@link #encodeDeltaLarge} for DLT\x04 (u64 fields, PlacedMove support).
      */
     public static byte[] encodeDelta(List<PlacedCommand> commands,
-                                     boolean inplace, int versionSize,
+                                     boolean inplace, long versionSize,
                                      byte[] srcCrc, byte[] dstCrc) {
+        if (versionSize < 0 || versionSize > U32_MAX)
+            throw new IllegalArgumentException("versionSize exceeds u32 range");
         int est = DELTA_HEADER_SIZE + 1;
         for (PlacedCommand cmd : commands) {
             if (cmd instanceof PlacedCopy) {
@@ -59,19 +63,25 @@ public final class Encoding {
         System.arraycopy(DELTA_MAGIC, 0, out, 0, DELTA_MAGIC.length);
         pos = DELTA_MAGIC.length;
         out[pos++] = inplace ? DELTA_FLAG_INPLACE : 0;
-        putU32BE(out, pos, versionSize); pos += DELTA_U32_SIZE;
+        putU32BE(out, pos, (int) versionSize); pos += DELTA_U32_SIZE;
         System.arraycopy(srcCrc, 0, out, pos, DELTA_CRC_SIZE); pos += DELTA_CRC_SIZE;
         System.arraycopy(dstCrc, 0, out, pos, DELTA_CRC_SIZE); pos += DELTA_CRC_SIZE;
 
         for (PlacedCommand cmd : commands) {
             if (cmd instanceof PlacedCopy c) {
+                if (c.src() > U32_MAX || c.dst() > U32_MAX || c.length() > U32_MAX)
+                    throw new IllegalArgumentException(
+                        "COPY field exceeds u32 range; use encodeDeltaLarge");
                 out[pos++] = DELTA_CMD_COPY;
-                putU32BE(out, pos, c.src());    pos += DELTA_U32_SIZE;
-                putU32BE(out, pos, c.dst());    pos += DELTA_U32_SIZE;
-                putU32BE(out, pos, c.length()); pos += DELTA_U32_SIZE;
+                putU32BE(out, pos, (int) c.src());    pos += DELTA_U32_SIZE;
+                putU32BE(out, pos, (int) c.dst());    pos += DELTA_U32_SIZE;
+                putU32BE(out, pos, (int) c.length()); pos += DELTA_U32_SIZE;
             } else if (cmd instanceof PlacedAdd a) {
+                if (a.dst() > U32_MAX || (long) a.data().length > U32_MAX)
+                    throw new IllegalArgumentException(
+                        "ADD field exceeds u32 range; use encodeDeltaLarge");
                 out[pos++] = DELTA_CMD_ADD;
-                putU32BE(out, pos, a.dst());         pos += DELTA_U32_SIZE;
+                putU32BE(out, pos, (int) a.dst());         pos += DELTA_U32_SIZE;
                 putU32BE(out, pos, a.data().length); pos += DELTA_U32_SIZE;
                 System.arraycopy(a.data(), 0, out, pos, a.data().length);
                 pos += a.data().length;
@@ -90,22 +100,24 @@ public final class Encoding {
 
     /**
      * Encode placed commands to DLT\x04 format (u64 fields, PlacedMove support).
-     * When forceLarge is false, Java int fields always fit in u32 so COPY/ADD/MOVE
-     * variants are emitted.  When forceLarge is true, BIGCOPY/BIGADD/BIGMOVE with
-     * u64 fields are always emitted regardless of field values.
+     * Commands whose fields exceed UINT32_MAX are encoded as BIGCOPY/BIGADD/BIGMOVE.
+     * When forceLarge is true all commands use 64-bit fields regardless of value.
      */
     public static byte[] encodeDeltaLarge(List<PlacedCommand> commands,
-                                          boolean inplace, int versionSize,
+                                          boolean inplace, long versionSize,
                                           byte[] srcCrc, byte[] dstCrc,
                                           boolean forceLarge) {
         int est = DELTA_HEADER_SIZE_LARGE + 1;
         for (PlacedCommand cmd : commands) {
-            if (cmd instanceof PlacedCopy) {
-                est += forceLarge ? 1 + DELTA_BIGCOPY_PAYLOAD : 1 + DELTA_COPY_PAYLOAD;
+            if (cmd instanceof PlacedCopy c) {
+                est += useBig(forceLarge, c.src(), c.dst(), c.length())
+                    ? 1 + DELTA_BIGCOPY_PAYLOAD : 1 + DELTA_COPY_PAYLOAD;
             } else if (cmd instanceof PlacedAdd a) {
-                est += (forceLarge ? 1 + DELTA_BIGADD_HEADER : 1 + DELTA_ADD_HEADER) + a.data().length;
-            } else if (cmd instanceof PlacedMove) {
-                est += forceLarge ? 1 + DELTA_BIGCOPY_PAYLOAD : 1 + DELTA_COPY_PAYLOAD;
+                est += (useBig(forceLarge, a.dst(), a.data().length, 0)
+                    ? 1 + DELTA_BIGADD_HEADER : 1 + DELTA_ADD_HEADER) + a.data().length;
+            } else if (cmd instanceof PlacedMove m) {
+                est += useBig(forceLarge, m.src(), m.dst(), m.length())
+                    ? 1 + DELTA_BIGCOPY_PAYLOAD : 1 + DELTA_COPY_PAYLOAD;
             }
         }
         byte[] out = new byte[est];
@@ -114,46 +126,46 @@ public final class Encoding {
         System.arraycopy(DELTA_MAGIC_LARGE, 0, out, 0, DELTA_MAGIC_LARGE.length);
         pos = DELTA_MAGIC_LARGE.length;
         out[pos++] = inplace ? DELTA_FLAG_INPLACE : 0;
-        putU64BE(out, pos, Integer.toUnsignedLong(versionSize)); pos += DELTA_U64_SIZE;
+        putU64BE(out, pos, versionSize); pos += DELTA_U64_SIZE;
         System.arraycopy(srcCrc, 0, out, pos, DELTA_CRC_SIZE); pos += DELTA_CRC_SIZE;
         System.arraycopy(dstCrc, 0, out, pos, DELTA_CRC_SIZE); pos += DELTA_CRC_SIZE;
 
         for (PlacedCommand cmd : commands) {
             if (cmd instanceof PlacedCopy c) {
-                if (forceLarge) {
+                if (useBig(forceLarge, c.src(), c.dst(), c.length())) {
                     out[pos++] = DELTA_CMD_BIGCOPY;
-                    putU64BE(out, pos, Integer.toUnsignedLong(c.src()));    pos += DELTA_U64_SIZE;
-                    putU64BE(out, pos, Integer.toUnsignedLong(c.dst()));    pos += DELTA_U64_SIZE;
-                    putU64BE(out, pos, Integer.toUnsignedLong(c.length())); pos += DELTA_U64_SIZE;
+                    putU64BE(out, pos, c.src());    pos += DELTA_U64_SIZE;
+                    putU64BE(out, pos, c.dst());    pos += DELTA_U64_SIZE;
+                    putU64BE(out, pos, c.length()); pos += DELTA_U64_SIZE;
                 } else {
                     out[pos++] = DELTA_CMD_COPY;
-                    putU32BE(out, pos, c.src());    pos += DELTA_U32_SIZE;
-                    putU32BE(out, pos, c.dst());    pos += DELTA_U32_SIZE;
-                    putU32BE(out, pos, c.length()); pos += DELTA_U32_SIZE;
+                    putU32BE(out, pos, (int) c.src());    pos += DELTA_U32_SIZE;
+                    putU32BE(out, pos, (int) c.dst());    pos += DELTA_U32_SIZE;
+                    putU32BE(out, pos, (int) c.length()); pos += DELTA_U32_SIZE;
                 }
             } else if (cmd instanceof PlacedAdd a) {
-                if (forceLarge) {
+                if (useBig(forceLarge, a.dst(), a.data().length, 0)) {
                     out[pos++] = DELTA_CMD_BIGADD;
-                    putU64BE(out, pos, Integer.toUnsignedLong(a.dst()));          pos += DELTA_U64_SIZE;
-                    putU64BE(out, pos, Integer.toUnsignedLong(a.data().length));  pos += DELTA_U64_SIZE;
+                    putU64BE(out, pos, a.dst());          pos += DELTA_U64_SIZE;
+                    putU64BE(out, pos, a.data().length);  pos += DELTA_U64_SIZE;
                 } else {
                     out[pos++] = DELTA_CMD_ADD;
-                    putU32BE(out, pos, a.dst());         pos += DELTA_U32_SIZE;
+                    putU32BE(out, pos, (int) a.dst());         pos += DELTA_U32_SIZE;
                     putU32BE(out, pos, a.data().length); pos += DELTA_U32_SIZE;
                 }
                 System.arraycopy(a.data(), 0, out, pos, a.data().length);
                 pos += a.data().length;
             } else if (cmd instanceof PlacedMove m) {
-                if (forceLarge) {
+                if (useBig(forceLarge, m.src(), m.dst(), m.length())) {
                     out[pos++] = DELTA_CMD_BIGMOVE;
-                    putU64BE(out, pos, Integer.toUnsignedLong(m.src()));    pos += DELTA_U64_SIZE;
-                    putU64BE(out, pos, Integer.toUnsignedLong(m.dst()));    pos += DELTA_U64_SIZE;
-                    putU64BE(out, pos, Integer.toUnsignedLong(m.length())); pos += DELTA_U64_SIZE;
+                    putU64BE(out, pos, m.src());    pos += DELTA_U64_SIZE;
+                    putU64BE(out, pos, m.dst());    pos += DELTA_U64_SIZE;
+                    putU64BE(out, pos, m.length()); pos += DELTA_U64_SIZE;
                 } else {
                     out[pos++] = DELTA_CMD_MOVE;
-                    putU32BE(out, pos, m.src());    pos += DELTA_U32_SIZE;
-                    putU32BE(out, pos, m.dst());    pos += DELTA_U32_SIZE;
-                    putU32BE(out, pos, m.length()); pos += DELTA_U32_SIZE;
+                    putU32BE(out, pos, (int) m.src());    pos += DELTA_U32_SIZE;
+                    putU32BE(out, pos, (int) m.dst());    pos += DELTA_U32_SIZE;
+                    putU32BE(out, pos, (int) m.length()); pos += DELTA_U32_SIZE;
                 }
             }
         }
@@ -196,7 +208,7 @@ public final class Encoding {
             throw new IllegalArgumentException("not a delta file");
 
         boolean inplace  = (data[DELTA_MAGIC.length] & DELTA_FLAG_INPLACE) != 0;
-        int versionSize  = getU32BE(data, DELTA_MAGIC.length + 1);
+        long versionSize = Integer.toUnsignedLong(getU32BE(data, DELTA_MAGIC.length + 1));
         int crcOff       = DELTA_MAGIC.length + 1 + DELTA_U32_SIZE;
         byte[] srcCrc    = new byte[DELTA_CRC_SIZE];
         byte[] dstCrc    = new byte[DELTA_CRC_SIZE];
@@ -213,19 +225,19 @@ public final class Encoding {
             if (t == DELTA_CMD_COPY) {
                 if (pos + DELTA_COPY_PAYLOAD > data.length)
                     throw new IllegalArgumentException("unexpected EOF");
-                int src = getU32BE(data, pos); pos += DELTA_U32_SIZE;
-                int dst = getU32BE(data, pos); pos += DELTA_U32_SIZE;
-                int len = getU32BE(data, pos); pos += DELTA_U32_SIZE;
+                long src = Integer.toUnsignedLong(getU32BE(data, pos)); pos += DELTA_U32_SIZE;
+                long dst = Integer.toUnsignedLong(getU32BE(data, pos)); pos += DELTA_U32_SIZE;
+                long len = Integer.toUnsignedLong(getU32BE(data, pos)); pos += DELTA_U32_SIZE;
                 validatePlacedRange(dst, len, versionSize, "COPY");
                 commands.add(new PlacedCopy(src, dst, len));
             } else if (t == DELTA_CMD_ADD) {
                 if (pos + DELTA_ADD_HEADER > data.length)
                     throw new IllegalArgumentException("unexpected EOF");
-                int dst = getU32BE(data, pos); pos += DELTA_U32_SIZE;
-                int len = getU32BE(data, pos); pos += DELTA_U32_SIZE;
+                long dst = Integer.toUnsignedLong(getU32BE(data, pos)); pos += DELTA_U32_SIZE;
+                int  len = getU32BE(data, pos);                         pos += DELTA_U32_SIZE;
                 if (pos + len > data.length)
                     throw new IllegalArgumentException("unexpected EOF");
-                validatePlacedRange(dst, len, versionSize, "ADD");
+                validatePlacedRange(dst, Integer.toUnsignedLong(len), versionSize, "ADD");
                 byte[] payload = new byte[len];
                 System.arraycopy(data, pos, payload, 0, len);
                 pos += len;
@@ -249,8 +261,9 @@ public final class Encoding {
             throw new IllegalArgumentException("not a delta file");
 
         boolean inplace = (data[DELTA_MAGIC.length] & DELTA_FLAG_INPLACE) != 0;
-        long vsLong     = getU64Long(data, DELTA_MAGIC.length + 1);
-        int versionSize = checkFitsInt(vsLong, "version_size");
+        long versionSize = getU64Long(data, DELTA_MAGIC.length + 1);
+        if (versionSize < 0)
+            throw new IllegalArgumentException("version_size overflows long");
         int crcOff      = DELTA_MAGIC.length + 1 + DELTA_U64_SIZE;
         byte[] srcCrc   = new byte[DELTA_CRC_SIZE];
         byte[] dstCrc   = new byte[DELTA_CRC_SIZE];
@@ -267,19 +280,19 @@ public final class Encoding {
             if (t == DELTA_CMD_COPY) {
                 if (pos + DELTA_COPY_PAYLOAD > data.length)
                     throw new IllegalArgumentException("unexpected EOF");
-                int src = getU32BE(data, pos); pos += DELTA_U32_SIZE;
-                int dst = getU32BE(data, pos); pos += DELTA_U32_SIZE;
-                int len = getU32BE(data, pos); pos += DELTA_U32_SIZE;
+                long src = Integer.toUnsignedLong(getU32BE(data, pos)); pos += DELTA_U32_SIZE;
+                long dst = Integer.toUnsignedLong(getU32BE(data, pos)); pos += DELTA_U32_SIZE;
+                long len = Integer.toUnsignedLong(getU32BE(data, pos)); pos += DELTA_U32_SIZE;
                 validatePlacedRange(dst, len, versionSize, "COPY");
                 commands.add(new PlacedCopy(src, dst, len));
             } else if (t == DELTA_CMD_ADD) {
                 if (pos + DELTA_ADD_HEADER > data.length)
                     throw new IllegalArgumentException("unexpected EOF");
-                int dst = getU32BE(data, pos); pos += DELTA_U32_SIZE;
-                int len = getU32BE(data, pos); pos += DELTA_U32_SIZE;
+                long dst = Integer.toUnsignedLong(getU32BE(data, pos)); pos += DELTA_U32_SIZE;
+                int  len = getU32BE(data, pos);                         pos += DELTA_U32_SIZE;
                 if (pos + len > data.length)
                     throw new IllegalArgumentException("unexpected EOF");
-                validatePlacedRange(dst, len, versionSize, "ADD");
+                validatePlacedRange(dst, Integer.toUnsignedLong(len), versionSize, "ADD");
                 byte[] payload = new byte[len];
                 System.arraycopy(data, pos, payload, 0, len);
                 pos += len;
@@ -287,19 +300,22 @@ public final class Encoding {
             } else if (t == DELTA_CMD_BIGCOPY) {
                 if (pos + DELTA_BIGCOPY_PAYLOAD > data.length)
                     throw new IllegalArgumentException("unexpected EOF");
-                int src = checkFitsInt(getU64Long(data, pos), "BIGCOPY src"); pos += DELTA_U64_SIZE;
-                int dst = checkFitsInt(getU64Long(data, pos), "BIGCOPY dst"); pos += DELTA_U64_SIZE;
-                int len = checkFitsInt(getU64Long(data, pos), "BIGCOPY length"); pos += DELTA_U64_SIZE;
+                long src = checkNonNegative(getU64Long(data, pos), "BIGCOPY src"); pos += DELTA_U64_SIZE;
+                long dst = checkNonNegative(getU64Long(data, pos), "BIGCOPY dst"); pos += DELTA_U64_SIZE;
+                long len = checkNonNegative(getU64Long(data, pos), "BIGCOPY length"); pos += DELTA_U64_SIZE;
                 validatePlacedRange(dst, len, versionSize, "BIGCOPY");
                 commands.add(new PlacedCopy(src, dst, len));
             } else if (t == DELTA_CMD_BIGADD) {
                 if (pos + DELTA_BIGADD_HEADER > data.length)
                     throw new IllegalArgumentException("unexpected EOF");
-                int dst = checkFitsInt(getU64Long(data, pos), "BIGADD dst"); pos += DELTA_U64_SIZE;
-                int len = checkFitsInt(getU64Long(data, pos), "BIGADD length"); pos += DELTA_U64_SIZE;
+                long dst = checkNonNegative(getU64Long(data, pos), "BIGADD dst"); pos += DELTA_U64_SIZE;
+                long lenL = checkNonNegative(getU64Long(data, pos), "BIGADD length"); pos += DELTA_U64_SIZE;
+                if (lenL > Integer.MAX_VALUE)
+                    throw new IllegalArgumentException("BIGADD length too large for JVM");
+                int len = (int) lenL;
                 if (pos + len > data.length)
                     throw new IllegalArgumentException("unexpected EOF");
-                validatePlacedRange(dst, len, versionSize, "BIGADD");
+                validatePlacedRange(dst, lenL, versionSize, "BIGADD");
                 byte[] payload = new byte[len];
                 System.arraycopy(data, pos, payload, 0, len);
                 pos += len;
@@ -307,22 +323,22 @@ public final class Encoding {
             } else if (t == DELTA_CMD_MOVE) {
                 if (pos + DELTA_COPY_PAYLOAD > data.length)
                     throw new IllegalArgumentException("unexpected EOF");
-                int src = getU32BE(data, pos); pos += DELTA_U32_SIZE;
-                int dst = getU32BE(data, pos); pos += DELTA_U32_SIZE;
-                int len = getU32BE(data, pos); pos += DELTA_U32_SIZE;
+                long src = Integer.toUnsignedLong(getU32BE(data, pos)); pos += DELTA_U32_SIZE;
+                long dst = Integer.toUnsignedLong(getU32BE(data, pos)); pos += DELTA_U32_SIZE;
+                long len = Integer.toUnsignedLong(getU32BE(data, pos)); pos += DELTA_U32_SIZE;
                 validatePlacedRange(dst, len, versionSize, "MOVE");
-                if (Integer.compareUnsigned(src + len, dst) > 0)
+                if (src + len > dst)
                     throw new IllegalArgumentException(
                         "MOVE src+length > dst: encoder ordering constraint violated");
                 commands.add(new PlacedMove(src, dst, len));
             } else if (t == DELTA_CMD_BIGMOVE) {
                 if (pos + DELTA_BIGCOPY_PAYLOAD > data.length)
                     throw new IllegalArgumentException("unexpected EOF");
-                int src = checkFitsInt(getU64Long(data, pos), "BIGMOVE src"); pos += DELTA_U64_SIZE;
-                int dst = checkFitsInt(getU64Long(data, pos), "BIGMOVE dst"); pos += DELTA_U64_SIZE;
-                int len = checkFitsInt(getU64Long(data, pos), "BIGMOVE length"); pos += DELTA_U64_SIZE;
+                long src = checkNonNegative(getU64Long(data, pos), "BIGMOVE src"); pos += DELTA_U64_SIZE;
+                long dst = checkNonNegative(getU64Long(data, pos), "BIGMOVE dst"); pos += DELTA_U64_SIZE;
+                long len = checkNonNegative(getU64Long(data, pos), "BIGMOVE length"); pos += DELTA_U64_SIZE;
                 validatePlacedRange(dst, len, versionSize, "BIGMOVE");
-                if (Integer.compareUnsigned(src + len, dst) > 0)
+                if (src + len > dst)
                     throw new IllegalArgumentException(
                         "BIGMOVE src+length > dst: encoder ordering constraint violated");
                 commands.add(new PlacedMove(src, dst, len));
@@ -337,6 +353,10 @@ public final class Encoding {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
+
+    private static boolean useBig(boolean forceLarge, long a, long b, long c) {
+        return forceLarge || a > U32_MAX || b > U32_MAX || c > U32_MAX;
+    }
 
     private static boolean matchesMagic(byte[] data, byte[] magic) {
         if (data.length < magic.length) return false;
@@ -381,16 +401,13 @@ public final class Encoding {
              |  (long)(buf[off + 7] & 0xFF);
     }
 
-    /** Guard against u64 values that exceed Integer.MAX_VALUE (Java array limit). */
-    private static int checkFitsInt(long value, String field) {
-        if (value < 0 || value > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException(
-                field + " value " + value + " exceeds Integer.MAX_VALUE");
-        }
-        return (int) value;
+    private static long checkNonNegative(long value, String field) {
+        if (value < 0)
+            throw new IllegalArgumentException(field + " value overflows long");
+        return value;
     }
 
-    private static void validatePlacedRange(int dst, int len, int versionSize, String kind) {
+    private static void validatePlacedRange(long dst, long len, long versionSize, String kind) {
         if (dst < 0 || len < 0 || dst > versionSize || len > versionSize - dst) {
             throw new IllegalArgumentException(kind + " extends past version size");
         }

@@ -2,7 +2,7 @@
 # Pilot-bench workload: one file-encode operation for one language implementation.
 #
 # Usage: pilot_lang.sh <lang> <algo>
-#   lang: Python | Rust | Cpp | C | Java | Go | Kotlin | Scala | Haskell
+#   lang: Python | Rust | Cpp | C | Java | Go
 #   algo: onepass | correcting
 #
 # Prints MiB/s (ref file size ÷ elapsed encode time) to stdout.
@@ -41,35 +41,6 @@ fi
 
 JAVA=$(command -v java 2>/dev/null || true)
 
-# ── Locate Scala library ──────────────────────────────────────────────────────
-# Try (1) the Makefile path, then (2) derive from wherever scalac lives.
-
-_find_scala_lib() {
-    local mk_lib; mk_lib=$(grep 'SCALA_LIB\s*=' "$REPO_ROOT/src/scala/Makefile" \
-                           | head -1 | sed 's/.*= *//')
-    [[ -f "$mk_lib" ]] && { echo "$mk_lib"; return; }
-
-    local scalac; scalac=$(command -v scalac 2>/dev/null) || return 1
-    local real; real=$(readlink -f "$scalac" 2>/dev/null || echo "$scalac")
-    local scala_home; scala_home=$(dirname "$(dirname "$real")")
-
-    # Scala 3: runtime split across two maven2 jars
-    local s3j s2j
-    s3j=$(find "$scala_home/maven2/org/scala-lang/scala3-library_3" \
-               -name "scala3-library_3-*.jar" 2>/dev/null | sort -V | tail -1)
-    s2j=$(find "$scala_home/maven2/org/scala-lang/scala-library" \
-               -name "scala-library-*.jar" 2>/dev/null | sort -V | tail -1)
-    [[ -f "$s3j" && -f "$s2j" ]] && { echo "${s3j}:${s2j}"; return; }
-
-    # Scala 2 / Homebrew: single scala.jar
-    local d; for d in "$scala_home/libexec/lib" "$scala_home/lib"; do
-        [[ -f "$d/scala.jar" ]] && { echo "$d/scala.jar"; return; }
-    done
-    return 1
-}
-
-SCALA_LIB=$(_find_scala_lib 2>/dev/null || true)
-
 # ── Resolve command ───────────────────────────────────────────────────────────
 
 case "$LANG_ARG" in
@@ -93,24 +64,6 @@ case "$LANG_ARG" in
         ;;
     Go)
         CMD=("$REPO_ROOT/src/go/delta/delta" encode)
-        ;;
-    Kotlin)
-        if [[ -z "$JAVA" || ! -x "$JAVA" ]]; then
-            echo "Java not found (needed for Kotlin)" >&2; exit 1
-        fi
-        CMD=("$JAVA" -cp "$REPO_ROOT/src/kotlin/delta.jar" delta.Delta encode)
-        ;;
-    Scala)
-        if [[ -z "$JAVA" || ! -x "$JAVA" ]]; then
-            echo "Java not found (needed for Scala)" >&2; exit 1
-        fi
-        if [[ -z "$SCALA_LIB" ]]; then
-            echo "Scala library not found" >&2; exit 1
-        fi
-        CMD=("$JAVA" -cp "$REPO_ROOT/src/scala/delta.jar:$SCALA_LIB" delta.Delta encode)
-        ;;
-    Haskell)
-        CMD=("$REPO_ROOT/src/haskell/delta-hs" encode)
         ;;
     *)
         echo "unknown language: $LANG_ARG" >&2

@@ -16,7 +16,7 @@ No external tools required beyond the language toolchains.
 ./tests/per-language-benchmark.sh
 ```
 
-This builds all eight implementations, downloads the Linux 5.1.0 and 5.1.1
+This builds all compiled implementations, downloads the Linux 5.1.0 and 5.1.1
 kernel tarballs (~871 MB each, cached in `/tmp/delta-kernel-test`), and prints
 a per-language timing table for onepass and correcting.
 
@@ -26,9 +26,9 @@ a per-language timing table for onepass and correcting.
 ./tests/per-language-benchmark.sh
 ```
 
-Encodes the linux-5.1.0 → 5.1.1 tarball pair with each of the eight
-implementations (Python, Rust, C++, C, Java, Go, Kotlin, Scala) and reports
-wall-clock seconds per encode.  Requires ~2 GB disk for the tarballs.
+Encodes the linux-5.1.0 → 5.1.1 tarball pair with each compiled implementation
+(Rust, C++, C, Java, Go) and reports wall-clock seconds per encode.  Requires
+~2 GB disk for the tarballs.
 
 ### Extended kernel benchmark (Rust, linux-5.1.0–5.1.7)
 
@@ -58,7 +58,7 @@ three algorithms plus in-place conversion.
 ./tests/correctness.sh
 ```
 
-Builds all eight implementations, runs per-language unit tests, and verifies
+Builds all implementations, runs per-language unit tests, and verifies
 cross-language delta compatibility (any implementation can decode a delta
 produced by any other).
 
@@ -99,7 +99,7 @@ cargo build --release --bin pilot_delta
 Shakespeare automatically on first run):
 
 ```bash
-./tests/per-language-benchmark.sh   # builds all implementations + downloads kernel tarballs
+./tests/per-language-benchmark.sh   # builds compiled implementations + downloads kernel tarballs
 ./tests/get_shakespeare.sh          # optional: pre-download Shakespeare data separately
 ```
 
@@ -107,7 +107,7 @@ Shakespeare automatically on first run):
 
 ```bash
 bash bench_rust.sh    # Rust encode/decode/inplace — 1 MiB synthetic data (MiB/s)
-bash bench_all.sh     # all 8 languages, onepass + correcting — Shakespeare ~5.4 MB (MiB/s)
+bash bench_all.sh     # compiled languages, onepass + correcting — Shakespeare ~5.4 MB (MiB/s)
 ```
 
 Each script emits a Markdown table ready to paste into the docs.
@@ -175,12 +175,11 @@ see `tests/per-language-benchmark.sh` (871 MB kernel tarballs, single run).
 | `<Lang>-op` | onepass encode |
 | `<Lang>-co` | correcting encode |
 
-Languages: Rust, C, C++, Java, Kotlin, Scala, Go, Python (in that order).
+Languages: Rust, C, C++, Java, Go, Python (in that order).
 
 > **Note:** Python takes ~6 s per round (≈ 62× slower than Rust); it is
-> placed last so the fast languages complete first.  Java, Kotlin, and Scala
-> are skipped automatically if no JDK is found.  Scala is additionally
-> skipped if the Scala runtime jar is not present.
+> placed last so the fast languages complete first.  Java is skipped
+> automatically if no JDK is found.
 
 ---
 

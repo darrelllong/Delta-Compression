@@ -13,7 +13,7 @@
 #   ./tests/per-language-benchmark.sh
 #
 # Requirements:
-#   - Compiled language toolchains installed (Rust, C, C++, Java, Go, Kotlin, Scala, Haskell)
+#   - Compiled language toolchains installed (Rust, C, C++, Java, Go)
 #   - curl, gunzip (to download tarballs if not already cached)
 #   - ~2 GB disk in WORKDIR (two ~1 GB tarballs)
 #   - ~2.5 GB RAM (auto-sized hash tables for 871 MB kernel tarballs)
@@ -24,55 +24,20 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKDIR="${WORKDIR:-/tmp/delta-kernel-test}"
 KERNEL_BASE="https://cdn.kernel.org/pub/linux/kernel/v5.x"
-HASKELL_BIN=""
 
-# ── Locate Java ───────────────────────────────────────────────────────────────
+# ── Locate Java 17 toolchain ──────────────────────────────────────────────────
+# Prefer the Homebrew openjdk@17 install; fall back to PATH.  Derive JAVAC
+# from the same prefix as JAVA so both point at the same JDK.
 
 JAVA=/opt/homebrew/opt/openjdk@17/bin/java
 if [[ ! -x "$JAVA" ]]; then
     JAVA=$(command -v java 2>/dev/null || true)
 fi
-if [[ -z "$JAVA" || ! -x "$JAVA" ]]; then
-    echo "WARNING: Java not found — Java, Kotlin, and Scala will be skipped" >&2
+JAVAC="${JAVA%java}javac"
+if [[ -z "$JAVA" || ! -x "$JAVA" || ! -x "$JAVAC" ]]; then
+    echo "WARNING: Java not found — Java will be skipped" >&2
     JAVA=""
-fi
-
-# ── Locate Scala library ──────────────────────────────────────────────────────
-# Try (1) the Makefile path, then (2) derive from wherever scalac lives.
-
-_find_scala_lib() {
-    local mk_lib; mk_lib=$(grep 'SCALA_LIB\s*=' "$REPO_ROOT/src/scala/Makefile" \
-                           | head -1 | sed 's/.*= *//')
-    [[ -f "$mk_lib" ]] && { echo "$mk_lib"; return; }
-
-    local scalac; scalac=$(command -v scalac 2>/dev/null) || return 1
-    local real; real=$(readlink -f "$scalac" 2>/dev/null || echo "$scalac")
-    local scala_home; scala_home=$(dirname "$(dirname "$real")")
-
-    # Scala 3 layout: runtime split across two maven2 jars
-    local s3j s2j
-    s3j=$(find "$scala_home/maven2/org/scala-lang/scala3-library_3" \
-               -name "scala3-library_3-*.jar" 2>/dev/null | sort -V | tail -1)
-    s2j=$(find "$scala_home/maven2/org/scala-lang/scala-library" \
-               -name "scala-library-*.jar" 2>/dev/null | sort -V | tail -1)
-    [[ -f "$s3j" && -f "$s2j" ]] && { echo "${s3j}:${s2j}"; return; }
-
-    # Scala 2 / Homebrew layout: single scala.jar
-    local d; for d in "$scala_home/libexec/lib" "$scala_home/lib"; do
-        [[ -f "$d/scala.jar" ]] && { echo "$d/scala.jar"; return; }
-    done
-    return 1
-}
-
-SCALA_LIB=$(_find_scala_lib 2>/dev/null || true)
-if [[ -z "$SCALA_LIB" ]]; then
-    echo "WARNING: Scala library not found — Scala will be skipped" >&2
-fi
-
-# ── Locate GHC / Haskell toolchain ───────────────────────────────────────────
-
-if ! command -v ghc >/dev/null 2>&1; then
-    echo "WARNING: ghc not found — Haskell will be skipped" >&2
+    JAVAC=""
 fi
 
 # ── Build all implementations ─────────────────────────────────────────────────
@@ -95,26 +60,11 @@ make -s
 
 echo "  Java    — make"
 cd "$REPO_ROOT/src/java"
-make -s
+if [[ -n "$JAVA" ]]; then make -s JAVA="$JAVA" JAVAC="$JAVAC"; fi
 
 echo "  Go      — make"
 cd "$REPO_ROOT/src/go"
 make -s
-
-echo "  Kotlin  — make"
-cd "$REPO_ROOT/src/kotlin"
-make -s 2>/dev/null
-
-echo "  Scala   — make"
-cd "$REPO_ROOT/src/scala"
-make -s
-
-if command -v ghc >/dev/null 2>&1; then
-    echo "  Haskell — make"
-    cd "$REPO_ROOT/src/haskell"
-    make -s
-    HASKELL_BIN="$REPO_ROOT/src/haskell/delta-hs"
-fi
 
 echo ""
 
@@ -191,18 +141,6 @@ if [[ -n "$JAVA" ]]; then
 fi
 
 run_lang "Go"      "$REPO_ROOT/src/go/delta/delta" encode
-
-if [[ -n "$JAVA" ]]; then
-    run_lang "Kotlin" "$JAVA" -cp "$REPO_ROOT/src/kotlin/delta.jar" delta.Delta encode
-    if [[ -n "$SCALA_LIB" ]]; then
-        run_lang "Scala" "$JAVA" \
-            -cp "$REPO_ROOT/src/scala/delta.jar:$SCALA_LIB" delta.Delta encode
-    fi
-fi
-
-if [[ -n "$HASKELL_BIN" && -x "$HASKELL_BIN" ]]; then
-    run_lang "Haskell" "$HASKELL_BIN" encode
-fi
 
 echo ""
 echo "Working directory preserved at $WORKDIR"

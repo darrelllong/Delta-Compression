@@ -199,7 +199,7 @@ delta encode correcting old.bin new.bin delta.bin --verbose
 delta inplace old.bin standard.delta inplace.delta --verbose
 ```
 
-### --splay (Rust, C++, C, Java, Go, Kotlin, and Scala)
+### --splay (Rust, C++, C, Java, and Go)
 
 Replace the hash table with a Tarjan-Sleator splay tree for fingerprint
 lookup.  A splay tree is a self-adjusting binary search tree where every
@@ -321,7 +321,7 @@ Output size:  5678 bytes
 
 ## Cross-language compatibility
 
-All eight implementations (Python, Rust, C++, C, Java, Go, Kotlin, Scala)
+All six implementations (Python, Rust, C++, C, Java, Go)
 produce byte-identical delta files.  You can encode with any one and decode
 with any other.
 

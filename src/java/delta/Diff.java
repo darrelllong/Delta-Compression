@@ -28,7 +28,7 @@ public final class Diff {
 
     /** Print delta compression statistics to stderr. */
     static void printStats(List<Command> commands) {
-        List<Integer> copyLens = new ArrayList<>();
+        List<Long> copyLens = new ArrayList<>();
         long totalCopy = 0, totalAdd = 0;
         int numCopies = 0, numAdds = 0;
         for (Command cmd : commands) {
@@ -49,7 +49,7 @@ public final class Diff {
         if (!copyLens.isEmpty()) {
             copyLens.sort(null);
             double mean = totalCopy / (double) copyLens.size();
-            int median = copyLens.get(copyLens.size() / 2);
+            long median = copyLens.get(copyLens.size() / 2);
             System.err.printf("  copies: %d regions, min=%d max=%d mean=%.1f median=%d bytes%n",
                 copyLens.size(), copyLens.get(0), copyLens.get(copyLens.size() - 1), mean, median);
         }

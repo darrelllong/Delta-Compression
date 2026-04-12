@@ -11,15 +11,12 @@
 # Exit status: 0 if all suites pass, 1 if any fail.
 #
 # Suites run:
-#   Python  — 208 unit tests  (python3 -m unittest)
-#   Rust    — 56 tests        (cargo test)
-#   C++     — 64 tests        (ctest)
-#   C       — 45 tests        (test_delta.sh)
-#   Java    — 52 unit tests   (make test)
-#   Go      — 52 tests        (go test)
-#   Kotlin  — 52 unit tests   (make test)
-#   Scala   — 52 unit tests   (make test)
-#   Haskell — build + roundtrip smoke test (make)
+#   Python  — 236 unit tests  (python3 -m unittest)
+#   Rust    — 89 tests        (cargo test)
+#   C++     — 93 checks       (ctest)
+#   C       — 230 checks      (test_delta.sh)
+#   Java    — 73 unit tests   (make test)
+#   Go      — 81 tests        (go test)
 #   Cross   — cross-language byte-identical encode/decode (src/c/test_delta.sh)
 
 set -uo pipefail
@@ -30,9 +27,23 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PASS_SUITES=0
 FAIL_SUITES=0
 
+# ── Locate Java 17 toolchain ───────────────────────────────────────────────
+# Prefer the Homebrew openjdk@17 install; fall back to PATH.  Derive JAVAC
+# from the same prefix as JAVA so both point at the same JDK.
+
+_JAVA_BIN=/opt/homebrew/opt/openjdk@17/bin/java
+if [[ ! -x "$_JAVA_BIN" ]]; then
+    _JAVA_BIN=$(command -v java 2>/dev/null || true)
+fi
+_JAVAC_BIN="${_JAVA_BIN%java}javac"
+if [[ -z "$_JAVA_BIN" || ! -x "$_JAVA_BIN" || ! -x "$_JAVAC_BIN" ]]; then
+    _JAVA_BIN=""
+    _JAVAC_BIN=""
+fi
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-banner() { echo ""; echo "════════════════════════════════════════"; echo "  $*"; echo "════════════════════════════════════════"; }
+banner()    { echo ""; echo "════════════════════════════════════════"; echo "  $*"; echo "════════════════════════════════════════"; }
 
 run_suite() {
     local name="$1"; shift
@@ -47,66 +58,44 @@ run_suite() {
 
 # ── Python ────────────────────────────────────────────────────────────────────
 
-banner "Python (208 tests)"
+banner "Python (236 tests)"
 run_suite "Python unit tests" \
     bash -c "cd '$REPO_ROOT/src/python' && python3 -m unittest test_delta -v"
 
 # ── Rust ──────────────────────────────────────────────────────────────────────
 
-banner "Rust (56 tests)"
+banner "Rust (89 tests)"
 run_suite "Rust tests" \
     bash -c "cd '$REPO_ROOT/src/rust/delta' && cargo test"
 
 # ── C++ ───────────────────────────────────────────────────────────────────────
 
-banner "C++ (64 tests)"
+banner "C++ (93 checks)"
 run_suite "C++ build + ctest" \
     bash -c "cd '$REPO_ROOT/src/cpp' && cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_BUILD_PARALLEL_LEVEL=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) 2>&1 | tail -3 && cmake --build build --parallel && ctest --test-dir build --output-on-failure"
 
 # ── C ─────────────────────────────────────────────────────────────────────────
 
-banner "C (45 tests)"
+banner "C (230 checks)"
 run_suite "C build + integration tests" \
     bash -c "cd '$REPO_ROOT/src/c' && make && bash test_delta.sh"
 
 # ── Java ──────────────────────────────────────────────────────────────────────
 
-banner "Java (52 tests)"
-run_suite "Java build + unit tests" \
-    bash -c "cd '$REPO_ROOT/src/java' && make test"
+banner "Java (73 tests)"
+if [[ -n "$_JAVA_BIN" ]]; then
+    run_suite "Java build + unit tests" \
+        bash -c "cd '$REPO_ROOT/src/java' && make test JAVA='$_JAVA_BIN' JAVAC='$_JAVAC_BIN'"
+else
+    echo "  SKIPPED: Java (no compatible JDK 17 javac found)"
+    FAIL_SUITES=$((FAIL_SUITES + 1))
+fi
 
 # ── Go ────────────────────────────────────────────────────────────────────────
 
-banner "Go (52 tests)"
+banner "Go (81 tests)"
 run_suite "Go tests" \
     bash -c "cd '$REPO_ROOT/src/go' && go test ./delta/..."
-
-# ── Kotlin ────────────────────────────────────────────────────────────────────
-
-banner "Kotlin (52 tests)"
-run_suite "Kotlin build + unit tests" \
-    bash -c "cd '$REPO_ROOT/src/kotlin' && make test"
-
-# ── Scala ─────────────────────────────────────────────────────────────────────
-
-banner "Scala (52 tests)"
-run_suite "Scala build + unit tests" \
-    bash -c "cd '$REPO_ROOT/src/scala' && make test"
-
-# ── Haskell ──────────────────────────────────────────────────────────────────
-
-banner "Haskell (build + smoke)"
-run_suite "Haskell build + roundtrip smoke" \
-    bash -c "cd '$REPO_ROOT/src/haskell' && make clean && make && tmp=\$(mktemp -d) && \
-             printf 'AAAA BBBB CCCC\n' > \"\$tmp/ref.txt\" && \
-             printf 'AAAA XXXX CCCC DDDD\n' > \"\$tmp/ver.txt\" && \
-             ./delta-hs encode onepass \"\$tmp/ref.txt\" \"\$tmp/ver.txt\" \"\$tmp/std.delta\" >/dev/null && \
-             ./delta-hs decode \"\$tmp/ref.txt\" \"\$tmp/std.delta\" \"\$tmp/std.out\" >/dev/null && \
-             diff -q \"\$tmp/ver.txt\" \"\$tmp/std.out\" >/dev/null && \
-             ./delta-hs encode correcting \"\$tmp/ref.txt\" \"\$tmp/ver.txt\" \"\$tmp/ip.delta\" --inplace >/dev/null && \
-             ./delta-hs decode \"\$tmp/ref.txt\" \"\$tmp/ip.delta\" \"\$tmp/ip.out\" >/dev/null && \
-             diff -q \"\$tmp/ver.txt\" \"\$tmp/ip.out\" >/dev/null && \
-             rm -rf \"\$tmp\""
 
 # ── Cross-language compatibility ───────────────────────────────────────────────
 

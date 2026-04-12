@@ -186,12 +186,15 @@ public final class Delta {
         }
         Apply.validatePlacedCommands(result.commands(), r.length, result.versionSize(), result.inplace());
 
+        long vsz = result.versionSize();
+        if (vsz < 0 || vsz > Integer.MAX_VALUE)
+            throw new IllegalArgumentException("version size too large for JVM: " + vsz);
         long t0 = System.nanoTime();
         byte[] out;
         if (result.inplace()) {
-            out = Apply.applyDeltaInplace(r, result.commands(), result.versionSize());
+            out = Apply.applyDeltaInplace(r, result.commands(), vsz);
         } else {
-            out = new byte[result.versionSize()];
+            out = new byte[(int) vsz];
             Apply.applyPlacedTo(r, result.commands(), out);
         }
         long elapsed = System.nanoTime() - t0;

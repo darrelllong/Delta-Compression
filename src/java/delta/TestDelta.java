@@ -115,7 +115,7 @@ public class TestDelta {
         List<PlacedCommand> placed = Apply.placeCommands(cmds);
         byte[] delta = Encoding.encodeDelta(placed, false, Apply.outputSize(cmds), ZERO_HASH, ZERO_HASH);
         Encoding.DecodeResult res = Encoding.decodeDelta(delta);
-        byte[] out = new byte[res.versionSize()];
+        byte[] out = new byte[(int) res.versionSize()];
         Apply.applyPlacedTo(r, res.commands(), out);
         return out;
     }
@@ -1171,7 +1171,7 @@ public class TestDelta {
         // COPY command byte (not BIGCOPY) since fields fit in u32
         assertEquals(DELTA_CMD_COPY, d[DELTA_HEADER_SIZE_LARGE] & 0xFF, "COPY command byte");
         Encoding.DecodeResult res = Encoding.decodeDelta(d);
-        byte[] out = new byte[res.versionSize()];
+        byte[] out = new byte[(int) res.versionSize()];
         Apply.applyPlacedTo(r, res.commands(), out);
         assertArrayEquals(r, out, "COPY roundtrip via large format");
     }
@@ -1181,7 +1181,7 @@ public class TestDelta {
         List<PlacedCommand> cmds = List.of(new PlacedAdd(0, payload));
         byte[] d = Encoding.encodeDeltaLarge(cmds, false, payload.length, ZH, ZH, false);
         Encoding.DecodeResult res = Encoding.decodeDelta(d);
-        byte[] out = new byte[res.versionSize()];
+        byte[] out = new byte[(int) res.versionSize()];
         Apply.applyPlacedTo(new byte[0], res.commands(), out);
         assertArrayEquals(payload, out, "ADD roundtrip via large format");
     }
@@ -1195,7 +1195,7 @@ public class TestDelta {
         );
         byte[] d = Encoding.encodeDeltaLarge(cmds, false, 10, ZH, ZH, false);
         Encoding.DecodeResult res = Encoding.decodeDelta(d);
-        byte[] out = new byte[res.versionSize()];
+        byte[] out = new byte[(int) res.versionSize()];
         Apply.applyPlacedTo(new byte[0], res.commands(), out);
         assertArrayEquals("hellohello".getBytes(), out, "MOVE roundtrip");
     }
@@ -1304,7 +1304,7 @@ public class TestDelta {
         List<PlacedCommand> placed = Apply.placeCommands(cmds);
         byte[] d = Encoding.encodeDeltaLarge(placed, false, v.length, ZH, ZH, false);
         Encoding.DecodeResult res = Encoding.decodeDelta(d);
-        byte[] out = new byte[res.versionSize()];
+        byte[] out = new byte[(int) res.versionSize()];
         Apply.applyPlacedTo(r, res.commands(), out);
         assertArrayEquals(v, out, name + " large-format roundtrip");
     }

@@ -1288,7 +1288,7 @@ func TestEncodeDeltaRejectsAddDstOverflow(t *testing.T) {
 // ── DLT\x04 (large format) tests ─────────────────────────────────────────────
 
 func TestLargeHeaderMagic(t *testing.T) {
-	out := EncodeDeltaLarge(nil, false, 0, zeroHash, zeroHash)
+	out := EncodeDeltaLarge(nil, false, 0, zeroHash, zeroHash, false)
 	if string(out[:4]) != DeltaMagicLarge {
 		t.Fatalf("expected magic %q, got %q", DeltaMagicLarge, string(out[:4]))
 	}
@@ -1296,7 +1296,7 @@ func TestLargeHeaderMagic(t *testing.T) {
 
 func TestLargeHeaderSize(t *testing.T) {
 	// Empty delta: 29-byte header + 1-byte END = 30 bytes.
-	out := EncodeDeltaLarge(nil, false, 0, zeroHash, zeroHash)
+	out := EncodeDeltaLarge(nil, false, 0, zeroHash, zeroHash, false)
 	if len(out) != DeltaHeaderSizeLarge+1 {
 		t.Fatalf("expected %d bytes, got %d", DeltaHeaderSizeLarge+1, len(out))
 	}
@@ -1304,7 +1304,7 @@ func TestLargeHeaderSize(t *testing.T) {
 
 func TestLargeHeaderVersionSizeU64(t *testing.T) {
 	big := 1<<32 + 999
-	out := EncodeDeltaLarge(nil, false, big, zeroHash, zeroHash)
+	out := EncodeDeltaLarge(nil, false, big, zeroHash, zeroHash, false)
 	res, err := DecodeDelta(out)
 	if err != nil {
 		t.Fatalf("DecodeDelta: %v", err)
@@ -1315,11 +1315,11 @@ func TestLargeHeaderVersionSizeU64(t *testing.T) {
 }
 
 func TestLargeInplaceFlag(t *testing.T) {
-	out := EncodeDeltaLarge(nil, true, 0, zeroHash, zeroHash)
+	out := EncodeDeltaLarge(nil, true, 0, zeroHash, zeroHash, false)
 	if !IsInplaceDelta(out) {
 		t.Fatal("inplace flag not detected")
 	}
-	out2 := EncodeDeltaLarge(nil, false, 0, zeroHash, zeroHash)
+	out2 := EncodeDeltaLarge(nil, false, 0, zeroHash, zeroHash, false)
 	if IsInplaceDelta(out2) {
 		t.Fatal("inplace flag falsely detected")
 	}
@@ -1328,7 +1328,7 @@ func TestLargeInplaceFlag(t *testing.T) {
 func TestLargeCopySmallRoundtrip(t *testing.T) {
 	r := b("ABCDEFGH")
 	cmds := []PlacedCommand{PlacedCopy{Src: 0, DstOff: 0, Length: 8}}
-	out := EncodeDeltaLarge(cmds, false, 8, zeroHash, zeroHash)
+	out := EncodeDeltaLarge(cmds, false, 8, zeroHash, zeroHash, false)
 	res, err := DecodeDelta(out)
 	if err != nil {
 		t.Fatalf("DecodeDelta: %v", err)
@@ -1344,7 +1344,7 @@ func TestLargeBigCopyCommandByte(t *testing.T) {
 	// src > U32_MAX forces BIGCOPY; verify command byte = 3.
 	bigSrc := math.MaxUint32 + 1
 	cmds := []PlacedCommand{PlacedCopy{Src: bigSrc, DstOff: 0, Length: 1}}
-	out := EncodeDeltaLarge(cmds, false, 1, zeroHash, zeroHash)
+	out := EncodeDeltaLarge(cmds, false, 1, zeroHash, zeroHash, false)
 	if out[DeltaHeaderSizeLarge] != DeltaCmdBigCopy {
 		t.Fatalf("expected BIGCOPY(3), got %d", out[DeltaHeaderSizeLarge])
 	}
@@ -1352,7 +1352,7 @@ func TestLargeBigCopyCommandByte(t *testing.T) {
 
 func TestLargeAddRoundtrip(t *testing.T) {
 	cmds := []PlacedCommand{PlacedAdd{DstOff: 0, Data: b("hello")}}
-	out := EncodeDeltaLarge(cmds, false, 5, zeroHash, zeroHash)
+	out := EncodeDeltaLarge(cmds, false, 5, zeroHash, zeroHash, false)
 	res, err := DecodeDelta(out)
 	if err != nil {
 		t.Fatalf("DecodeDelta: %v", err)
@@ -1367,7 +1367,7 @@ func TestLargeAddRoundtrip(t *testing.T) {
 func TestLargeBigAddCommandByte(t *testing.T) {
 	bigDst := math.MaxUint32 + 1
 	cmds := []PlacedCommand{PlacedAdd{DstOff: bigDst, Data: b("x")}}
-	out := EncodeDeltaLarge(cmds, false, bigDst+1, zeroHash, zeroHash)
+	out := EncodeDeltaLarge(cmds, false, bigDst+1, zeroHash, zeroHash, false)
 	if out[DeltaHeaderSizeLarge] != DeltaCmdBigAdd {
 		t.Fatalf("expected BIGADD(4), got %d", out[DeltaHeaderSizeLarge])
 	}
@@ -1379,7 +1379,7 @@ func TestLargeMoveRoundtrip(t *testing.T) {
 		PlacedAdd{DstOff: 0, Data: b("ABC")},
 		PlacedMove{Src: 0, DstOff: 3, Length: 3},
 	}
-	out := EncodeDeltaLarge(cmds, false, 6, zeroHash, zeroHash)
+	out := EncodeDeltaLarge(cmds, false, 6, zeroHash, zeroHash, false)
 	res, err := DecodeDelta(out)
 	if err != nil {
 		t.Fatalf("DecodeDelta: %v", err)
@@ -1393,7 +1393,7 @@ func TestLargeMoveRoundtrip(t *testing.T) {
 
 func TestLargeMoveCommandByte(t *testing.T) {
 	cmds := []PlacedCommand{PlacedMove{Src: 0, DstOff: 3, Length: 3}}
-	out := EncodeDeltaLarge(cmds, false, 6, zeroHash, zeroHash)
+	out := EncodeDeltaLarge(cmds, false, 6, zeroHash, zeroHash, false)
 	if out[DeltaHeaderSizeLarge] != DeltaCmdMove {
 		t.Fatalf("expected MOVE(5), got %d", out[DeltaHeaderSizeLarge])
 	}
@@ -1402,7 +1402,7 @@ func TestLargeMoveCommandByte(t *testing.T) {
 func TestLargeBigMoveCommandByte(t *testing.T) {
 	bigDst := math.MaxUint32 + 1
 	cmds := []PlacedCommand{PlacedMove{Src: 0, DstOff: bigDst, Length: 1}}
-	out := EncodeDeltaLarge(cmds, false, bigDst+1, zeroHash, zeroHash)
+	out := EncodeDeltaLarge(cmds, false, bigDst+1, zeroHash, zeroHash, false)
 	if out[DeltaHeaderSizeLarge] != DeltaCmdBigMove {
 		t.Fatalf("expected BIGMOVE(6), got %d", out[DeltaHeaderSizeLarge])
 	}
@@ -1459,7 +1459,7 @@ func TestLargeAlgoRoundtripGreedy(t *testing.T) {
 	r, v := b("hello world"), b("hello earth")
 	cmds := Diff(AlgorithmGreedy, r, v, opts(4))
 	placed := PlaceCommands(cmds)
-	delta := EncodeDeltaLarge(placed, false, len(v), zeroHash, zeroHash)
+	delta := EncodeDeltaLarge(placed, false, len(v), zeroHash, zeroHash, false)
 	if string(delta[:4]) != DeltaMagicLarge {
 		t.Fatal("expected DLT\\x04 magic")
 	}
@@ -1479,7 +1479,7 @@ func TestLargeAlgoRoundtripOnepass(t *testing.T) {
 	v := append(repeat(b("abcdefgh"), 5), repeat(b("XXXXXXXX"), 5)...)
 	cmds := Diff(AlgorithmOnepass, r, v, opts(4))
 	placed := PlaceCommands(cmds)
-	delta := EncodeDeltaLarge(placed, false, len(v), zeroHash, zeroHash)
+	delta := EncodeDeltaLarge(placed, false, len(v), zeroHash, zeroHash, false)
 	res, err := DecodeDelta(delta)
 	if err != nil {
 		t.Fatalf("DecodeDelta: %v", err)
@@ -1495,7 +1495,7 @@ func TestLargeAlgoRoundtripCorrecting(t *testing.T) {
 	r, v := b("the quick brown fox"), b("the slow brown fox")
 	cmds := Diff(AlgorithmCorrecting, r, v, opts(4))
 	placed := PlaceCommands(cmds)
-	delta := EncodeDeltaLarge(placed, false, len(v), zeroHash, zeroHash)
+	delta := EncodeDeltaLarge(placed, false, len(v), zeroHash, zeroHash, false)
 	res, err := DecodeDelta(delta)
 	if err != nil {
 		t.Fatalf("DecodeDelta: %v", err)

@@ -194,6 +194,8 @@ int main(int argc, char** argv) {
 
     CLI11_PARSE(app, argc, argv);
 
+    try {
+
     if (enc->parsed()) {
         Algorithm algo;
         if (enc_algo_str == "greedy") {
@@ -384,4 +386,8 @@ int main(int argc, char** argv) {
     }
 
     return 0;
+    } catch (const DeltaError& e) {
+        std::fprintf(stderr, "error: %s\n", e.what());
+        return 1;
+    }
 }
