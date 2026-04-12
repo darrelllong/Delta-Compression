@@ -27,5 +27,17 @@ src/go/delta_bin
 *-REVIEW.md
 RESPONSE.md
 
+# Fuzz artifacts
+src/cpp/fuzz/corpus/
+src/cpp/fuzz/crashes/
+src/cpp/build-fuzz/
+src/rust/delta/fuzz/corpus/
+src/rust/delta/fuzz/artifacts/
+src/c/fuzz/corpus/
+src/c/fuzz/findings/
+src/c/fuzz/fuzz_decode
+src/c/fuzz/fuzz_decode_lf
+testdata/fuzz/
+
 # Pilot benchmark output directories
 pilot_result_*/

@@ -40,3 +40,10 @@ target_link_libraries(delta PRIVATE delta_lib CLI11::CLI11)
 
 enable_testing()
 add_subdirectory(tests)
+
+# ── Fuzz targets (opt-in, requires Clang + libFuzzer) ─────────────────────
+
+option(ENABLE_FUZZING "Build libFuzzer fuzz targets (requires Clang)" OFF)
+if(ENABLE_FUZZING)
+    add_subdirectory(fuzz)
+endif()
