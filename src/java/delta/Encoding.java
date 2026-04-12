@@ -233,11 +233,12 @@ public final class Encoding {
             } else if (t == DELTA_CMD_ADD) {
                 if (pos + DELTA_ADD_HEADER > data.length)
                     throw new IllegalArgumentException("unexpected EOF");
-                long dst = Integer.toUnsignedLong(getU32BE(data, pos)); pos += DELTA_U32_SIZE;
-                int  len = getU32BE(data, pos);                         pos += DELTA_U32_SIZE;
-                if (pos + len > data.length)
+                long dst  = Integer.toUnsignedLong(getU32BE(data, pos)); pos += DELTA_U32_SIZE;
+                long lenL = Integer.toUnsignedLong(getU32BE(data, pos)); pos += DELTA_U32_SIZE;
+                if (lenL > data.length - pos)
                     throw new IllegalArgumentException("unexpected EOF");
-                validatePlacedRange(dst, Integer.toUnsignedLong(len), versionSize, "ADD");
+                int len = (int) lenL;
+                validatePlacedRange(dst, lenL, versionSize, "ADD");
                 byte[] payload = new byte[len];
                 System.arraycopy(data, pos, payload, 0, len);
                 pos += len;
@@ -288,11 +289,12 @@ public final class Encoding {
             } else if (t == DELTA_CMD_ADD) {
                 if (pos + DELTA_ADD_HEADER > data.length)
                     throw new IllegalArgumentException("unexpected EOF");
-                long dst = Integer.toUnsignedLong(getU32BE(data, pos)); pos += DELTA_U32_SIZE;
-                int  len = getU32BE(data, pos);                         pos += DELTA_U32_SIZE;
-                if (pos + len > data.length)
+                long dst  = Integer.toUnsignedLong(getU32BE(data, pos)); pos += DELTA_U32_SIZE;
+                long lenL = Integer.toUnsignedLong(getU32BE(data, pos)); pos += DELTA_U32_SIZE;
+                if (lenL > data.length - pos)
                     throw new IllegalArgumentException("unexpected EOF");
-                validatePlacedRange(dst, Integer.toUnsignedLong(len), versionSize, "ADD");
+                int len = (int) lenL;
+                validatePlacedRange(dst, lenL, versionSize, "ADD");
                 byte[] payload = new byte[len];
                 System.arraycopy(data, pos, payload, 0, len);
                 pos += len;
@@ -313,7 +315,7 @@ public final class Encoding {
                 if (lenL > Integer.MAX_VALUE)
                     throw new IllegalArgumentException("BIGADD length too large for JVM");
                 int len = (int) lenL;
-                if (pos + len > data.length)
+                if (len > data.length - pos)
                     throw new IllegalArgumentException("unexpected EOF");
                 validatePlacedRange(dst, lenL, versionSize, "BIGADD");
                 byte[] payload = new byte[len];

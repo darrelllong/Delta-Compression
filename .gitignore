@@ -14,7 +14,13 @@ src/c/test_overflow
 src/java/out/
 src/java/**/*.class
 *.class
-*.jar
+
+# Jazzer binary and fuzz artifacts (download jazzer-macos.tar.gz from GitHub releases)
+src/java/fuzz/jazzer
+src/java/fuzz/jazzer_standalone.jar
+src/java/fuzz/findings/
+src/java/fuzz/corpus/
+src/java/fuzz/crash-*
 
 # C++ alternate builds
 src/cpp/build-release/
