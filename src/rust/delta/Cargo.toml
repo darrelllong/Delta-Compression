@@ -1,7 +1,28 @@
 [package]
-name = "delta"
-version = "0.1.0"
+name = "delta-compression"
+version = "0.5.0"
 edition = "2021"
+license = "BSD-2-Clause"
+authors = ["Darrell Long"]
+description = "Binary delta compression — diff and apply for byte sequences, with rolling-hash matching, splay-tree indexing, and in-place patching."
+repository = "https://github.com/darrelllong/delta-compression"
+readme = "README.md"
+documentation = "https://docs.rs/delta-compression"
+keywords = ["delta", "diff", "patch", "compression", "binary-diff"]
+categories = ["compression", "algorithms"]
+exclude = [
+    "fuzz/**",
+    "target/**",
+    ".claude/**",
+    ".codex/**",
+    "pilot_result_*/**",
+    "CLAUDE.md",
+    "AGENTS.md",
+]
+
+[lib]
+name = "delta"
+path = "src/lib.rs"
 
 [[bin]]
 name = "delta"
