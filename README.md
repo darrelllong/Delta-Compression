@@ -265,7 +265,7 @@ R, V (byte arrays)
 |--------|------|
 | `hash` | Karp-Rabin rolling hash; Mersenne modulo; `next_prime` for table sizing |
 | `splay` | Sleator-Tarjan self-adjusting BST — optional alternative to hash table |
-| `algorithm/greedy` | O(n²) optimal: stores every R offset per fingerprint, scans all candidates |
+| `algorithm/greedy` | $O(n^2)$ optimal: stores every R offset per fingerprint, scans all candidates |
 | `algorithm/onepass` | O(n) linear: concurrent R+V scan, two hash tables, version-based eviction (§4.3) |
 | `algorithm/correcting` | ~O(n): checkpoint filter (§8) limits table entries; lookback buffer corrects missed tail matches |
 | `apply` | `place_commands`, `apply_placed_to`, `apply_delta_inplace`, bounds validation |
