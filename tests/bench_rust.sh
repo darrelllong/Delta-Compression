@@ -1,26 +1,34 @@
 #!/usr/bin/env bash
 # Run Rust delta-compression micro-benchmarks through pilot-bench and emit a Markdown table.
-# Columns: operation, ms/op mean, ±CI (95%), runs-to-CI
+# Columns: operation, MiB/s mean, CI width (95%), runs-to-CI
+# The CI column is the full width of the 95% confidence interval, as
+# pilot-bench prints it after "Reading CI"; the interval is the mean plus or
+# minus half of it.
 #
 # Workload: 1 MiB synthetic data, ~5% single-byte mutations, default parameters.
 # Build first:  cd src/rust/delta && cargo build --release --bin pilot_delta
 set -euo pipefail
 
-BENCH=~/pilot-bench/build/cli/bench
-REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+BENCH="${PILOT_BENCH_CLI:-$HOME/pilot-bench/build/cli/bench}"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PILOT="$REPO_ROOT/src/rust/delta/target/release/pilot_delta"
 
 measure() {
     local name=$1
-    local out mean ci rounds
+    local out mean ci rounds status=0
     out=$("$BENCH" run_program --preset quick \
           --pi "${name},MiB/s,0,1,1" \
-          -- "$PILOT" "$name" 2>&1)
+          -- "$PILOT" "$name" 2>&1) || status=$?
+    if [[ "$status" -ne 0 ]]; then
+        echo "pilot-bench failed for $name with status $status:" >&2
+        echo "$out" >&2
+        exit 1
+    fi
     mean=$(echo   "$out" | awk '/Reading mean/{print $5}')
     ci=$(echo     "$out" | awk '/Reading CI/{print $5}')
     rounds=$(echo "$out" | awk '/^Rounds:/{print $2}')
     printf "| %-28s | %10s | %10s | %5s |\n" \
-           "$name" "$mean" "±$ci" "$rounds"
+           "$name" "$mean" "$ci" "$rounds"
 }
 
 sep() { echo "|------------------------------|------------|------------|-------|"; }
@@ -29,7 +37,7 @@ hdr() {
     echo ""
     echo "### $1"
     echo ""
-    echo "| Operation                    |   MiB/s    | ±CI (95%)  | Runs  |"
+    echo "| Operation                    |   MiB/s    | CI width (95%) | Runs  |"
     sep
 }
 

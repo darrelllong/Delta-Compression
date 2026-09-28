@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 # Run all language implementations through pilot-bench and emit a Markdown table.
-# Columns: language, algorithm, MiB/s (throughput), ±CI (95%), runs-to-CI
+# Columns: language, algorithm, MiB/s (throughput), CI width (95%), runs-to-CI
+# The CI column is the full width of the 95% confidence interval, as
+# pilot-bench prints it after "Reading CI"; the interval is the mean plus or
+# minus half of it.
+#
+# Optional CPU pinning (Linux): PIN_SINGLE is a taskset CPU list for the
+# single-threaded implementations (Rust, C, C++), PIN_MULTI one for those whose
+# runtimes start threads of their own (Java, Go).
 #
 # Workload: Shakespeare's complete works (~5.4 MB, ~5% byte mutations),
 #           onepass and correcting.
 # Build first: run tests/per-language-benchmark.sh (builds all implementations).
 set -euo pipefail
 
-BENCH=~/pilot-bench/build/cli/bench
-REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+BENCH="${PILOT_BENCH_CLI:-$HOME/pilot-bench/build/cli/bench}"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORKLOAD="$REPO_ROOT/tests/pilot_lang.sh"
 export WORKDIR="${WORKDIR:-/tmp/delta-kernel-test}"
 mkdir -p "$WORKDIR"
@@ -31,15 +38,25 @@ JAVA=$(command -v java 2>/dev/null || true)
 
 measure() {
     local name=$1 lang=$2 algo=$3
-    local out mean ci rounds
-    out=$("$BENCH" run_program --preset quick \
+    local out mean ci rounds status=0
+    local pin=()
+    case "$lang" in
+        Rust|C|Cpp) [[ -n "${PIN_SINGLE:-}" ]] && pin=(taskset -c "$PIN_SINGLE") ;;
+        Java|Go)    [[ -n "${PIN_MULTI:-}"  ]] && pin=(taskset -c "$PIN_MULTI") ;;
+    esac
+    out=$(${pin[@]+"${pin[@]}"} "$BENCH" run_program --preset quick \
           --pi "${name},MiB/s,0,1,1" \
-          -- "$WORKLOAD" "$lang" "$algo" 2>&1)
+          -- "$WORKLOAD" "$lang" "$algo" 2>&1) || status=$?
+    if [[ "$status" -ne 0 ]]; then
+        echo "pilot-bench failed for $name with status $status:" >&2
+        echo "$out" >&2
+        exit 1
+    fi
     mean=$(echo   "$out" | awk '/Reading mean/{print $5}')
     ci=$(echo     "$out" | awk '/Reading CI/{print $5}')
     rounds=$(echo "$out" | awk '/^Rounds:/{print $2}')
     printf "| %-8s | %-10s | %10s | %10s | %5s |\n" \
-           "$lang" "$algo" "$mean" "±$ci" "$rounds"
+           "$lang" "$algo" "$mean" "$ci" "$rounds"
 }
 
 sep() { echo "|----------|------------|------------|------------|-------|"; }
@@ -48,7 +65,7 @@ hdr() {
     echo ""
     echo "### $1"
     echo ""
-    echo "| Language | Algorithm  |   MiB/s    | ±CI (95%)  | Runs  |"
+    echo "| Language | Algorithm  |   MiB/s    | CI width (95%) | Runs  |"
     sep
 }
 

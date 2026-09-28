@@ -9,7 +9,7 @@
 # Pilot-bench calls this repeatedly until statistical confidence is reached.
 #
 # REF/VER are resolved in order:
-#   1. $PILOT_REF / $PILOT_VER  (set by bench_all.sh — 10 MiB synthetic pair)
+#   1. $PILOT_REF / $PILOT_VER  (set by bench_all.sh — Shakespeare and its 5% mutation)
 #   2. $WORKDIR/linux-5.1.tar and linux-5.1.1.tar  (kernel tarball fallback)
 set -euo pipefail
 
@@ -79,7 +79,8 @@ esac
 python3 - "${CMD[@]}" "$ALGO" "$REF" "$VER" "$DELTA_TMP" <<'PYEOF'
 import sys, subprocess, time, os
 t0 = time.perf_counter()
-subprocess.run(sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# A failed encode would otherwise be timed as a fast one.
+subprocess.run(sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 elapsed = time.perf_counter() - t0
 ref_mib = os.path.getsize(sys.argv[-3]) / (1024.0 * 1024.0)
 print(f"{ref_mib / elapsed:.6f}")

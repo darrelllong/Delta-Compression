@@ -1,0 +1,18 @@
+Linux baase 7.0.0-1019-nvidia #19~24.04.2-Ubuntu SMP PREEMPT_DYNAMIC Sun Sep  6 18:35:11 UTC 2 aarch64 aarch64 aarch64 GNU/Linux
+Ubuntu 24.04.5 LTS
+Model name:                              Cortex-X925
+Model name:                              Cortex-A725
+governor performance
+pilot-bench 475063f
+Delta-Compression 1b38241 (tests/bench_all.sh, bench_rust.sh, pilot_lang.sh as fixed in this commit)
+rustc 1.95.0 (59807616e 2026-04-14)
+cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+openjdk version "21.0.12.1" 2026-08-18
+OpenJDK Runtime Environment (build 21.0.12.1+1-1-24.04.4-Ubuntu)
+javac: Temurin javac 21.0.12.1 --release 17
+go version go1.27.1 linux/arm64
+Python 3.12.3
+shakespeare.txt 3cf4b3d44ee14cff 5638480 bytes; shakespeare-5pct.txt 7164f27da741910f
+pinning: bench_rust.sh and Rust/C/C++ under taskset -c 9; Java/Go under taskset -c 5-9,15-19
+resident at start: a root vLLM/Ray inference service, idle

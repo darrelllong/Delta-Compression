@@ -106,11 +106,28 @@ Shakespeare automatically on first run):
 ### Step 3 — run the suites
 
 ```bash
-bash bench_rust.sh    # Rust encode/decode/inplace — 1 MiB synthetic data (MiB/s)
-bash bench_all.sh     # compiled languages, onepass + correcting — Shakespeare ~5.4 MB (MiB/s)
+bash tests/bench_rust.sh    # Rust encode/decode/inplace — 1 MiB synthetic data (MiB/s)
+bash tests/bench_all.sh     # compiled languages, onepass + correcting — Shakespeare ~5.4 MB (MiB/s)
 ```
 
-Each script emits a Markdown table ready to paste into the docs.
+Each script emits a Markdown table ready to paste into the docs. The
+`CI width` column is the full width of the 95% confidence interval that
+pilot-bench prints; the interval is the mean plus or minus half of it. Tables
+before 2026-09-28 printed the same number as `±CI`.
+
+Both scripts declare their MiB/s performance index as Pilot type 1, a rate,
+so that Pilot averages it as a rate. Set `PILOT_BENCH_CLI` if pilot-bench is
+not at `~/pilot-bench/build/cli/bench`. On Linux, `tests/bench_all.sh` pins
+each session when `PIN_SINGLE` (a `taskset` CPU list for Rust, C and C++,
+which are single-threaded) and `PIN_MULTI` (for Java and Go, whose runtimes
+start threads of their own) are set; the 2026-09-28 runs on `baase` used
+
+```bash
+taskset -c 9 bash tests/bench_rust.sh
+PIN_SINGLE=9 PIN_MULTI=5-9,15-19 bash tests/bench_all.sh
+```
+
+so that every session ran on the Cortex-X925 cores only.
 
 ### Running on a remote machine
 
@@ -119,12 +136,10 @@ set `WORKDIR` before running:
 
 ```bash
 # Use a different data directory (e.g., an HDD mount point):
-WORKDIR=/archive/darrell/tmp bash bench_all.sh
-
-# On macOS without openjdk@17 in Homebrew, pass the Java path:
-JAVA=/Library/Java/JavaVirtualMachines/jdk-19.jdk/Contents/Home/bin/java \
-    bash bench_all.sh
+WORKDIR=/archive/darrell/tmp bash tests/bench_all.sh
 ```
+
+`tests/bench_all.sh` runs whichever `java` is first on `PATH`.
 
 On Linux, boost may need to be installed before building pilot-bench:
 
@@ -139,7 +154,7 @@ cmake -DCMAKE_BUILD_TYPE=Release -DWITH_TUI=OFF \
 
 ## Workload descriptions
 
-### `bench_rust.sh` — Rust micro-benchmarks (`src/rust/delta`)
+### `tests/bench_rust.sh` — Rust micro-benchmarks (`src/rust/delta`)
 
 Driven by `src/rust/delta/src/bin/pilot_delta.rs`.  Each operation uses 1 MiB
 of deterministic LCG-generated data with ~5 % single-byte mutations.  Metric:
@@ -153,21 +168,25 @@ of deterministic LCG-generated data with ~5 % single-byte mutations.  Metric:
 | `decode_1m` | Apply a pre-encoded onepass delta | 100 |
 | `inplace_1m` | Convert standard delta to in-place format | 10 |
 
-> **Note:** Greedy is O(n²) — at 1 MiB it runs in ~90 ms.  Do not use it
-> on multi-MB files; use `encode_onepass_1m` and `encode_correcting_1m` for
+> **Note:** Greedy is O(n²).  At 1 MiB one operation took 92 ms on the
+> Apple M4 (10.87 MiB/s, March 2026) and 316 ms on the Cortex-X925
+> (3.168 MiB/s, 2026-09-28).  Do not use it on multi-MB files; use `encode_onepass_1m` and `encode_correcting_1m` for
 > large-file comparisons.
 
-### `bench_all.sh` — multi-language file-encode (`tests/pilot_lang.sh`)
+### `tests/bench_all.sh` — multi-language file-encode (`tests/pilot_lang.sh`)
 
 Driven by `tests/pilot_lang.sh`.  Each operation encodes Shakespeare's
 complete works (~5.4 MB, PG #100) as the reference and a version with ~5%
 random byte mutations applied.  Metric: **MiB/s** (reference file size ÷
 elapsed encode time).
 
-The Shakespeare workload was chosen because it has realistic textual patterns
-that the delta algorithms can actually match (typical ratios: onepass 2–4%,
-correcting 1–2%).  Random data produces no matches and reduces all algorithms
-to trivial serialization benchmarks.  For I/O-dominated large-file results,
+The Shakespeare workload was chosen because it is text the delta algorithms
+can match, where random data produces no matches and reduces all algorithms to
+serialization.  With 5% of its bytes replaced at random (one in 20 on
+average), the deltas are large: on 2026-09-28 every
+implementation produced a 4,016,248-byte onepass delta and a 4,092,873-byte
+correcting delta for the 5,638,480-byte version, 71.2% and 72.6% of its
+size.  For I/O-dominated large-file results,
 see `tests/per-language-benchmark.sh` (871 MB kernel tarballs, single run).
 
 | Operation | Description |
@@ -175,11 +194,9 @@ see `tests/per-language-benchmark.sh` (871 MB kernel tarballs, single run).
 | `<Lang>-op` | onepass encode |
 | `<Lang>-co` | correcting encode |
 
-Languages: Rust, C, C++, Java, Go, Python (in that order).
-
-> **Note:** Python takes ~6 s per round (≈ 62× slower than Rust); it is
-> placed last so the fast languages complete first.  Java is skipped
-> automatically if no JDK is found.
+Languages: Rust, C, C++, Java, Go (in that order).  Python is not measured
+here.  Java is skipped automatically if no `java` is on `PATH`, and Go if its
+binary has not been built.
 
 ---
 
@@ -191,11 +208,16 @@ Languages: Rust, C, C++, Java, Go, Python (in that order).
     --pi "encode_onepass_1m,MiB/s,0,1,1" \
     -- ./src/rust/delta/target/release/pilot_delta encode_onepass_1m
 
-# Multi-language op (MiB/s):
+# Multi-language op (MiB/s); pilot_lang.sh reads the input pair from
+# PILOT_REF and PILOT_VER, which tests/bench_all.sh sets:
+PILOT_REF=/tmp/delta-kernel-test/shakespeare.txt \
+PILOT_VER=/tmp/delta-kernel-test/shakespeare-5pct.txt \
 ~/pilot-bench/build/cli/bench run_program --preset quick \
     --pi "Rust-op,MiB/s,0,1,1" \
     -- ./tests/pilot_lang.sh Rust onepass
 ```
 
-`--preset quick` targets 20 % CI.  Use `--preset normal` for 10 % or
-`--preset strict` for tighter bounds.
+`--preset quick` stops when the confidence interval is at most 20% of the
+mean wide; `--preset normal` and `--preset strict` at 10%, with stricter
+autocorrelation and sample-size requirements.  Pilot `475063f` or later is
+needed for a rate (type 1) to be averaged as a rate.

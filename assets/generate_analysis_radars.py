@@ -119,7 +119,7 @@ def radar_svg(
         [
             "",
             f'  <text class="label" x="20" y="{HEIGHT - 84}">{html.escape(title)}</text>',
-            f'  <text class="small" x="20" y="{HEIGHT - 64}">Axes are categorical (languages); polygon edges connect axis values only.</text>',
+            f'  <text class="small" x="20" y="{HEIGHT - 64}">Axes are categorical (languages); polygon edges connect axis values only.{" * Pilot before f01eec4." if any("*" in n for n, *_ in series) else ""}</text>',
         ]
     )
 
@@ -178,7 +178,7 @@ def main() -> None:
     )
     write_chart(
         "shakespeare-onepass-throughput-radar.svg",
-        "Onepass throughput profile (MiB/s) - Shakespeare, Dyson M4",
+        "Onepass throughput profile (MiB/s) - Shakespeare, Dyson M4, Pilot before f01eec4",
         "Onepass throughput by language for Shakespeare pilot-bench workload on Dyson M4.",
         ["Rust", "Go", "C", "C++", "Java", "Haskell", "Kotlin", "Scala"],
         [("Throughput", "#0f766e", 0.22, [49.33, 44.49, 34.19, 30.87, 25.35, 23.71, 21.93, 17.09])],
@@ -187,7 +187,7 @@ def main() -> None:
     )
     write_chart(
         "shakespeare-correcting-throughput-radar.svg",
-        "Correcting throughput profile (MiB/s) - Shakespeare, Dyson M4",
+        "Correcting throughput profile (MiB/s) - Shakespeare, Dyson M4, Pilot before f01eec4",
         "Correcting throughput by language for Shakespeare pilot-bench workload on Dyson M4.",
         ["Rust", "Go", "C", "C++", "Java", "Haskell", "Kotlin", "Scala"],
         [("Throughput", "#2563eb", 0.22, [54.56, 37.12, 30.54, 29.09, 23.99, 23.11, 21.30, 16.00])],
@@ -197,12 +197,13 @@ def main() -> None:
     write_chart(
         "shakespeare-onepass-multimachine-radar.svg",
         "Onepass throughput by machine (MiB/s) - Shakespeare",
-        "Onepass throughput by language across Dyson M4, Wigner M1 Max, and DMZ i5.",
-        ["Rust", "Go", "C", "C++", "Java", "Haskell", "Kotlin", "Scala"],
+        "Onepass throughput by language across Dyson M4, Wigner M1 Max and DMZ i5 (March 2026, Pilot before f01eec4) and baase Cortex-X925 (2026-09-28, Pilot 475063f).",
+        ["Rust", "Go", "C", "C++", "Java"],
         [
-            ("Dyson M4", "#0f766e", 0.18, [49.33, 44.49, 34.19, 30.87, 25.35, 23.71, 21.93, 17.09]),
-            ("Wigner M1 Max", "#b45309", 0.16, [42.53, 32.30, 25.17, 23.47, 18.33, 14.09, 16.34, 12.89]),
-            ("DMZ i5", "#1d4ed8", 0.14, [17.66, 11.97, 15.23, 15.14, 10.39, 7.96, 8.10, 6.70]),
+            ("Dyson M4 *", "#0f766e", 0.18, [49.33, 44.49, 34.19, 30.87, 25.35]),
+            ("Wigner M1 Max *", "#b45309", 0.16, [42.53, 32.30, 25.17, 23.47, 18.33]),
+            ("DMZ i5 *", "#1d4ed8", 0.14, [17.66, 11.97, 15.23, 15.14, 10.39]),
+            ("baase X925", "#be123c", 0.14, [33.28, 27.46, 26.49, 27.61, 19.16]),
         ],
         55.0,
         [11, 22, 33, 44, 55],
@@ -210,12 +211,13 @@ def main() -> None:
     write_chart(
         "shakespeare-correcting-multimachine-radar.svg",
         "Correcting throughput by machine (MiB/s) - Shakespeare",
-        "Correcting throughput by language across Dyson M4, Wigner M1 Max, and DMZ i5.",
-        ["Rust", "Go", "C", "C++", "Java", "Haskell", "Kotlin", "Scala"],
+        "Correcting throughput by language across Dyson M4, Wigner M1 Max and DMZ i5 (March 2026, Pilot before f01eec4) and baase Cortex-X925 (2026-09-28, Pilot 475063f).",
+        ["Rust", "Go", "C", "C++", "Java"],
         [
-            ("Dyson M4", "#2563eb", 0.18, [54.56, 37.12, 30.54, 29.09, 23.99, 23.11, 21.30, 16.00]),
-            ("Wigner M1 Max", "#b45309", 0.16, [42.22, 28.18, 21.28, 20.66, 18.47, 18.38, 16.43, 12.00]),
-            ("DMZ i5", "#0f766e", 0.14, [19.71, 10.74, 15.92, 13.81, 9.80, 8.42, 8.68, 6.34]),
+            ("Dyson M4 *", "#2563eb", 0.18, [54.56, 37.12, 30.54, 29.09, 23.99]),
+            ("Wigner M1 Max *", "#b45309", 0.16, [42.22, 28.18, 21.28, 20.66, 18.47]),
+            ("DMZ i5 *", "#0f766e", 0.14, [19.71, 10.74, 15.92, 13.81, 9.80]),
+            ("baase X925", "#be123c", 0.14, [37.84, 29.27, 38.49, 36.44, 21.08]),
         ],
         60.0,
         [12, 24, 36, 48, 60],
