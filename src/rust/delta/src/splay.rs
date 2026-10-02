@@ -1,15 +1,13 @@
-//! Tarjan-Sleator splay tree keyed on u64 fingerprints.
+//! A top-down splay tree keyed on fingerprints (Sleator and Tarjan,
+//! "Self-Adjusting Binary Search Trees", JACM 32(3), 1985).
 //!
-//! A self-adjusting binary search tree: every access (find/insert)
-//! splays the accessed node to the root via zig/zig-zig/zig-zag
-//! rotations.  Amortized O(log n) per operation.
-//!
-//! Reference: Sleator & Tarjan, "Self-Adjusting Binary Search Trees",
-//! JACM 32(3), 1985.
+//! Every lookup and insertion moves the node it touches to the root, so a
+//! fingerprint that recurs is found quickly.  Operations take O(log n)
+//! amortized time.
 
+use std::mem::MaybeUninit;
 use std::ptr;
 
-/// A node in the splay tree.
 struct Node<V> {
     key: u64,
     value: V,
@@ -17,13 +15,23 @@ struct Node<V> {
     right: *mut Node<V>,
 }
 
-/// A splay tree mapping u64 keys to values of type V.
+/// A map from u64 keys to values of type `V`.
+///
+/// Lookups take `&mut self` because they restructure the tree.
 pub struct SplayTree<V> {
+    // Every node is a leaked Box that the tree owns; Drop frees them.
     root: *mut Node<V>,
     len: usize,
 }
 
+impl<V> Default for SplayTree<V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<V> SplayTree<V> {
+    /// Returns an empty tree.
     pub fn new() -> Self {
         SplayTree {
             root: ptr::null_mut(),
@@ -31,6 +39,7 @@ impl<V> SplayTree<V> {
         }
     }
 
+    /// The number of keys in the tree.
     pub fn len(&self) -> usize {
         self.len
     }
@@ -39,139 +48,96 @@ impl<V> SplayTree<V> {
         self.len == 0
     }
 
-    /// Find key; returns reference to value or None.
-    /// Splays the found node (or last visited) to root.
+    /// Returns the value stored under `key`, if any.
     pub fn find(&mut self, key: u64) -> Option<&mut V> {
-        if self.root.is_null() {
-            return None;
-        }
-        self.splay(key);
-        unsafe {
-            if (*self.root).key == key {
-                Some(&mut (*self.root).value)
-            } else {
-                None
-            }
+        if self.splay(key) {
+            // SAFETY: splay returned true, so root is a live node.
+            Some(unsafe { &mut (*self.root).value })
+        } else {
+            None
         }
     }
 
-    /// Insert key with value if absent; returns mutable reference to
-    /// the (possibly pre-existing) value. Splays to root.
+    /// Returns the value stored under `key`, first storing `value` there if
+    /// the key is absent.
     pub fn insert_or_get(&mut self, key: u64, value: V) -> &mut V {
-        if self.root.is_null() {
-            let node = Box::into_raw(Box::new(Node {
-                key,
-                value,
-                left: ptr::null_mut(),
-                right: ptr::null_mut(),
-            }));
-            self.root = node;
-            self.len += 1;
-            return unsafe { &mut (*self.root).value };
+        if !self.splay(key) {
+            self.insert_root(key, value);
         }
-
-        self.splay(key);
-
-        unsafe {
-            if (*self.root).key == key {
-                return &mut (*self.root).value;
-            }
-
-            let node = Box::into_raw(Box::new(Node {
-                key,
-                value,
-                left: ptr::null_mut(),
-                right: ptr::null_mut(),
-            }));
-            self.len += 1;
-
-            if key < (*self.root).key {
-                (*node).left = (*self.root).left;
-                (*node).right = self.root;
-                (*self.root).left = ptr::null_mut();
-            } else {
-                (*node).right = (*self.root).right;
-                (*node).left = self.root;
-                (*self.root).right = ptr::null_mut();
-            }
-            self.root = node;
-            &mut (*self.root).value
-        }
+        // SAFETY: the key was found or has just been inserted, at the root.
+        unsafe { &mut (*self.root).value }
     }
 
-    /// Insert key with value, overwriting any existing entry.
+    /// Stores `value` under `key`, replacing any value already there.
     pub fn insert(&mut self, key: u64, value: V) {
-        if self.root.is_null() {
-            let node = Box::into_raw(Box::new(Node {
-                key,
-                value,
-                left: ptr::null_mut(),
-                right: ptr::null_mut(),
-            }));
-            self.root = node;
-            self.len += 1;
-            return;
-        }
-
-        self.splay(key);
-
-        unsafe {
-            if (*self.root).key == key {
-                (*self.root).value = value;
-                return;
-            }
-
-            let node = Box::into_raw(Box::new(Node {
-                key,
-                value,
-                left: ptr::null_mut(),
-                right: ptr::null_mut(),
-            }));
-            self.len += 1;
-
-            if key < (*self.root).key {
-                (*node).left = (*self.root).left;
-                (*node).right = self.root;
-                (*self.root).left = ptr::null_mut();
-            } else {
-                (*node).right = (*self.root).right;
-                (*node).left = self.root;
-                (*self.root).right = ptr::null_mut();
-            }
-            self.root = node;
+        if self.splay(key) {
+            // SAFETY: splay returned true, so root is a live node.
+            unsafe { (*self.root).value = value };
+        } else {
+            self.insert_root(key, value);
         }
     }
 
-    /// Top-down splay (Sleator & Tarjan 1985).
-    ///
-    /// Uses MaybeUninit for the header sentinel since we only access
-    /// the left/right pointer fields, never the key or value.
-    fn splay(&mut self, key: u64) {
-        use std::mem::MaybeUninit;
+    /// Makes a new node for `key` the root.  The caller has just splayed for
+    /// `key` and not found it, so the old root, if any, is the key's
+    /// neighbor in order and the new node splits the tree there.
+    fn insert_root(&mut self, key: u64, value: V) {
+        let node = Box::into_raw(Box::new(Node {
+            key,
+            value,
+            left: ptr::null_mut(),
+            right: ptr::null_mut(),
+        }));
+        let old = self.root;
+        if !old.is_null() {
+            // SAFETY: node was just allocated and old is the live root; they
+            // are distinct.
+            unsafe {
+                if key < (*old).key {
+                    (*node).left = (*old).left;
+                    (*node).right = old;
+                    (*old).left = ptr::null_mut();
+                } else {
+                    (*node).right = (*old).right;
+                    (*node).left = old;
+                    (*old).right = ptr::null_mut();
+                }
+            }
+        }
+        self.root = node;
+        self.len += 1;
+    }
 
+    /// Moves the node with `key` to the root and reports whether there is
+    /// one.  If there is not, the root becomes the last node on the search
+    /// path, a neighbor of `key` in order.
+    fn splay(&mut self, key: u64) -> bool {
         if self.root.is_null() {
-            return;
+            return false;
         }
 
-        // Sentinel header — only left/right are used.
+        // Nodes less than the key are hung off header.right through `l`;
+        // nodes greater, off header.left through `r`.  Only the header's two
+        // links are ever written or read, so the rest stays uninitialized.
         let mut header = MaybeUninit::<Node<V>>::uninit();
-        let header_ptr = header.as_mut_ptr();
-        unsafe {
-            (*header_ptr).left = ptr::null_mut();
-            (*header_ptr).right = ptr::null_mut();
-        }
-        let mut l: *mut Node<V> = header_ptr;
-        let mut r: *mut Node<V> = header_ptr;
+        let header = header.as_mut_ptr();
+        let mut l = header;
+        let mut r = header;
         let mut t = self.root;
 
+        // SAFETY: t starts at the live root and only ever follows non-null
+        // links; l and r are the header or nodes already visited.  Writes to
+        // the header go through raw field pointers and touch only its links.
         unsafe {
+            ptr::addr_of_mut!((*header).left).write(ptr::null_mut());
+            ptr::addr_of_mut!((*header).right).write(ptr::null_mut());
             loop {
                 if key < (*t).key {
                     if (*t).left.is_null() {
                         break;
                     }
                     if key < (*(*t).left).key {
-                        // Zig-zig: rotate right
+                        // Zig-zig: rotate right.
                         let y = (*t).left;
                         (*t).left = (*y).right;
                         (*y).right = t;
@@ -180,7 +146,6 @@ impl<V> SplayTree<V> {
                             break;
                         }
                     }
-                    // Link right
                     (*r).left = t;
                     r = t;
                     t = (*t).left;
@@ -189,7 +154,7 @@ impl<V> SplayTree<V> {
                         break;
                     }
                     if key > (*(*t).right).key {
-                        // Zig-zig: rotate left
+                        // Zig-zig: rotate left.
                         let y = (*t).right;
                         (*t).right = (*y).left;
                         (*y).left = t;
@@ -198,45 +163,39 @@ impl<V> SplayTree<V> {
                             break;
                         }
                     }
-                    // Link left
                     (*l).right = t;
                     l = t;
                     t = (*t).right;
                 } else {
-                    break; // found
+                    break;
                 }
             }
 
-            // Assemble
             (*l).right = (*t).left;
             (*r).left = (*t).right;
-            (*t).left = (*header_ptr).right;
-            (*t).right = (*header_ptr).left;
+            (*t).left = (*header).right;
+            (*t).right = (*header).left;
             self.root = t;
+            (*t).key == key
         }
     }
 }
 
 impl<V> Drop for SplayTree<V> {
     fn drop(&mut self) {
-        // Iterative destruction using a stack to avoid deep recursion.
-        let mut stack = Vec::new();
-        if !self.root.is_null() {
-            stack.push(self.root);
-        }
+        // A splay tree can be a path as long as the tree is large, so the
+        // nodes are freed with an explicit stack rather than by recursion.
+        let mut stack = vec![self.root];
         while let Some(node) = stack.pop() {
-            unsafe {
-                if !(*node).left.is_null() {
-                    stack.push((*node).left);
-                }
-                if !(*node).right.is_null() {
-                    stack.push((*node).right);
-                }
-                drop(Box::from_raw(node));
+            if node.is_null() {
+                continue;
             }
+            // SAFETY: each node is reachable from the root by one path, so it
+            // is pushed and freed once.
+            let node = unsafe { Box::from_raw(node) };
+            stack.push(node.left);
+            stack.push(node.right);
         }
-        self.root = ptr::null_mut();
-        self.len = 0;
     }
 }
 

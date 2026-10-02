@@ -1,67 +1,146 @@
+//! The `delta` command: encode, decode, inspect, and convert delta files.
+
 use std::fs::{self, File, OpenOptions};
 use std::process;
 use std::time::Instant;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use memmap2::MmapMut;
 
 use delta::{
-    Algorithm, CyclePolicy, DiffOptions,
-    apply_placed_inplace_to, apply_placed_to, validate_placed_commands,
-    crc64_xz, decode_delta, encode_delta_large,
-    make_inplace, place_commands, unplace_commands,
-    placed_summary,
+    apply_placed_inplace_to, apply_placed_to, crc64_xz, decode_delta, encode_delta_large,
+    make_inplace, place_commands, placed_summary, unplace_commands, validate_placed_commands,
+    Algorithm, CyclePolicy, DiffOptions, PlacedCommand, DELTA_CRC_SIZE,
 };
 
-/// Format a byte slice as a lowercase hex string.
-fn hex_str(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+#[derive(Parser)]
+#[command(about = "Differential compression (Ajtai et al. 2002)")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
 }
 
-/// Parse a size with optional k/M/B suffix (decimal: k=1000, M=1_000_000, B=1_000_000_000).
-fn parse_size_suffix(s: &str) -> Result<usize, String> {
-    let s = s.trim();
-    let (num_str, mult) = match s.as_bytes().last() {
-        Some(b'k') | Some(b'K') => (&s[..s.len() - 1], 1_000usize),
-        Some(b'M') | Some(b'm') => (&s[..s.len() - 1], 1_000_000usize),
-        Some(b'B') | Some(b'b') => (&s[..s.len() - 1], 1_000_000_000usize),
-        _ => (s, 1usize),
-    };
-    let n: usize = num_str
-        .parse()
-        .map_err(|_| format!("invalid number: '{}'", num_str))?;
-    n.checked_mul(mult)
-        .ok_or_else(|| format!("'{}' overflows usize", s))
+#[derive(Subcommand)]
+enum Commands {
+    /// Compute delta encoding
+    Encode(EncodeArgs),
+    /// Reconstruct version from delta
+    Decode(DecodeArgs),
+    /// Show delta file statistics
+    Info(InfoArgs),
+    /// Convert standard delta to in-place delta
+    Inplace(InplaceArgs),
 }
 
-// ── mmap helpers ─────────────────────────────────────────────────────────
+#[derive(Args)]
+struct EncodeArgs {
+    /// Algorithm to use
+    #[arg(value_enum)]
+    algorithm: AlgorithmArg,
 
-/// Create a file of `size` bytes and memory-map it for read-write.
-/// Returns `None` for size 0 (creates an empty file).
-fn mmap_create(path: &str, size: usize) -> std::io::Result<(File, Option<MmapMut>)> {
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(path)?;
-    if size > 0 {
-        file.set_len(size as u64)?;
-        // SAFETY: We have exclusive access to this newly-created file.
-        let mmap = unsafe { MmapMut::map_mut(&file)? };
-        Ok((file, Some(mmap)))
-    } else {
-        Ok((file, None))
-    }
+    /// Reference file
+    reference: String,
+
+    /// Version file
+    version: String,
+
+    /// Output delta file
+    delta_file: String,
+
+    /// Seed length (must be >= 1; default 16 balances collision rate and match quality)
+    #[arg(long, default_value_t = delta::SEED_LEN, value_parser = parse_seed_len)]
+    seed_len: usize,
+
+    /// Hash table floor size
+    #[arg(long, default_value_t = delta::TABLE_SIZE)]
+    table_size: usize,
+
+    /// Maximum hash table size; accepts k/M/B suffix (e.g. 512M, 2B)
+    #[arg(long, default_value_t = delta::MAX_TABLE_SIZE, value_parser = parse_size_suffix)]
+    max_table: usize,
+
+    /// Produce in-place reconstructible delta
+    #[arg(long)]
+    inplace: bool,
+
+    /// Force 64-bit (BIGCOPY/BIGADD/BIGMOVE) commands even for small files
+    #[arg(long)]
+    large: bool,
+
+    /// Cycle-breaking policy for --inplace
+    #[arg(long, value_enum, default_value_t = PolicyArg::Localmin)]
+    policy: PolicyArg,
+
+    /// Print diagnostic messages to stderr
+    #[arg(long)]
+    verbose: bool,
+
+    /// Use splay tree instead of hash table
+    #[arg(long)]
+    splay: bool,
 }
 
-// ── CLI types ────────────────────────────────────────────────────────────
+#[derive(Args)]
+struct DecodeArgs {
+    /// Reference file
+    reference: String,
+
+    /// Delta file
+    delta_file: String,
+
+    /// Output (reconstructed version) file
+    output: String,
+
+    /// Skip hash verification (for partial recovery)
+    #[arg(long)]
+    ignore_hash: bool,
+}
+
+#[derive(Args)]
+struct InfoArgs {
+    /// Delta file
+    delta_file: String,
+}
+
+#[derive(Args)]
+struct InplaceArgs {
+    /// Reference file
+    reference: String,
+
+    /// Input (standard) delta file
+    delta_in: String,
+
+    /// Output (in-place) delta file
+    delta_out: String,
+
+    /// Cycle-breaking policy
+    #[arg(long, value_enum, default_value_t = PolicyArg::Localmin)]
+    policy: PolicyArg,
+
+    /// Force 64-bit (BIGCOPY/BIGADD/BIGMOVE) commands even for small files
+    #[arg(long)]
+    large: bool,
+
+    /// Print diagnostics (cycles broken, etc.)
+    #[arg(long)]
+    verbose: bool,
+}
 
 #[derive(Clone, Copy, ValueEnum)]
 enum AlgorithmArg {
     Greedy,
     Onepass,
     Correcting,
+}
+
+impl AlgorithmArg {
+    fn name(self) -> &'static str {
+        match self {
+            AlgorithmArg::Greedy => "greedy",
+            AlgorithmArg::Onepass => "onepass",
+            AlgorithmArg::Correcting => "correcting",
+        }
+    }
 }
 
 impl From<AlgorithmArg> for Algorithm {
@@ -80,6 +159,15 @@ enum PolicyArg {
     Constant,
 }
 
+impl PolicyArg {
+    fn name(self) -> &'static str {
+        match self {
+            PolicyArg::Localmin => "localmin",
+            PolicyArg::Constant => "constant",
+        }
+    }
+}
+
 impl From<PolicyArg> for CyclePolicy {
     fn from(p: PolicyArg) -> Self {
         match p {
@@ -89,434 +177,337 @@ impl From<PolicyArg> for CyclePolicy {
     }
 }
 
-#[derive(Parser)]
-#[command(about = "Differential compression (Ajtai et al. 2002)")]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
+fn parse_seed_len(s: &str) -> Result<usize, String> {
+    match s.parse::<usize>() {
+        Ok(0) => Err("--seed-len must be >= 1".to_string()),
+        Ok(n) => Ok(n),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
-#[derive(Subcommand)]
-enum Commands {
-    /// Compute delta encoding
-    Encode {
-        /// Algorithm to use
-        #[arg(value_enum)]
-        algorithm: AlgorithmArg,
-
-        /// Reference file
-        reference: String,
-
-        /// Version file
-        version: String,
-
-        /// Output delta file
-        delta_file: String,
-
-        /// Seed length (must be >= 1; default 16 balances collision rate and match quality)
-        #[arg(long, default_value_t = delta::SEED_LEN,
-              value_parser = |s: &str| s.parse::<usize>()
-                  .map_err(|e| e.to_string())
-                  .and_then(|n| if n >= 1 { Ok(n) }
-                            else { Err("--seed-len must be >= 1".to_string()) }))]
-        seed_len: usize,
-
-        /// Hash table floor size
-        #[arg(long, default_value_t = delta::TABLE_SIZE)]
-        table_size: usize,
-
-        /// Maximum hash table size; accepts k/M/B suffix (e.g. 512M, 2B)
-        #[arg(long, default_value = "1073741827", value_parser = parse_size_suffix)]
-        max_table: usize,
-
-        /// Produce in-place reconstructible delta
-        #[arg(long)]
-        inplace: bool,
-
-        /// Force 64-bit (BIGCOPY/BIGADD/BIGMOVE) commands even for small files
-        #[arg(long)]
-        large: bool,
-
-        /// Cycle-breaking policy for --inplace
-        #[arg(long, value_enum, default_value_t = PolicyArg::Localmin)]
-        policy: PolicyArg,
-
-        /// Print diagnostic messages to stderr
-        #[arg(long)]
-        verbose: bool,
-
-        /// Use splay tree instead of hash table
-        #[arg(long)]
-        splay: bool,
-    },
-
-    /// Reconstruct version from delta
-    Decode {
-        /// Reference file
-        reference: String,
-
-        /// Delta file
-        delta_file: String,
-
-        /// Output (reconstructed version) file
-        output: String,
-
-        /// Skip hash verification (for partial recovery)
-        #[arg(long)]
-        ignore_hash: bool,
-    },
-
-    /// Show delta file statistics
-    Info {
-        /// Delta file
-        delta_file: String,
-    },
-
-    /// Convert standard delta to in-place delta
-    Inplace {
-        /// Reference file
-        reference: String,
-
-        /// Input (standard) delta file
-        delta_in: String,
-
-        /// Output (in-place) delta file
-        delta_out: String,
-
-        /// Cycle-breaking policy
-        #[arg(long, value_enum, default_value_t = PolicyArg::Localmin)]
-        policy: PolicyArg,
-
-        /// Force 64-bit (BIGCOPY/BIGADD/BIGMOVE) commands even for small files
-        #[arg(long)]
-        large: bool,
-
-        /// Print diagnostics (cycles broken, etc.)
-        #[arg(long)]
-        verbose: bool,
-    },
+/// Parses a count with an optional decimal suffix: k, M (10^6) or B (10^9),
+/// in either case.
+fn parse_size_suffix(s: &str) -> Result<usize, String> {
+    let s = s.trim();
+    let (digits, mult) = match s.as_bytes().last() {
+        Some(b'k' | b'K') => (&s[..s.len() - 1], 1_000),
+        Some(b'm' | b'M') => (&s[..s.len() - 1], 1_000_000),
+        Some(b'b' | b'B') => (&s[..s.len() - 1], 1_000_000_000),
+        _ => (s, 1),
+    };
+    let n: usize = digits
+        .parse()
+        .map_err(|_| format!("invalid number: '{}'", digits))?;
+    n.checked_mul(mult)
+        .ok_or_else(|| format!("'{}' overflows usize", s))
 }
 
-// ── main ─────────────────────────────────────────────────────────────────
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn read_file(path: &str) -> Result<Vec<u8>, String> {
+    fs::read(path).map_err(|e| format!("Error reading {}: {}", path, e))
+}
+
+fn write_file(path: &str, bytes: &[u8]) -> Result<(), String> {
+    fs::write(path, bytes).map_err(|e| format!("Error writing {}: {}", path, e))
+}
+
+/// A decoded delta file.
+struct Delta {
+    commands: Vec<PlacedCommand>,
+    inplace: bool,
+    version_size: usize,
+    src_crc: [u8; DELTA_CRC_SIZE],
+    dst_crc: [u8; DELTA_CRC_SIZE],
+}
+
+impl Delta {
+    fn decode(bytes: &[u8]) -> Result<Self, String> {
+        let (commands, inplace, version_size, src_crc, dst_crc) =
+            decode_delta(bytes).map_err(|e| format!("Error decoding delta: {}", e))?;
+        Ok(Delta {
+            commands,
+            inplace,
+            version_size,
+            src_crc,
+            dst_crc,
+        })
+    }
+
+    fn format(&self) -> &'static str {
+        if self.inplace {
+            "in-place"
+        } else {
+            "standard"
+        }
+    }
+}
+
+/// Creates the file `path` with `size` bytes and maps it for writing.  A
+/// file of no bytes cannot be mapped, so the map is `None` if `size` is 0.
+fn mmap_create(path: &str, size: usize) -> std::io::Result<(File, Option<MmapMut>)> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)?;
+    if size == 0 {
+        return Ok((file, None));
+    }
+    file.set_len(size as u64)?;
+    // SAFETY: the file was just created or truncated by this process, and
+    // nothing else is expected to modify it while it is mapped.
+    let map = unsafe { MmapMut::map_mut(&file)? };
+    Ok((file, Some(map)))
+}
+
+fn encode(args: EncodeArgs) -> Result<(), String> {
+    let r = read_file(&args.reference)?;
+    let src_crc = crc64_xz(&r);
+    let v = read_file(&args.version)?;
+    let dst_crc = crc64_xz(&v);
+
+    let opts = DiffOptions {
+        p: args.seed_len,
+        q: args.table_size,
+        max_table: args.max_table,
+        verbose: args.verbose,
+        use_splay: args.splay,
+        ..DiffOptions::default()
+    };
+    let t0 = Instant::now();
+    let commands = delta::diff(args.algorithm.into(), &r, &v, &opts);
+    let (placed, cycles_broken) = if args.inplace {
+        let (placed, stats) = make_inplace(&r, &commands, args.policy.into());
+        (placed, stats.cycles_broken)
+    } else {
+        (place_commands(commands), 0)
+    };
+    let elapsed = t0.elapsed();
+
+    let delta_bytes = encode_delta_large(
+        &placed,
+        args.inplace,
+        v.len(),
+        &src_crc,
+        &dst_crc,
+        args.large,
+    );
+    write_file(&args.delta_file, &delta_bytes)?;
+
+    let stats = placed_summary(&placed);
+    let ratio = if v.is_empty() {
+        0.0
+    } else {
+        delta_bytes.len() as f64 / v.len() as f64
+    };
+    let algorithm = args.algorithm.name();
+    let splay = if args.splay { " [splay]" } else { "" };
+    if args.inplace {
+        let policy = args.policy.name();
+        println!("Algorithm:    {algorithm}{splay} + in-place ({policy})");
+    } else {
+        println!("Algorithm:    {algorithm}{splay}");
+    }
+    println!("Reference:    {} ({} bytes)", args.reference, r.len());
+    println!("Version:      {} ({} bytes)", args.version, v.len());
+    println!(
+        "Delta:        {} ({} bytes)",
+        args.delta_file,
+        delta_bytes.len()
+    );
+    println!("Compression:  {:.4} (delta/version)", ratio);
+    println!(
+        "Commands:     {} copies, {} adds",
+        stats.num_copies, stats.num_adds
+    );
+    if args.inplace {
+        println!("Cycles broken: {}", cycles_broken);
+    }
+    println!("Copy bytes:   {}", stats.copy_bytes);
+    println!("Add bytes:    {}", stats.add_bytes);
+    if args.verbose {
+        println!("Src CRC:      {}", hex(&src_crc));
+        println!("Dst CRC:      {}", hex(&dst_crc));
+    }
+    println!("Time:         {:.3}s", elapsed.as_secs_f64());
+    Ok(())
+}
+
+fn decode(args: DecodeArgs) -> Result<(), String> {
+    let r = read_file(&args.reference)?;
+    let r_crc = crc64_xz(&r);
+    let delta_bytes = read_file(&args.delta_file)?;
+    let output = &args.output;
+
+    let t0 = Instant::now();
+    let delta = Delta::decode(&delta_bytes)?;
+    if r_crc != delta.src_crc {
+        if !args.ignore_hash {
+            return Err(format!(
+                "error: source file does not match delta: expected {}, got {}",
+                hex(&delta.src_crc),
+                hex(&r_crc)
+            ));
+        }
+        eprintln!("warning: skipping source CRC check (--ignore-hash)");
+    }
+    let version_size = delta.version_size;
+    validate_placed_commands(&delta.commands, r.len(), version_size, delta.inplace)
+        .map_err(|e| format!("Error validating delta: {}", e))?;
+
+    // An in-place delta is applied to a file that starts as a copy of the
+    // reference, is as large as the larger of reference and version while
+    // the commands run, and is cut to the size of the version afterward.
+    let work_size = if delta.inplace {
+        r.len().max(version_size)
+    } else {
+        version_size
+    };
+    let (file, map) =
+        mmap_create(output, work_size).map_err(|e| format!("Error creating {}: {}", output, e))?;
+    let (out_crc, elapsed) = match map {
+        Some(mut out) => {
+            if delta.inplace {
+                out[..r.len()].copy_from_slice(&r);
+                apply_placed_inplace_to(&delta.commands, &mut out);
+            } else {
+                apply_placed_to(&r, &delta.commands, &mut out);
+            }
+            out.flush()
+                .map_err(|e| format!("Error flushing {}: {}", output, e))?;
+            let elapsed = t0.elapsed();
+            (crc64_xz(&out[..version_size]), elapsed)
+        }
+        None => (crc64_xz(&[]), t0.elapsed()),
+    };
+    if delta.inplace {
+        file.set_len(version_size as u64)
+            .map_err(|e| format!("Error truncating {}: {}", output, e))?;
+    }
+
+    if out_crc != delta.dst_crc {
+        if !args.ignore_hash {
+            return Err("error: output integrity check failed".to_string());
+        }
+        eprintln!("warning: skipping output CRC check (--ignore-hash)");
+    }
+
+    println!("Format:       {}", delta.format());
+    println!("Reference:    {} ({} bytes)", args.reference, r.len());
+    println!(
+        "Delta:        {} ({} bytes)",
+        args.delta_file,
+        delta_bytes.len()
+    );
+    println!("Output:       {} ({} bytes)", output, version_size);
+    println!("Time:         {:.3}s", elapsed.as_secs_f64());
+    Ok(())
+}
+
+fn info(args: InfoArgs) -> Result<(), String> {
+    let delta_bytes = read_file(&args.delta_file)?;
+    let delta = Delta::decode(&delta_bytes)?;
+    let stats = placed_summary(&delta.commands);
+    println!(
+        "Delta file:   {} ({} bytes)",
+        args.delta_file,
+        delta_bytes.len()
+    );
+    println!("Format:       {}", delta.format());
+    println!("Version size: {} bytes", delta.version_size);
+    println!("Src CRC:      {}", hex(&delta.src_crc));
+    println!("Dst CRC:      {}", hex(&delta.dst_crc));
+    println!("Commands:     {}", stats.num_commands);
+    println!(
+        "  Copies:     {} ({} bytes)",
+        stats.num_copies, stats.copy_bytes
+    );
+    println!(
+        "  Adds:       {} ({} bytes)",
+        stats.num_adds, stats.add_bytes
+    );
+    println!("Output size:  {} bytes", stats.total_output_bytes);
+    Ok(())
+}
+
+fn inplace(args: InplaceArgs) -> Result<(), String> {
+    let r = read_file(&args.reference)?;
+    let delta_bytes = read_file(&args.delta_in)?;
+    let delta = Delta::decode(&delta_bytes)?;
+    if delta.inplace {
+        write_file(&args.delta_out, &delta_bytes)?;
+        println!("Delta is already in-place format; copied unchanged.");
+        return Ok(());
+    }
+
+    let t0 = Instant::now();
+    let commands = unplace_commands(delta.commands);
+    let (placed, converted) = make_inplace(&r, &commands, args.policy.into());
+    let elapsed = t0.elapsed();
+
+    // The CRCs describe the reference and the version, which the conversion
+    // does not change.
+    let out_bytes = encode_delta_large(
+        &placed,
+        true,
+        delta.version_size,
+        &delta.src_crc,
+        &delta.dst_crc,
+        args.large,
+    );
+    write_file(&args.delta_out, &out_bytes)?;
+
+    if args.verbose {
+        eprintln!(
+            "inplace: {} copies, {} CRWI edges, {} cycles broken",
+            converted.num_copies + converted.copies_converted,
+            converted.edges,
+            converted.cycles_broken,
+        );
+        if converted.copies_converted > 0 {
+            eprintln!(
+                "  converted {} copies -> adds ({} bytes materialized)",
+                converted.copies_converted, converted.bytes_converted,
+            );
+        }
+    }
+
+    let stats = placed_summary(&placed);
+    println!("Reference:    {} ({} bytes)", args.reference, r.len());
+    println!(
+        "Input delta:  {} ({} bytes)",
+        args.delta_in,
+        delta_bytes.len()
+    );
+    println!(
+        "Output delta: {} ({} bytes)",
+        args.delta_out,
+        out_bytes.len()
+    );
+    println!("Format:       in-place ({})", args.policy.name());
+    println!(
+        "Commands:     {} copies, {} adds",
+        stats.num_copies, stats.num_adds
+    );
+    println!("Copy bytes:   {}", stats.copy_bytes);
+    println!("Add bytes:    {}", stats.add_bytes);
+    println!("Time:         {:.3}s", elapsed.as_secs_f64());
+    Ok(())
+}
 
 fn main() {
-    let cli = Cli::parse();
-
-    match cli.command {
-        Commands::Encode {
-            algorithm,
-            reference,
-            version,
-            delta_file,
-            seed_len,
-            table_size,
-            max_table,
-            inplace,
-            large,
-            policy,
-            verbose,
-            splay,
-        } => {
-            // Read files and compute CRC-64/XZ checksums, then use the
-            // loaded bytes for the diff algorithm.
-            let r_bytes = fs::read(&reference).unwrap_or_else(|e| {
-                eprintln!("Error reading {}: {}", reference, e);
-                process::exit(1);
-            });
-            let src_crc = crc64_xz(&r_bytes);
-            let r: &[u8] = &r_bytes;
-
-            let v_bytes = fs::read(&version).unwrap_or_else(|e| {
-                eprintln!("Error reading {}: {}", version, e);
-                process::exit(1);
-            });
-            let dst_crc = crc64_xz(&v_bytes);
-            let v: &[u8] = &v_bytes;
-
-            let algo: Algorithm = algorithm.into();
-            let t0 = Instant::now();
-            let opts = DiffOptions {
-                p: seed_len,
-                q: table_size,
-                max_table,
-                verbose,
-                use_splay: splay,
-                ..DiffOptions::default()
-            };
-            let commands = delta::diff(algo, r, v, &opts);
-
-            let pol: CyclePolicy = policy.into();
-            let mut cycles_broken = 0usize;
-            let placed = if inplace {
-                let (p, stats) = make_inplace(r, &commands, pol);
-                cycles_broken = stats.cycles_broken;
-                p
-            } else {
-                place_commands(commands)
-            };
-            let elapsed = t0.elapsed();
-
-            let delta_bytes = encode_delta_large(&placed, inplace, v.len(), &src_crc, &dst_crc, large);
-            fs::write(&delta_file, &delta_bytes).unwrap_or_else(|e| {
-                eprintln!("Error writing {}: {}", delta_file, e);
-                process::exit(1);
-            });
-
-            let stats = placed_summary(&placed);
-            let ratio = if v.is_empty() {
-                0.0
-            } else {
-                delta_bytes.len() as f64 / v.len() as f64
-            };
-            let algo_name = format!("{:?}", algo).to_lowercase();
-            let splay_tag = if splay { " [splay]" } else { "" };
-            if inplace {
-                let pol_name = format!("{:?}", pol).to_lowercase();
-                println!("Algorithm:    {}{} + in-place ({})", algo_name, splay_tag, pol_name);
-            } else {
-                println!("Algorithm:    {}{}", algo_name, splay_tag);
-            }
-            println!("Reference:    {} ({} bytes)", reference, r.len());
-            println!("Version:      {} ({} bytes)", version, v.len());
-            println!("Delta:        {} ({} bytes)", delta_file, delta_bytes.len());
-            println!("Compression:  {:.4} (delta/version)", ratio);
-            println!(
-                "Commands:     {} copies, {} adds",
-                stats.num_copies, stats.num_adds
-            );
-            if inplace {
-                println!("Cycles broken: {}", cycles_broken);
-            }
-            println!("Copy bytes:   {}", stats.copy_bytes);
-            println!("Add bytes:    {}", stats.add_bytes);
-            if verbose {
-                println!("Src CRC:      {}", hex_str(&src_crc));
-                println!("Dst CRC:      {}", hex_str(&dst_crc));
-            }
-            println!("Time:         {:.3}s", elapsed.as_secs_f64());
-        }
-
-        Commands::Decode {
-            reference,
-            delta_file,
-            output,
-            ignore_hash,
-        } => {
-            // Read reference and compute its CRC in one sequential pass.
-            let r_bytes = fs::read(&reference).unwrap_or_else(|e| {
-                eprintln!("Error reading {}: {}", reference, e);
-                process::exit(1);
-            });
-            let r_crc_actual = crc64_xz(&r_bytes);
-            let r: &[u8] = &r_bytes;
-
-            let delta_bytes = fs::read(&delta_file).unwrap_or_else(|e| {
-                eprintln!("Error reading {}: {}", delta_file, e);
-                process::exit(1);
-            });
-
-            let t0 = Instant::now();
-            let (placed, is_ip, version_size, src_crc, dst_crc) =
-                decode_delta(&delta_bytes).unwrap_or_else(|e| {
-                    eprintln!("Error decoding delta: {}", e);
-                    process::exit(1);
-                });
-
-            // Pre-check: verify reference matches what was recorded at encode time.
-            if r_crc_actual != src_crc {
-                if !ignore_hash {
-                    eprintln!(
-                        "error: source file does not match delta: expected {}, got {}",
-                        hex_str(&src_crc),
-                        hex_str(&r_crc_actual)
-                    );
-                    process::exit(1);
-                }
-                eprintln!("warning: skipping source CRC check (--ignore-hash)");
-            }
-            validate_placed_commands(&placed, r.len(), version_size, is_ip).unwrap_or_else(|e| {
-                eprintln!("Error validating delta: {}", e);
-                process::exit(1);
-            });
-
-            let out_bytes: Vec<u8> = if is_ip {
-                let buf_size = r.len().max(version_size);
-                let (out_file, out_mmap) =
-                    mmap_create(&output, buf_size).unwrap_or_else(|e| {
-                        eprintln!("Error creating {}: {}", output, e);
-                        process::exit(1);
-                    });
-                if let Some(mut mm) = out_mmap {
-                    mm[..r.len()].copy_from_slice(r);
-                    apply_placed_inplace_to(&placed, &mut mm);
-                    let result = mm[..version_size].to_vec();
-                    mm.flush().unwrap_or_else(|e| {
-                        eprintln!("Error flushing {}: {}", output, e);
-                        process::exit(1);
-                    });
-                    drop(mm);
-                    out_file.set_len(version_size as u64).unwrap_or_else(|e| {
-                        eprintln!("Error truncating {}: {}", output, e);
-                        process::exit(1);
-                    });
-                    result
-                } else {
-                    Vec::new()
-                }
-            } else {
-                let (_out_file, out_mmap) =
-                    mmap_create(&output, version_size).unwrap_or_else(|e| {
-                        eprintln!("Error creating {}: {}", output, e);
-                        process::exit(1);
-                    });
-                if let Some(mut mm) = out_mmap {
-                    apply_placed_to(r, &placed, &mut mm);
-                    let result = mm.to_vec();
-                    mm.flush().unwrap_or_else(|e| {
-                        eprintln!("Error flushing {}: {}", output, e);
-                        process::exit(1);
-                    });
-                    result
-                } else {
-                    Vec::new()
-                }
-            };
-            let elapsed = t0.elapsed();
-
-            // Post-check: verify reconstructed output matches recorded dest CRC.
-            let out_crc_actual = crc64_xz(&out_bytes);
-            if out_crc_actual != dst_crc {
-                if !ignore_hash {
-                    eprintln!("error: output integrity check failed");
-                    process::exit(1);
-                }
-                eprintln!("warning: skipping output CRC check (--ignore-hash)");
-            }
-
-            let fmt = if is_ip { "in-place" } else { "standard" };
-            println!("Format:       {}", fmt);
-            println!("Reference:    {} ({} bytes)", reference, r.len());
-            println!("Delta:        {} ({} bytes)", delta_file, delta_bytes.len());
-            println!("Output:       {} ({} bytes)", output, version_size);
-            println!("Time:         {:.3}s", elapsed.as_secs_f64());
-        }
-
-        Commands::Info { delta_file } => {
-            let delta_bytes = fs::read(&delta_file).unwrap_or_else(|e| {
-                eprintln!("Error reading {}: {}", delta_file, e);
-                process::exit(1);
-            });
-
-            let (placed, is_ip, version_size, src_crc, dst_crc) =
-                decode_delta(&delta_bytes).unwrap_or_else(|e| {
-                    eprintln!("Error decoding delta: {}", e);
-                    process::exit(1);
-                });
-
-            let stats = placed_summary(&placed);
-            let fmt = if is_ip { "in-place" } else { "standard" };
-            println!("Delta file:   {} ({} bytes)", delta_file, delta_bytes.len());
-            println!("Format:       {}", fmt);
-            println!("Version size: {} bytes", version_size);
-            println!("Src CRC:      {}", hex_str(&src_crc));
-            println!("Dst CRC:      {}", hex_str(&dst_crc));
-            println!("Commands:     {}", stats.num_commands);
-            println!(
-                "  Copies:     {} ({} bytes)",
-                stats.num_copies, stats.copy_bytes
-            );
-            println!(
-                "  Adds:       {} ({} bytes)",
-                stats.num_adds, stats.add_bytes
-            );
-            println!("Output size:  {} bytes", stats.total_output_bytes);
-        }
-
-        Commands::Inplace {
-            reference,
-            delta_in,
-            delta_out,
-            policy,
-            large,
-            verbose,
-        } => {
-            // Read reference and compute hash in one sequential pass.
-            let r_bytes = fs::read(&reference).unwrap_or_else(|e| {
-                eprintln!("Error reading {}: {}", reference, e);
-                process::exit(1);
-            });
-            let r: &[u8] = &r_bytes;
-
-            let delta_bytes = fs::read(&delta_in).unwrap_or_else(|e| {
-                eprintln!("Error reading {}: {}", delta_in, e);
-                process::exit(1);
-            });
-
-            let (placed, is_ip, version_size, src_crc, dst_crc) =
-                decode_delta(&delta_bytes).unwrap_or_else(|e| {
-                    eprintln!("Error decoding delta: {}", e);
-                    process::exit(1);
-                });
-
-            if is_ip {
-                fs::write(&delta_out, &delta_bytes).unwrap_or_else(|e| {
-                    eprintln!("Error writing {}: {}", delta_out, e);
-                    process::exit(1);
-                });
-                println!("Delta is already in-place format; copied unchanged.");
-                return;
-            }
-
-            let t0 = Instant::now();
-            let pol: CyclePolicy = policy.into();
-            let commands = unplace_commands(placed);
-            let (ip_placed, ip_stats) = make_inplace(r, &commands, pol);
-            let elapsed = t0.elapsed();
-
-            // Preserve the original src_crc and dst_crc from the input delta.
-            let ip_delta = encode_delta_large(&ip_placed, true, version_size, &src_crc, &dst_crc, large);
-            fs::write(&delta_out, &ip_delta).unwrap_or_else(|e| {
-                eprintln!("Error writing {}: {}", delta_out, e);
-                process::exit(1);
-            });
-
-            if verbose {
-                eprintln!(
-                    "inplace: {} copies, {} CRWI edges, {} cycles broken",
-                    ip_stats.num_copies + ip_stats.copies_converted,
-                    ip_stats.edges,
-                    ip_stats.cycles_broken,
-                );
-                if ip_stats.copies_converted > 0 {
-                    eprintln!(
-                        "  converted {} copies -> adds ({} bytes materialized)",
-                        ip_stats.copies_converted,
-                        ip_stats.bytes_converted,
-                    );
-                }
-            }
-
-            let stats = placed_summary(&ip_placed);
-            let pol_name = format!("{:?}", pol).to_lowercase();
-            println!("Reference:    {} ({} bytes)", reference, r.len());
-            println!(
-                "Input delta:  {} ({} bytes)",
-                delta_in,
-                delta_bytes.len()
-            );
-            println!(
-                "Output delta: {} ({} bytes)",
-                delta_out,
-                ip_delta.len()
-            );
-            println!("Format:       in-place ({})", pol_name);
-            println!(
-                "Commands:     {} copies, {} adds",
-                stats.num_copies, stats.num_adds
-            );
-            println!("Copy bytes:   {}", stats.copy_bytes);
-            println!("Add bytes:    {}", stats.add_bytes);
-            println!("Time:         {:.3}s", elapsed.as_secs_f64());
-        }
+    let result = match Cli::parse().command {
+        Commands::Encode(args) => encode(args),
+        Commands::Decode(args) => decode(args),
+        Commands::Info(args) => info(args),
+        Commands::Inplace(args) => inplace(args),
+    };
+    if let Err(message) = result {
+        eprintln!("{}", message);
+        process::exit(1);
     }
 }

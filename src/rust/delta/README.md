@@ -1,31 +1,59 @@
 # delta-compression
 
-Binary delta compression in pure, safe Rust. Computes a *delta* —
-a compact wire-format patch — from a `source` byte sequence to a
-`target` byte sequence, and applies the delta to recover `target`
-from `source`. Supports in-place patching against a single buffer
-when the delta was emitted with the `INPLACE` flag set.
+Differential compression in Rust. Given a reference and a version of it,
+the crate computes a delta: commands that copy ranges of the reference and
+add the bytes the reference lacks. The version is reconstructed from the
+reference and the delta. A delta can also be converted so that the version
+is reconstructed in place, in the buffer that holds the reference.
 
-Three diff algorithms are provided:
+The algorithms are from two papers:
 
-- `diff_greedy` — greedy maximal-match heuristic; fastest, larger output.
-- `diff_onepass` — single-pass scan with rolling-hash matching;
-  good time-vs-size balance.
-- `diff_correcting` — two-pass with optimisation pass; smallest
-  output, slowest.
+- M. Ajtai, R. Burns, R. Fagin, D.D.E. Long and L. Stockmeyer, "Compactly
+  Encoding Unstructured Inputs with Differential Compression", JACM 49(3),
+  2002.
+- R.C. Burns, D.D.E. Long and L. Stockmeyer, "In-Place Reconstruction of
+  Version Differences", IEEE TKDE 15(4), 2003.
 
-The library is also reachable as a CLI:
+There are three differencing algorithms:
+
+- `diff_onepass` scans both inputs once, in linear time and constant
+  space. It is the one to use unless blocks have moved.
+- `diff_correcting` indexes the reference and then scans the version, in
+  about linear time. It finds blocks that have been rearranged.
+- `diff_greedy` finds the smallest delta, in time proportional to the
+  product of the input lengths. It is for small inputs.
+
+## Library
+
+The library is named `delta`.
+
+```rust
+use delta::{apply_delta, diff, Algorithm, DiffOptions};
+
+let reference = b"the quick brown fox jumps over the lazy dog";
+let version = b"the quick brown cat jumps over the lazy dog";
+let opts = DiffOptions { p: 4, ..DiffOptions::default() };
+let commands = diff(Algorithm::Onepass, reference, version, &opts);
+assert_eq!(apply_delta(reference, &commands), version);
+```
+
+`place_commands` and `encode_delta_large` turn the commands into a delta
+file; `decode_delta` and `apply_placed_to` reverse that. `make_inplace`
+produces commands for `apply_placed_inplace_to`.
+
+## Command
 
 ```sh
 cargo install delta-compression
-delta diff   source.bin target.bin patch.delta
-delta apply  source.bin patch.delta  recovered.bin
+delta encode onepass old.bin new.bin patch.delta
+delta decode old.bin patch.delta recovered.bin
+delta info patch.delta
+delta encode correcting old.bin new.bin patch.delta --inplace
 ```
 
-This is the Rust port of the multi-language reference implementation
-at <https://github.com/darrelllong/delta-compression>; the C, C++,
-Go, Java, and Python ports live in sibling `src/<lang>/` directories
-in that repo.
+Implementations in C, C++, Go, Java and Python, which read and write the
+same delta format, are in the
+[repository](https://github.com/darrelllong/delta-compression).
 
 ## Licence
 

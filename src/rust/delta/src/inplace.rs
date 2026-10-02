@@ -1,488 +1,391 @@
+//! Conversion of a delta to one that can be applied in place (Burns, Long
+//! and Stockmeyer, "In-Place Reconstruction of Version Differences", IEEE
+//! TKDE 15(4), 2003).
+//!
+//! Applied in place, a copy reads from the buffer that other commands are
+//! overwriting.  If copy i reads bytes that copy j writes, i must run
+//! before j.  These constraints form a digraph on the copies, with an edge
+//! from i to j.  If it is acyclic, the copies are run in a topological
+//! order.  A cycle has no valid order, and is broken by replacing one of
+//! its copies with an add of the same bytes, which reads nothing.  Adds run
+//! after all the copies.
+
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
 use crate::types::{Command, CyclePolicy, PlacedCommand};
 
-// ── DFS color states for find_cycle_in_scc ──────────────────────────────────
-const COLOR_UNVISITED: u8 = 0;
-const COLOR_ON_PATH:   u8 = 1;
-const COLOR_DONE:      u8 = 2;
-
-/// Sentinel value meaning "vertex is in no non-trivial SCC".
-const NO_SCC: usize = usize::MAX;
-
-// ── Data structures ──────────────────────────────────────────────────────────
-
-/// Source offset, destination offset, and length of one copy command.
+/// A copy command and the offset in the version where it writes.
 #[derive(Clone, Copy)]
-struct CopyInfo {
-    src:    usize,
-    dst:    usize,
+struct CopyCmd {
+    src: usize,
+    dst: usize,
     length: usize,
 }
 
-/// Non-trivial SCCs with per-SCC active counts and vertex-to-SCC mapping.
-struct SccList {
-    sccs:   Vec<Vec<usize>>,  // non-trivial SCCs only
-    active: Vec<usize>,        // live member count per SCC
-    id:     Vec<usize>,        // vertex → SCC index; NO_SCC = trivial
-}
-
-/// Statistics from in-place conversion.
+/// What [`make_inplace`] did.
 #[derive(Debug, Default)]
 pub struct InplaceStats {
-    pub num_copies:       usize,
-    pub num_adds:         usize,
-    pub edges:            usize,
-    pub cycles_broken:    usize,
+    /// Copies in the result.
+    pub num_copies: usize,
+    /// Adds in the result, including those that replaced copies.
+    pub num_adds: usize,
+    /// Edges in the digraph of conflicts between copies.
+    pub edges: usize,
+    pub cycles_broken: usize,
+    /// Copies replaced by adds, one for each cycle broken.
     pub copies_converted: usize,
-    pub bytes_converted:  usize,
+    /// Total length of the copies replaced.
+    pub bytes_converted: usize,
 }
 
-// ── Tarjan SCC (unchanged) ───────────────────────────────────────────────────
-
-/// Compute SCCs using iterative Tarjan's algorithm.
+/// Builds the digraph in which i has an edge to j if copy i reads bytes
+/// that copy j writes.  Returns the adjacency lists and the in-degrees.
 ///
-/// Returns SCCs in reverse topological order (sinks first); caller reverses
-/// for source-first processing order.
-///
-/// R.E. Tarjan, "Depth-first search and linear graph algorithms,"
-/// SIAM J. Comput., 1(2):146-160, June 1972.
-fn tarjan_scc(adj: &[Vec<usize>], n: usize) -> Vec<Vec<usize>> {
-    let mut index_counter = 0usize;
-    let mut index = vec![usize::MAX; n]; // MAX = unvisited
-    let mut lowlink = vec![0usize; n];
-    let mut on_stack = vec![false; n];
-    let mut tarjan_stack: Vec<usize> = Vec::new();
-    let mut sccs: Vec<Vec<usize>> = Vec::new();
-    // DFS call stack: (vertex, next_neighbor_index)
-    let mut call_stack: Vec<(usize, usize)> = Vec::new();
+/// The copies write disjoint ranges.  Sorted by destination, the ones that
+/// overlap a given read range are therefore consecutive and are found by
+/// binary search, in O(n log n + edges) time overall.
+fn conflict_graph(copies: &[CopyCmd]) -> (Vec<Vec<usize>>, Vec<usize>) {
+    let n = copies.len();
+    let mut adj = vec![Vec::new(); n];
+    let mut in_deg = vec![0; n];
 
-    for start in 0..n {
-        if index[start] != usize::MAX {
-            continue;
-        }
+    let mut by_dst: Vec<usize> = (0..n).collect();
+    by_dst.sort_unstable_by_key(|&j| copies[j].dst);
+    let starts: Vec<usize> = by_dst.iter().map(|&j| copies[j].dst).collect();
 
-        index[start] = index_counter;
-        lowlink[start] = index_counter;
-        index_counter += 1;
-        on_stack[start] = true;
-        tarjan_stack.push(start);
-        call_stack.push((start, 0));
-
-        while let Some(&(v, ni)) = call_stack.last() {
-            if ni < adj[v].len() {
-                let w = adj[v][ni];
-                call_stack.last_mut().unwrap().1 += 1;
-                if index[w] == usize::MAX {
-                    // Tree edge: descend into w
-                    index[w] = index_counter;
-                    lowlink[w] = index_counter;
-                    index_counter += 1;
-                    on_stack[w] = true;
-                    tarjan_stack.push(w);
-                    call_stack.push((w, 0));
-                } else if on_stack[w] {
-                    // Back-edge into current SCC
-                    if index[w] < lowlink[v] {
-                        lowlink[v] = index[w];
-                    }
-                }
-            } else {
-                call_stack.pop();
-                if let Some(&(parent, _)) = call_stack.last() {
-                    if lowlink[v] < lowlink[parent] {
-                        lowlink[parent] = lowlink[v];
-                    }
-                }
-                if lowlink[v] == index[v] {
-                    let mut scc = Vec::new();
-                    loop {
-                        let w = tarjan_stack.pop().unwrap();
-                        on_stack[w] = false;
-                        scc.push(w);
-                        if w == v {
-                            break;
-                        }
-                    }
-                    sccs.push(scc);
-                }
-            }
-        }
-    }
-
-    sccs // sinks first; caller reverses for source-first order
-}
-
-// ── Cycle finder (unchanged interface, improved constants) ───────────────────
-
-/// Find a cycle in the active subgraph of one SCC.
-///
-/// Designed for repeated calls within the same SCC between cycle breakings:
-///
-/// - `sid` / `scc_id`: replaces a scc_member[] bool array; O(1) per neighbor
-///   check instead of O(|SCC|) set-then-clear per call.
-/// - `color[]` is persistent across calls (COLOR_DONE entries from fully
-///   explored vertices are not reset): total DFS work across all calls within
-///   one SCC is O(|SCC| + E_SCC), not O(|SCC| × cycles_broken).
-/// - `scan_start`: amortized outer-loop position; advances monotonically so
-///   the total scan cost per SCC is O(|SCC|), not O(|SCC| × cycles_broken).
-///
-/// On cycle found: resets COLOR_ON_PATH path vertices to COLOR_UNVISITED so
-/// they can be re-examined after victim removal; leaves COLOR_DONE intact.
-/// On None: COLOR_DONE values persist; caller advances scc_ptr without cleanup.
-fn find_cycle_in_scc(
-    adj: &[Vec<usize>],
-    scc: &[usize],
-    sid: usize,
-    scc_id: &[usize],
-    removed: &[bool],
-    color: &mut [u8],
-    scan_start: &mut usize,
-) -> Option<Vec<usize>> {
-    let mut path: Vec<usize> = Vec::new();
-
-    while *scan_start < scc.len() {
-        let start = scc[*scan_start];
-        if removed[start] || color[start] != COLOR_UNVISITED {
-            *scan_start += 1;
-            continue;
-        }
-
-        color[start] = COLOR_ON_PATH;
-        path.push(start);
-        let mut stack: Vec<(usize, usize)> = vec![(start, 0)];
-
-        while !stack.is_empty() {
-            let (v, ni) = *stack.last().unwrap();
-            let mut next_ni = ni;
-            let mut advanced = false;
-
-            while next_ni < adj[v].len() {
-                let w = adj[v][next_ni];
-                next_ni += 1;
-                if scc_id[w] != sid || removed[w] {
-                    continue;
-                }
-                if color[w] == COLOR_ON_PATH {
-                    // Back-edge: cycle found
-                    let pos = path.iter().position(|&x| x == w).unwrap();
-                    let cycle = path[pos..].to_vec();
-                    for &u in &path {
-                        color[u] = COLOR_UNVISITED;
-                    }
-                    return Some(cycle);
-                }
-                if color[w] == COLOR_UNVISITED {
-                    stack.last_mut().unwrap().1 = next_ni;
-                    color[w] = COLOR_ON_PATH;
-                    path.push(w);
-                    stack.push((w, 0));
-                    advanced = true;
-                    break;
-                }
-            }
-
-            if !advanced {
-                stack.pop();
-                color[v] = COLOR_DONE; // Fully explored — persists across calls.
-                path.pop();
-            }
-        }
-
-        // start's entire reachable SCC-subgraph explored; no cycle.
-        *scan_start += 1;
-    }
-
-    None
-}
-
-// ── Extracted helpers ────────────────────────────────────────────────────────
-
-/// Build CRWI digraph on copy commands.
-///
-/// Edge i→j means copy i reads from a region that copy j will overwrite,
-/// so i must execute before j.  O(n log n + E) sweep-line construction.
-/// Returns (adj, in_deg).
-fn build_crwi_digraph(
-    copy_info: &[CopyInfo],
-    n: usize,
-    stats: &mut InplaceStats,
-) -> (Vec<Vec<usize>>, Vec<usize>) {
-    let mut adj:    Vec<Vec<usize>> = vec![Vec::new(); n];
-    let mut in_deg: Vec<usize>      = vec![0; n];
-
-    // Sort copy write-intervals by start; binary-search for each read interval.
-    let mut write_sorted: Vec<usize> = (0..n).collect();
-    write_sorted.sort_unstable_by_key(|&j| copy_info[j].dst);
-    let write_starts: Vec<usize> = write_sorted.iter().map(|&j| copy_info[j].dst).collect();
-
-    for i in 0..n {
-        let src      = copy_info[i].src;
-        let length   = copy_info[i].length;
-        let read_end = src + length;
-        // lo = first write with dst >= src; hi = first write with dst >= read_end.
-        // Writes in [lo, hi) start inside [src, read_end) — they always overlap.
-        // The write at lo-1 starts before src; overlaps iff its end exceeds src.
-        let lo = write_starts.partition_point(|&ws| ws < src);
-        let hi = write_starts.partition_point(|&ws| ws < read_end);
-        if lo > 0 {
-            let j = write_sorted[lo - 1];
-            if j != i {
-                let dj = copy_info[j].dst;
-                let lj = copy_info[j].length;
-                if dj + lj > src {
-                    adj[i].push(j);
-                    in_deg[j] += 1;
-                    stats.edges += 1;
-                }
-            }
-        }
-        for k in lo..hi {
-            let j = write_sorted[k];
+    for (i, reader) in copies.iter().enumerate() {
+        let read_end = reader.src + reader.length;
+        // Writes that start inside the read range overlap it.  The one
+        // write that starts before the range overlaps it if it runs into it.
+        let lo = starts.partition_point(|&start| start < reader.src);
+        let hi = starts.partition_point(|&start| start < read_end);
+        let before = lo.checked_sub(1).filter(|&k| {
+            let writer = &copies[by_dst[k]];
+            writer.dst + writer.length > reader.src
+        });
+        for k in before.into_iter().chain(lo..hi) {
+            let j = by_dst[k];
             if j != i {
                 adj[i].push(j);
                 in_deg[j] += 1;
-                stats.edges += 1;
             }
         }
     }
     (adj, in_deg)
 }
 
-/// Wrap tarjan_scc output into an SccList containing only non-trivial SCCs.
-fn build_scc_list(adj: &[Vec<usize>], n: usize) -> SccList {
-    let sccs_raw = tarjan_scc(adj, n);
-    let mut id     = vec![NO_SCC; n];
-    let mut sccs:   Vec<Vec<usize>> = Vec::new();
-    let mut active: Vec<usize>      = Vec::new();
-
-    for scc in &sccs_raw {
-        if scc.len() > 1 {
-            let sid = sccs.len();
-            for &v in scc {
-                id[v] = sid;
-            }
-            active.push(scc.len());
-            sccs.push(scc.clone());
-        }
-    }
-    SccList { sccs, active, id }
-}
-
-/// Select a victim copy to break a cycle when Kahn's algorithm stalls.
+/// Returns the strongly connected components of the graph, each before any
+/// component that has an edge into it.
 ///
-/// Constant: first remaining vertex.  Localmin: minimum-length copy in a cycle.
-/// scc_ptr and scan_pos are advanced in place across repeated calls.
-fn pick_victim(
-    copy_info: &[CopyInfo],
-    adj:       &[Vec<usize>],
-    scc_list:  &mut SccList,
-    removed:   &[bool],
-    color:     &mut [u8],
-    scc_ptr:   &mut usize,
-    scan_pos:  &mut usize,
-    policy:    CyclePolicy,
-    n:         usize,
-) -> usize {
-    match policy {
-        CyclePolicy::Constant => (0..n).find(|&i| !removed[i]).unwrap(),
-        CyclePolicy::Localmin => loop {
-            while *scc_ptr < scc_list.sccs.len() && scc_list.active[*scc_ptr] == 0 {
-                *scc_ptr += 1;
-                *scan_pos = 0;
-            }
-            if *scc_ptr >= scc_list.sccs.len() {
-                // Safety fallback — should not happen with a correct graph.
-                break (0..n).find(|&i| !removed[i]).unwrap();
-            }
-            let result = find_cycle_in_scc(
-                adj,
-                &scc_list.sccs[*scc_ptr],
-                *scc_ptr,
-                &scc_list.id,
-                removed,
-                color,
-                scan_pos,
-            );
-            match result {
-                Some(cycle) => {
-                    break *cycle.iter().min_by_key(|&&i| (copy_info[i].length, i)).unwrap();
-                }
-                None => {
-                    // This SCC's remaining subgraph is acyclic; advance.
-                    *scc_ptr += 1;
-                    *scan_pos = 0;
-                }
-            }
-        },
-    }
-}
+/// This is Tarjan's algorithm (SIAM J. Comput. 1(2), 1972) with an explicit
+/// stack in place of recursion, which a long chain of copies would exhaust.
+fn tarjan_scc(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    const UNVISITED: usize = usize::MAX;
+    let n = adj.len();
+    let mut next_index = 0;
+    let mut index = vec![UNVISITED; n];
+    let mut lowlink = vec![0; n];
+    let mut on_stack = vec![false; n];
+    let mut stack = Vec::new();
+    let mut sccs = Vec::new();
+    // The depth-first search: each frame is a vertex and the number of its
+    // edges already followed.
+    let mut dfs: Vec<(usize, usize)> = Vec::new();
 
-/// Run Kahn topological sort; when the heap stalls, call pick_victim to break
-/// the cycle by materialising one copy as a literal add.
-fn run_kahn(
-    copy_info: &[CopyInfo],
-    adj:       &[Vec<usize>],
-    scc_list:  &mut SccList,
-    in_deg:    &mut [usize],
-    r:         &[u8],
-    add_info:  &mut Vec<(usize, Vec<u8>)>,
-    policy:    CyclePolicy,
-    n:         usize,
-    stats:     &mut InplaceStats,
-) -> Vec<usize> {
-    let mut removed    = vec![false; n];
-    let mut topo_order = Vec::with_capacity(n);
-    let mut color      = vec![COLOR_UNVISITED; n];
-    let mut scc_ptr    = 0usize;
-    let mut scan_pos   = 0usize;
-
-    let mut heap: BinaryHeap<Reverse<(usize, usize)>> = BinaryHeap::new();
-    for i in 0..n {
-        if in_deg[i] == 0 {
-            heap.push(Reverse((copy_info[i].length, i)));
+    for start in 0..n {
+        if index[start] != UNVISITED {
+            continue;
         }
-    }
-    let mut processed = 0;
-
-    while processed < n {
-        // Drain all ready vertices.
-        while let Some(Reverse((_, v))) = heap.pop() {
-            if removed[v] {
+        dfs.push((start, 0));
+        while let Some(&mut (v, ref mut followed)) = dfs.last_mut() {
+            if index[v] == UNVISITED {
+                index[v] = next_index;
+                lowlink[v] = next_index;
+                next_index += 1;
+                on_stack[v] = true;
+                stack.push(v);
+            }
+            if let Some(&w) = adj[v].get(*followed) {
+                *followed += 1;
+                if index[w] == UNVISITED {
+                    dfs.push((w, 0));
+                } else if on_stack[w] {
+                    lowlink[v] = lowlink[v].min(index[w]);
+                }
                 continue;
             }
-            removed[v] = true;
-            topo_order.push(v);
-            processed += 1;
-            if scc_list.id[v] != NO_SCC {
-                scc_list.active[scc_list.id[v]] -= 1;
+            dfs.pop();
+            if let Some(&(parent, _)) = dfs.last() {
+                lowlink[parent] = lowlink[parent].min(lowlink[v]);
             }
-            for &w in &adj[v] {
-                if !removed[w] {
-                    in_deg[w] -= 1;
-                    if in_deg[w] == 0 {
-                        heap.push(Reverse((copy_info[w].length, w)));
+            if lowlink[v] == index[v] {
+                let mut scc = Vec::new();
+                loop {
+                    let w = stack.pop().expect("v is on the stack");
+                    on_stack[w] = false;
+                    scc.push(w);
+                    if w == v {
+                        break;
                     }
                 }
+                sccs.push(scc);
             }
         }
+    }
+    sccs
+}
 
-        if processed >= n {
-            break;
-        }
+#[derive(Clone, Copy, PartialEq)]
+enum Color {
+    Unvisited,
+    OnPath,
+    /// No cycle passes through the vertex.  Removing vertices cannot create
+    /// one, so the color is permanent.
+    Done,
+}
 
-        // Kahn stalled: all remaining vertices are in CRWI cycles.
-        let victim = pick_victim(
-            copy_info, adj, scc_list, &removed, &mut color,
-            &mut scc_ptr, &mut scan_pos, policy, n,
-        );
-        let ci = copy_info[victim];
-        add_info.push((ci.dst, r[ci.src..ci.src + ci.length].to_vec()));
-        stats.cycles_broken    += 1;
-        stats.copies_converted += 1;
-        stats.bytes_converted  += ci.length;
-        removed[victim] = true;
-        processed += 1;
-        if scc_list.id[victim] != NO_SCC {
-            scc_list.active[scc_list.id[victim]] -= 1;
+/// Finds cycles among the copies that remain, for the life of one
+/// conversion.
+///
+/// A cycle lies within a strongly connected component of more than one
+/// vertex, so only those are searched, one at a time.  The search of a
+/// component resumes where the last one stopped and never revisits a
+/// vertex colored `Done`, so all the searches together take time linear in
+/// the size of the graph.
+struct CycleFinder {
+    /// The components with more than one vertex.
+    sccs: Vec<Vec<usize>>,
+    /// The index in `sccs` of each vertex's component; `NO_SCC` if the
+    /// vertex is a component by itself.
+    scc_of: Vec<usize>,
+    color: Vec<Color>,
+    /// The component being searched.
+    current: usize,
+    /// Vertices of the current component before this position are removed
+    /// or `Done`.
+    scan: usize,
+}
+
+const NO_SCC: usize = usize::MAX;
+
+impl CycleFinder {
+    fn new(adj: &[Vec<usize>]) -> Self {
+        let mut sccs = tarjan_scc(adj);
+        sccs.retain(|scc| scc.len() > 1);
+        let mut scc_of = vec![NO_SCC; adj.len()];
+        for (id, scc) in sccs.iter().enumerate() {
+            for &v in scc {
+                scc_of[v] = id;
+            }
         }
-        for &w in &adj[victim] {
-            if !removed[w] {
-                in_deg[w] -= 1;
-                if in_deg[w] == 0 {
-                    heap.push(Reverse((copy_info[w].length, w)));
+        CycleFinder {
+            sccs,
+            scc_of,
+            color: vec![Color::Unvisited; adj.len()],
+            current: 0,
+            scan: 0,
+        }
+    }
+
+    /// Returns the vertices of a cycle among those not removed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if there is no cycle.
+    fn next_cycle(&mut self, adj: &[Vec<usize>], removed: &[bool]) -> Vec<usize> {
+        loop {
+            assert!(self.current < self.sccs.len(), "no cycle remains");
+            if let Some(cycle) = self.cycle_in_current(adj, removed) {
+                return cycle;
+            }
+            self.current += 1;
+            self.scan = 0;
+        }
+    }
+
+    /// Searches the current component depth-first for an edge back to a
+    /// vertex on the search path.
+    fn cycle_in_current(&mut self, adj: &[Vec<usize>], removed: &[bool]) -> Option<Vec<usize>> {
+        let scc = &self.sccs[self.current];
+        let mut path = Vec::new();
+        // For each vertex on the path, the number of its edges followed.
+        let mut followed: Vec<usize> = Vec::new();
+
+        while let Some(&start) = scc.get(self.scan) {
+            if removed[start] || self.color[start] != Color::Unvisited {
+                self.scan += 1;
+                continue;
+            }
+            self.color[start] = Color::OnPath;
+            path.push(start);
+            followed.push(0);
+
+            while let (Some(&v), Some(next)) = (path.last(), followed.last_mut()) {
+                let Some(&w) = adj[v].get(*next) else {
+                    self.color[v] = Color::Done;
+                    path.pop();
+                    followed.pop();
+                    continue;
+                };
+                *next += 1;
+                if self.scc_of[w] != self.current || removed[w] {
+                    continue;
+                }
+                match self.color[w] {
+                    Color::OnPath => {
+                        // The path is searched again after the caller has
+                        // removed a vertex of the cycle.
+                        for &u in &path {
+                            self.color[u] = Color::Unvisited;
+                        }
+                        let first = path.iter().position(|&u| u == w).expect("w is on the path");
+                        return Some(path.split_off(first));
+                    }
+                    Color::Unvisited => {
+                        self.color[w] = Color::OnPath;
+                        path.push(w);
+                        followed.push(0);
+                    }
+                    Color::Done => {}
+                }
+            }
+            self.scan += 1;
+        }
+        None
+    }
+}
+
+/// Kahn's topological sort of the copies (Comm. ACM 5(11), 1962), which
+/// breaks a cycle whenever no copy is free to run.
+struct Scheduler<'a> {
+    copies: &'a [CopyCmd],
+    adj: &'a [Vec<usize>],
+    /// For each copy, the number of unremoved copies that must precede it.
+    in_deg: Vec<usize>,
+    removed: Vec<bool>,
+    /// The copies free to run, keyed by (length, index).  The total order
+    /// makes the result deterministic.
+    ready: BinaryHeap<Reverse<(usize, usize)>>,
+}
+
+impl Scheduler<'_> {
+    fn remove(&mut self, v: usize) {
+        self.removed[v] = true;
+        for &w in &self.adj[v] {
+            if !self.removed[w] {
+                self.in_deg[w] -= 1;
+                if self.in_deg[w] == 0 {
+                    self.ready.push(Reverse((self.copies[w].length, w)));
                 }
             }
         }
     }
-    topo_order
+
+    /// Returns the copies to run, in order, and the copies to replace with
+    /// adds.
+    fn run(mut self, policy: CyclePolicy) -> (Vec<usize>, Vec<usize>) {
+        let n = self.copies.len();
+        let mut order = Vec::with_capacity(n);
+        let mut victims = Vec::new();
+        let mut cycles = None;
+
+        for (v, &deg) in self.in_deg.iter().enumerate() {
+            if deg == 0 {
+                self.ready.push(Reverse((self.copies[v].length, v)));
+            }
+        }
+        loop {
+            while let Some(Reverse((_, v))) = self.ready.pop() {
+                order.push(v);
+                self.remove(v);
+            }
+            if order.len() + victims.len() == n {
+                return (order, victims);
+            }
+            // Every copy that remains waits on another, so some of them
+            // form a cycle.
+            let victim = match policy {
+                CyclePolicy::Constant => self.removed.iter().position(|&gone| !gone),
+                CyclePolicy::Localmin => cycles
+                    .get_or_insert_with(|| CycleFinder::new(self.adj))
+                    .next_cycle(self.adj, &self.removed)
+                    .into_iter()
+                    .min_by_key(|&v| (self.copies[v].length, v)),
+            }
+            .expect("a copy remains");
+            victims.push(victim);
+            self.remove(victim);
+        }
+    }
 }
 
-// ── Public entry point ───────────────────────────────────────────────────────
-
-/// Convert standard delta commands to in-place executable commands.
+/// Converts the output of a differencing algorithm to commands that
+/// reconstruct the version in the buffer that holds the reference `r`.
 ///
-/// The returned commands can be applied to a buffer initialized with R
-/// to reconstruct V in-place, without a separate output buffer.
-///
-/// Why overlaps don't always require add conversion:
-/// When copy i reads from `[src_i, src_i+len_i)` and copy j writes to
-/// `[dst_j, dst_j+len_j)`, and these intervals overlap, copy i MUST execute
-/// before j overwrites its source data.  This ordering constraint is an edge
-/// i→j in the CRWI (Copy-Read/Write-Intersection) digraph.  When the graph
-/// is acyclic, a topological order gives a valid serial schedule — no
-/// conversion needed.  A cycle i₁→i₂→…→iₖ→i₁ creates a circular dependency
-/// with no valid schedule; breaking it materializes one copy as a literal add
-/// (saving source bytes from R before the buffer is modified).
-///
-/// Algorithm (Burns, Long, Stockmeyer, IEEE TKDE 2003):
-///   1. Annotate each command with its write offset in the output
-///   2. Build CRWI digraph: edge i→j iff i's read interval intersects j's
-///      write interval (Section 4.2)
-///   3. Topological sort (Kahn); when the heap empties with nodes remaining,
-///      a cycle exists — find it and convert the minimum-length copy to an add
-///   4. Output: copies in topological order, then all adds
+/// The result lists the copies in an order in which each reads its source
+/// before any command overwrites it, and then the adds.  Each cycle among
+/// the copies costs one copy, chosen by `policy`, which becomes an add of
+/// the bytes it would have copied from `r`.
 pub fn make_inplace(
     r: &[u8],
     commands: &[Command],
     policy: CyclePolicy,
 ) -> (Vec<PlacedCommand>, InplaceStats) {
-    let mut stats = InplaceStats::default();
-
-    if commands.is_empty() {
-        return (Vec::new(), stats);
-    }
-
-    // Step 1: compute write offsets
-    let mut copy_info: Vec<CopyInfo>       = Vec::new();
-    let mut add_info:  Vec<(usize, Vec<u8>)> = Vec::new();
-    let mut write_pos = 0usize;
-
+    let mut copies = Vec::new();
+    let mut adds = Vec::new();
+    let mut dst = 0;
     for cmd in commands {
         match cmd {
             Command::Copy { offset, length } => {
-                copy_info.push(CopyInfo { src: *offset, dst: write_pos, length: *length });
-                write_pos += length;
+                copies.push(CopyCmd {
+                    src: *offset,
+                    dst,
+                    length: *length,
+                });
+                dst += length;
             }
             Command::Add { data } => {
-                add_info.push((write_pos, data.clone()));
-                write_pos += data.len();
+                adds.push(PlacedCommand::Add {
+                    dst,
+                    data: data.clone(),
+                });
+                dst += data.len();
             }
         }
     }
 
-    let n = copy_info.len();
-    if n == 0 {
-        stats.num_adds = add_info.len();
-        return (
-            add_info
-                .into_iter()
-                .map(|(dst, data)| PlacedCommand::Add { dst, data })
-                .collect(),
-            stats,
-        );
-    }
+    let (adj, in_deg) = conflict_graph(&copies);
+    let edges = in_deg.iter().sum();
+    let scheduler = Scheduler {
+        copies: &copies,
+        adj: &adj,
+        in_deg,
+        removed: vec![false; copies.len()],
+        ready: BinaryHeap::new(),
+    };
+    let (order, victims) = scheduler.run(policy);
 
-    // Steps 2-3: build digraph, topological sort, break cycles
-    let (adj, mut in_deg) = build_crwi_digraph(&copy_info, n, &mut stats);
-    let mut scc_list      = build_scc_list(&adj, n);
-    let topo_order        = run_kahn(
-        &copy_info, &adj, &mut scc_list, &mut in_deg,
-        r, &mut add_info, policy, n, &mut stats,
-    );
-
-    // Step 4: assemble result — copies in topo order, then all adds
-    stats.num_copies = topo_order.len();
-    let mut result: Vec<PlacedCommand> = Vec::new();
-    for &i in &topo_order {
-        let ci = copy_info[i];
-        result.push(PlacedCommand::Copy { src: ci.src, dst: ci.dst, length: ci.length });
-    }
-    for (dst, data) in add_info {
-        result.push(PlacedCommand::Add { dst, data });
-    }
-    stats.num_adds = result.len() - stats.num_copies;
-
+    let stats = InplaceStats {
+        num_copies: order.len(),
+        num_adds: adds.len() + victims.len(),
+        edges,
+        cycles_broken: victims.len(),
+        copies_converted: victims.len(),
+        bytes_converted: victims.iter().map(|&i| copies[i].length).sum(),
+    };
+    let mut result = Vec::with_capacity(commands.len());
+    result.extend(order.into_iter().map(|i| {
+        let CopyCmd { src, dst, length } = copies[i];
+        PlacedCommand::Copy { src, dst, length }
+    }));
+    result.append(&mut adds);
+    result.extend(victims.into_iter().map(|i| {
+        let CopyCmd { src, dst, length } = copies[i];
+        PlacedCommand::Add {
+            dst,
+            data: r[src..src + length].to_vec(),
+        }
+    }));
     (result, stats)
 }

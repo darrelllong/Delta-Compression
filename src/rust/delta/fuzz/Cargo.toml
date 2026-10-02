@@ -11,9 +11,9 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 
 [dependencies.delta]
+package = "delta-compression"
 path = ".."
 
-# Disable the default features of this crate, which are not needed for fuzzing.
 [profile.release]
 debug = true
 

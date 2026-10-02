@@ -1,6 +1,9 @@
+//! Placing commands at explicit offsets and applying them to reconstruct
+//! the version.
+
 use crate::types::{Command, DeltaError, PlacedCommand};
 
-/// Compute the total output size of algorithm commands.
+/// Returns the size of the version the commands produce.
 pub fn output_size(commands: &[Command]) -> usize {
     commands
         .iter()
@@ -11,50 +14,54 @@ pub fn output_size(commands: &[Command]) -> usize {
         .sum()
 }
 
-/// Convert algorithm output to placed commands with sequential destinations.
-///
-/// Consumes the command list so that `Add` payloads are moved, not copied.
+/// Gives each command the destination it writes when the commands are
+/// applied in order.
 pub fn place_commands(commands: Vec<Command>) -> Vec<PlacedCommand> {
-    let mut placed = Vec::with_capacity(commands.len());
     let mut dst = 0;
-    for cmd in commands {
-        match cmd {
-            Command::Copy { offset, length } => {
-                placed.push(PlacedCommand::Copy { src: offset, dst, length });
-                dst += length;
+    commands
+        .into_iter()
+        .map(|cmd| {
+            let at = dst;
+            match cmd {
+                Command::Copy { offset, length } => {
+                    dst += length;
+                    PlacedCommand::Copy {
+                        src: offset,
+                        dst: at,
+                        length,
+                    }
+                }
+                Command::Add { data } => {
+                    dst += data.len();
+                    PlacedCommand::Add { dst: at, data }
+                }
             }
-            Command::Add { data } => {
-                let len = data.len();
-                placed.push(PlacedCommand::Add { dst, data }); // move, no clone
-                dst += len;
-            }
-        }
-    }
-    placed
+        })
+        .collect()
 }
 
-/// Convert placed commands back to algorithm commands (strip destinations).
-///
-/// Commands are sorted by destination offset to recover original sequential
-/// order, then each PlacedCopy/PlacedAdd is converted to Copy/Add.
-///
-/// Consumes the placed list so that `Add` payloads are moved, not copied.
+/// Returns the commands in order of destination, without their
+/// destinations.  This inverts [`place_commands`] when the placed commands
+/// cover the output without gaps or overlap.
 ///
 /// # Panics
 ///
-/// Panics if any `PlacedCommand::Move` is present.  Move commands are DLT\x04-only
-/// and have no algorithm-level equivalent; they must not be unplaced.
+/// Panics on a `Move`, which has no equivalent among the commands of the
+/// differencing algorithms.
 pub fn unplace_commands(mut placed: Vec<PlacedCommand>) -> Vec<Command> {
-    placed.sort_by_key(|c| match c {
-        PlacedCommand::Copy { dst, .. } => *dst,
-        PlacedCommand::Add  { dst, .. } => *dst,
-        PlacedCommand::Move { dst, .. } => *dst,
+    placed.sort_by_key(|cmd| match cmd {
+        PlacedCommand::Copy { dst, .. }
+        | PlacedCommand::Add { dst, .. }
+        | PlacedCommand::Move { dst, .. } => *dst,
     });
     placed
         .into_iter()
-        .map(|c| match c {
-            PlacedCommand::Copy { src, length, .. } => Command::Copy { offset: src, length },
-            PlacedCommand::Add  { data, .. }        => Command::Add { data },
+        .map(|cmd| match cmd {
+            PlacedCommand::Copy { src, length, .. } => Command::Copy {
+                offset: src,
+                length,
+            },
+            PlacedCommand::Add { data, .. } => Command::Add { data },
             PlacedCommand::Move { .. } => panic!(
                 "unplace_commands: Move has no algorithm-level equivalent; \
                  Move commands are DLT\\x04-only and cannot be unplaced"
@@ -63,58 +70,64 @@ pub fn unplace_commands(mut placed: Vec<PlacedCommand>) -> Vec<Command> {
         .collect()
 }
 
-/// Apply placed commands in standard mode: read from R, write to out.
+/// Applies a standard delta: copies read `r`, and every command writes
+/// `out`.  Returns the end of the highest range written.
 ///
-/// Returns the number of bytes written.
+/// A `Move` reads `out`, so it must come after the commands that write its
+/// source.  [`validate_placed_commands`] cannot check that; the encoder
+/// must ensure it.
+///
+/// # Panics
+///
+/// Panics if a command reaches outside `r` or `out`.  Commands that pass
+/// [`validate_placed_commands`] do not.
 pub fn apply_placed_to(r: &[u8], commands: &[PlacedCommand], out: &mut [u8]) -> usize {
-    let mut max_written = 0;
+    let mut written = 0;
     for cmd in commands {
-        match cmd {
+        let end = match cmd {
             PlacedCommand::Copy { src, dst, length } => {
-                out[*dst..*dst + *length].copy_from_slice(&r[*src..*src + *length]);
-                let end = dst + length;
-                if end > max_written { max_written = end; }
+                out[*dst..dst + length].copy_from_slice(&r[*src..src + length]);
+                dst + length
             }
             PlacedCommand::Add { dst, data } => {
-                out[*dst..*dst + data.len()].copy_from_slice(data);
-                let end = dst + data.len();
-                if end > max_written { max_written = end; }
+                out[*dst..dst + data.len()].copy_from_slice(data);
+                dst + data.len()
             }
             PlacedCommand::Move { src, dst, length } => {
-                // LZ77-style self-referential copy: reads from already-written output.
-                // Encoder invariant: this command must appear after all commands that
-                // write [src, src+length); validate_placed_commands checks src+length<=dst
-                // (necessary) but not execution ordering (encoder's responsibility).
-                out.copy_within(*src..*src + *length, *dst);
-                let end = dst + length;
-                if end > max_written { max_written = end; }
+                out.copy_within(*src..src + length, *dst);
+                dst + length
             }
-        }
+        };
+        written = written.max(end);
     }
-    max_written
+    written
 }
 
-/// Apply placed commands in-place within a single buffer.
+/// Applies an in-place delta to `buf`, which holds the reference on entry
+/// and the version on return.  Source and destination ranges may overlap.
 ///
-/// Uses `copy_within` (maps to libc `memmove`) so overlapping src/dst is safe.
+/// # Panics
+///
+/// Panics if a command reaches outside `buf`.
 pub fn apply_placed_inplace_to(commands: &[PlacedCommand], buf: &mut [u8]) {
     for cmd in commands {
         match cmd {
-            PlacedCommand::Copy { src, dst, length } => {
-                buf.copy_within(*src..*src + *length, *dst);
+            PlacedCommand::Copy { src, dst, length } | PlacedCommand::Move { src, dst, length } => {
+                buf.copy_within(*src..src + length, *dst);
             }
             PlacedCommand::Add { dst, data } => {
-                buf[*dst..*dst + data.len()].copy_from_slice(data);
-            }
-            PlacedCommand::Move { src, dst, length } => {
-                // Same as Copy in the inplace buffer; copy_within handles overlaps.
-                buf.copy_within(*src..*src + *length, *dst);
+                buf[*dst..dst + data.len()].copy_from_slice(data);
             }
         }
     }
 }
 
-/// Validate placed commands before apply so malformed deltas fail cleanly.
+/// Checks that every command stays inside its buffers, so that applying
+/// the commands cannot panic.
+///
+/// An in-place delta is applied to a buffer of
+/// `max(reference_size, version_size)` bytes, and its copies may read
+/// anywhere in it.
 pub fn validate_placed_commands(
     commands: &[PlacedCommand],
     reference_size: usize,
@@ -129,19 +142,18 @@ pub fn validate_placed_commands(
     for cmd in commands {
         match cmd {
             PlacedCommand::Copy { src, dst, length } => {
-                validate_apply_range(*dst, *length, version_size, "copy destination")?;
-                validate_apply_range(*src, *length, source_limit, "copy source")?;
+                check_range(*dst, *length, version_size, "copy destination")?;
+                check_range(*src, *length, source_limit, "copy source")?;
             }
             PlacedCommand::Add { dst, data } => {
-                validate_apply_range(*dst, data.len(), version_size, "add destination")?;
+                check_range(*dst, data.len(), version_size, "add destination")?;
             }
             PlacedCommand::Move { src, dst, length } => {
-                validate_apply_range(*dst, *length, version_size, "move destination")?;
-                validate_apply_range(*src, *length, version_size, "move source")?;
-                // Necessary geometric constraint: src + length <= dst.
-                // This prevents self-referential loops but does NOT prove the src
-                // region has been written; that is the encoder's responsibility
-                // (Move commands must follow all commands writing their src region).
+                check_range(*dst, *length, version_size, "move destination")?;
+                check_range(*src, *length, version_size, "move source")?;
+                // Necessary for the source to have been written already,
+                // but not sufficient: that depends on the order of the
+                // commands.
                 if src + length > *dst {
                     return Err(DeltaError::InvalidFormat(format!(
                         "move src+len ({}+{}) > dst ({}): source not yet written",
@@ -154,10 +166,16 @@ pub fn validate_placed_commands(
     Ok(())
 }
 
-// ── convenience wrappers (Command → output) ─────────────────────────────
+/// Checks that `start..start + length` lies within `0..limit`, without
+/// overflowing.
+fn check_range(start: usize, length: usize, limit: usize, name: &str) -> Result<(), DeltaError> {
+    if start > limit || length > limit - start {
+        return Err(DeltaError::InvalidFormat(format!("{} out of range", name)));
+    }
+    Ok(())
+}
 
-/// Apply algorithm commands, writing into a pre-allocated buffer.
-///
+/// Applies unplaced commands, writing the version to the front of `out`.
 /// Returns the number of bytes written.
 pub fn apply_delta_to(r: &[u8], commands: &[Command], out: &mut [u8]) -> usize {
     let mut pos = 0;
@@ -168,43 +186,27 @@ pub fn apply_delta_to(r: &[u8], commands: &[Command], out: &mut [u8]) -> usize {
                 pos += data.len();
             }
             Command::Copy { offset, length } => {
-                out[pos..pos + *length].copy_from_slice(&r[*offset..*offset + *length]);
-                pos += *length;
+                out[pos..pos + length].copy_from_slice(&r[*offset..offset + length]);
+                pos += length;
             }
         }
     }
     pos
 }
 
-/// Reconstruct the version from reference + algorithm commands.
+/// Returns the version that the commands produce from `r`.
 pub fn apply_delta(r: &[u8], commands: &[Command]) -> Vec<u8> {
     let mut out = vec![0u8; output_size(commands)];
     apply_delta_to(r, commands, &mut out);
     out
 }
 
-/// Apply placed in-place commands to a buffer initialized with R.
-pub fn apply_delta_inplace(
-    r: &[u8],
-    commands: &[PlacedCommand],
-    version_size: usize,
-) -> Vec<u8> {
-    let buf_size = r.len().max(version_size);
-    let mut buf = vec![0u8; buf_size];
+/// Returns the version that in-place commands produce from `r`, working in
+/// a copy of `r` resized to hold the larger of the two.
+pub fn apply_delta_inplace(r: &[u8], commands: &[PlacedCommand], version_size: usize) -> Vec<u8> {
+    let mut buf = vec![0u8; r.len().max(version_size)];
     buf[..r.len()].copy_from_slice(r);
     apply_placed_inplace_to(commands, &mut buf);
     buf.truncate(version_size);
     buf
-}
-
-fn validate_apply_range(
-    start: usize,
-    length: usize,
-    limit: usize,
-    name: &str,
-) -> Result<(), DeltaError> {
-    if start > limit || length > limit.saturating_sub(start) {
-        return Err(DeltaError::InvalidFormat(format!("{} out of range", name)));
-    }
-    Ok(())
 }

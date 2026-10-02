@@ -1,453 +1,396 @@
 use std::collections::VecDeque;
+use std::time::Instant;
 
-use crate::hash::{fingerprint, next_prime, RollingHash};
+use super::{common_prefix, common_suffix, index_name, percent, print_command_stats, seed_count};
+use crate::hash::{fingerprint, next_prime, SeedScanner};
 use crate::splay::SplayTree;
 use crate::types::{Command, DiffOptions};
 
-/// One entry in the correction lookback buffer (Section 5.2).
+/// The checkpoint test of Section 8.1 (pp. 347-348), which thins the seeds
+/// of R until they fit the table.
 ///
-/// The correcting algorithm may discover that a newly found match overlaps
-/// commands already emitted.  The buffer holds the most recent buf_cap tentative
-/// commands so they can be trimmed or cancelled (tail correction) when a better
-/// match is found.  Commands are flushed to the output list as they age out.
-struct BufEntry {
-    /// First V byte covered by this entry.
-    v_start: usize,
-    /// One past the last V byte covered.
-    v_end: usize,
-    /// The tentative command (Add or Copy).
-    cmd: Command,
-    /// Reserved; always false in the current implementation.
-    dummy: bool,
+/// A fingerprint `fp` has footprint `f = fp mod |F|`.  The seed is a
+/// checkpoint if `f mod m == k`, and then its home slot is `f / m`.
+struct Checkpoints {
+    /// |F|, the size of the footprint universe: a prime near twice the
+    /// number of seeds in R.
+    f_size: u64,
+    /// The checkpoint spacing, ceil(|F| / |C|): about one seed in `m` passes.
+    m: u64,
+    /// The class of footprints that pass.
+    k: u64,
 }
 
-/// Flat hash-table slot for correcting — sentinel-based (no Option overhead).
-/// Empty slots have fp == u64::MAX.
+impl Checkpoints {
+    /// Returns the home slot of `fp` if it is a checkpoint.
+    #[inline]
+    fn slot(&self, fp: u64) -> Option<usize> {
+        let f = fp % self.f_size;
+        (f % self.m == self.k).then_some((f / self.m) as usize)
+    }
+}
+
 #[derive(Clone, Copy)]
-struct CSlot {
+struct Slot {
     fp: u64,
     offset: usize,
 }
 
-const EMPTY_CSLOT: CSlot = CSlot {
-    fp: u64::MAX,
-    offset: 0,
-};
+/// No fingerprint has this value: fingerprints are less than 2^61.
+const EMPTY: u64 = u64::MAX;
 
-/// Correcting 1.5-Pass algorithm (Section 7, Figure 8) with
-/// fingerprint-based checkpointing (Section 8).
+/// The offset in R of the first checkpoint seed with each fingerprint.
+enum SeedTable {
+    /// Open addressing with linear probing from the home slot.
+    Hash(Vec<Slot>),
+    Splay(SplayTree<usize>),
+}
+
+/// Counts for verbose output.
+#[derive(Default)]
+struct BuildStats {
+    passed: usize,
+    stored: usize,
+    /// Hash: slots probed beyond the home slot.  Splay: seeds whose
+    /// fingerprint was already present.
+    probes: usize,
+}
+
+impl SeedTable {
+    fn new(capacity: usize, use_splay: bool) -> Self {
+        if use_splay {
+            SeedTable::Splay(SplayTree::new())
+        } else {
+            let empty = Slot {
+                fp: EMPTY,
+                offset: 0,
+            };
+            SeedTable::Hash(vec![empty; capacity])
+        }
+    }
+
+    /// Records the seed at `offset`, whose home slot is `home`, unless its
+    /// fingerprint is already present or the table is full.
+    #[inline]
+    fn insert_first(&mut self, fp: u64, home: usize, offset: usize, stats: &mut BuildStats) {
+        match self {
+            SeedTable::Hash(slots) => {
+                let mut i = home;
+                while slots[i].fp != EMPTY {
+                    if slots[i].fp == fp {
+                        return;
+                    }
+                    i += 1;
+                    if i == slots.len() {
+                        i = 0;
+                    }
+                    stats.probes += 1;
+                    if i == home {
+                        return;
+                    }
+                }
+                slots[i] = Slot { fp, offset };
+                stats.stored += 1;
+            }
+            SeedTable::Splay(tree) => {
+                if *tree.insert_or_get(fp, offset) == offset {
+                    stats.stored += 1;
+                } else {
+                    stats.probes += 1;
+                }
+            }
+        }
+    }
+
+    /// Returns the offset recorded for `fp`, whose home slot is `home`.
+    #[inline]
+    fn lookup(&mut self, fp: u64, home: usize) -> Option<usize> {
+        match self {
+            SeedTable::Hash(slots) => {
+                let mut i = home;
+                while slots[i].fp != EMPTY {
+                    if slots[i].fp == fp {
+                        return Some(slots[i].offset);
+                    }
+                    i += 1;
+                    if i == slots.len() {
+                        i = 0;
+                    }
+                    if i == home {
+                        break;
+                    }
+                }
+                None
+            }
+            SeedTable::Splay(tree) => tree.find(fp).copied(),
+        }
+    }
+
+    fn len(&self, stats: &BuildStats) -> usize {
+        match self {
+            SeedTable::Hash(_) => stats.stored,
+            SeedTable::Splay(tree) => tree.len(),
+        }
+    }
+}
+
+/// A command that may still be revised, and the part of V it encodes.
+struct Tentative {
+    v_start: usize,
+    v_end: usize,
+    cmd: Command,
+}
+
+/// The most recent commands, held back so that a later match that extends
+/// backward over them can replace them (Section 5.2).  The oldest command
+/// becomes final when a new one arrives and the buffer is full.
+struct Lookback {
+    buf: VecDeque<Tentative>,
+    cap: usize,
+}
+
+impl Lookback {
+    fn push(&mut self, entry: Tentative, out: &mut Vec<Command>) {
+        if self.buf.len() >= self.cap {
+            if let Some(oldest) = self.buf.pop_front() {
+                out.push(oldest.cmd);
+            }
+        }
+        self.buf.push_back(entry);
+    }
+
+    /// Gives up to a match covering `v[v_m..match_end]` the commands that
+    /// encode part of that range, working back from the newest (tail
+    /// correction, Section 5.1, p. 339).  An add may be cut short; a copy is
+    /// either wholly inside the match and dropped, or left alone.  Returns
+    /// the offset in V from which the match must now be encoded, given that
+    /// everything before `v_s` was encoded.
+    fn reclaim(&mut self, v_m: usize, match_end: usize, v_s: usize) -> usize {
+        let mut start = v_s;
+        while let Some(tail) = self.buf.back_mut() {
+            if tail.v_start >= v_m && tail.v_end <= match_end {
+                start = start.min(tail.v_start);
+                self.buf.pop_back();
+                continue;
+            }
+            if tail.v_start < v_m && v_m < tail.v_end {
+                if let Command::Add { data } = &mut tail.cmd {
+                    data.truncate(v_m - tail.v_start);
+                    tail.v_end = v_m;
+                    start = start.min(v_m);
+                }
+            }
+            break;
+        }
+        start
+    }
+}
+
+/// The correcting 1.5-pass algorithm (Section 7, Figure 8) with
+/// checkpointing (Section 8).
 ///
-/// The hash table is auto-sized to max(q, 2 * num_seeds / p) so that
-/// checkpoint spacing m ≈ p, giving near-seed-granularity sampling.
-/// TABLE_SIZE acts as a floor for small files.
+/// The first pass indexes R, keeping the first seed found for each
+/// fingerprint that passes the checkpoint test.  The second scans V; where
+/// a checkpoint seed of V matches one in R, it extends the match both
+/// forward and backward.  The backward extension recovers the start of a
+/// match that lies between checkpoints (Section 8.2, p. 349), and may run
+/// over bytes of V already encoded, in which case the earlier commands are
+/// corrected (Section 5.1).
 ///
-/// |C| = q (hash table capacity, auto-sized from input).
-/// |F| = next_prime(2 * num_R_seeds) (footprint universe, Section 8.1,
-///       pp. 347-348: "|F| ≈ 2L").
-/// m  = ceil(|F| / |C|) (checkpoint spacing, p. 348).
-/// k  = checkpoint class (Eq. 3, p. 348).
-///
-/// A seed with fingerprint fp passes the checkpoint test iff
-///     (fp % |F|) % m == k.
-/// Its table index is (fp % |F|) / m  (p. 348: "i = floor(f/m)").
-///
-/// Step 1 (R pass): compute fingerprint at every R position, apply
-/// checkpoint filter, store first-found offset per slot.
-/// Steps 3-4 (V scan): compute fingerprint at every V position, apply
-/// checkpoint filter, look up matching R offset.
-/// Step 5: extend match both forwards and backwards (Section 7, p. 345).
-/// Step 6: encode with tail correction via lookback buffer (Section 5.1).
-/// Backward extension (Section 8.2, p. 349) recovers true match starts
-/// that fall between checkpoint positions.
-pub fn diff_correcting(
-    r: &[u8],
-    v: &[u8],
-    opts: &DiffOptions,
-) -> Vec<Command> {
+/// The table has |C| slots: a prime, at least `opts.q` and at least two for
+/// every `p` bytes of R, but no more than `opts.max_table`, so that the
+/// checkpoint spacing is about `p`.
+pub fn diff_correcting(r: &[u8], v: &[u8], opts: &DiffOptions) -> Vec<Command> {
     let p = opts.p;
-    let q = opts.q;
-    let buf_cap = opts.buf_cap;
-    let verbose = opts.verbose;
-    let use_splay = opts.use_splay;
-
     let mut commands = Vec::new();
     if v.is_empty() {
         return commands;
     }
 
-    // ── Checkpointing parameters (Section 8.1, pp. 347-348) ─────────
-    let num_seeds = if r.len() >= p { r.len() - p + 1 } else { 0 };
-    let max_table = opts.max_table;
-    // Auto-size: 2x factor for correcting's |F|=2L convention.
-    // Capped at max_table to prevent runaway allocation on huge inputs.
-    let cap = if num_seeds > 0 {
-        next_prime(max_table.min(q.max(2 * num_seeds / p)))
+    let num_seeds = seed_count(r.len(), p);
+    let cap = next_prime(opts.max_table.min(if num_seeds > 0 {
+        opts.q.max(2 * num_seeds / p)
     } else {
-        next_prime(q.min(max_table))
-    }; // |C|
-    let f_size: u64 = if num_seeds > 0 {
-        next_prime(2 * num_seeds) as u64 // |F|
+        opts.q
+    }));
+    let f_size = if num_seeds > 0 {
+        next_prime(2 * num_seeds) as u64
     } else {
         1
     };
-    let m: u64 = if f_size <= cap as u64 {
-        1
-    } else {
-        (f_size + cap as u64 - 1) / cap as u64 // ceil(|F| / |C|)
-    };
-    // Biased k (p. 348).
-    let k: u64 = if v.len() >= p {
+    let m = f_size.div_ceil(cap as u64);
+    // k is the class of the seed in the middle of V, which biases the choice
+    // toward a class that occurs in V (p. 348).
+    let k = if v.len() >= p {
         fingerprint(v, (v.len() / 2).min(v.len() - p), p) % f_size % m
     } else {
         0
     };
+    let checkpoints = Checkpoints { f_size, m, k };
 
-    if verbose {
-        let expected = if m > 0 { num_seeds as u64 / m } else { 0 };
-        let occ_est = if cap > 0 { expected * 100 / cap as u64 } else { 0 };
+    if opts.verbose {
+        let expected = num_seeds as u64 / m;
         eprintln!(
             "correcting: {}, |C|={} |F|={} m={} k={}\n  \
              checkpoint gap={} bytes, expected fill ~{} (~{}% table occupancy)\n  \
              table memory ~{} MB",
-            if use_splay { "splay tree" } else { "hash table" },
-            cap, f_size, m, k,
-            m, expected, occ_est,
-            cap * std::mem::size_of::<CSlot>() / 1_048_576
+            index_name(opts),
+            cap,
+            f_size,
+            m,
+            k,
+            m,
+            expected,
+            expected * 100 / cap as u64,
+            cap * std::mem::size_of::<Slot>() / 1_048_576
         );
     }
 
-    // Debug counters
-    let mut dbg_build_passed: usize = 0;
-    let mut dbg_build_stored: usize = 0;
-    let mut dbg_build_probes: usize = 0; // extra slots scanned past the first
-    let mut dbg_scan_checkpoints: usize = 0;
-    let mut dbg_scan_match: usize = 0;
-    let mut dbg_scan_fp_mismatch: usize = 0;
-    let mut dbg_scan_byte_mismatch: usize = 0;
-
-    // Step (1): Build lookup structure for R (first-found policy, linear probing)
-    // Flat slot array — fp == u64::MAX marks empty slots.
-    let mut h_r_ht: Vec<CSlot> = if !use_splay { vec![EMPTY_CSLOT; cap] } else { Vec::new() };
-    let mut h_r_sp: SplayTree<(u64, usize)> = SplayTree::new(); // (full_fp, offset)
-
-    let build_start = std::time::Instant::now();
-    let mut rh_r = if num_seeds > 0 { Some(RollingHash::new(r, 0, p)) } else { None };
-    for a in 0..num_seeds {
-        let fp = if a == 0 {
-            rh_r.as_ref().unwrap().value()
-        } else {
-            let rh = rh_r.as_mut().unwrap();
-            rh.roll(r[a - 1], r[a + p - 1]);
-            rh.value()
-        };
-        let f = fp % f_size;
-        if f % m != k {
-            continue; // not a checkpoint seed
-        }
-        dbg_build_passed += 1;
-
-        if use_splay {
-            // insert_or_get implements first-found policy
-            let val = h_r_sp.insert_or_get(fp, (fp, a));
-            if val.1 == a {
-                dbg_build_stored += 1;
-            } else {
-                dbg_build_probes += 1;
-            }
-        } else {
-            // Linear probing: find empty slot or existing fp (first-found policy).
-            // Uses branch-based wraparound (i += 1; if i == cap { i = 0 }) rather
-            // than modulo to avoid division in the hot path.
-            let mut i = (f / m) as usize;
-            let i0 = i;
-            let mut store = true;
-            while h_r_ht[i].fp != u64::MAX {
-                if h_r_ht[i].fp == fp { store = false; break; } // same fp already stored — skip
-                i += 1; if i == cap { i = 0; }
-                dbg_build_probes += 1;
-                if i == i0 { store = false; break; }             // table full (safety)
-            }
-            if store {
-                h_r_ht[i] = CSlot { fp, offset: a }; // first-found (Section 7 Step 1)
-                dbg_build_stored += 1;
-            }
+    let mut table = SeedTable::new(cap, opts.use_splay);
+    let build_start = Instant::now();
+    let mut build = BuildStats::default();
+    let mut scan_r = SeedScanner::new(p);
+    for offset in 0..num_seeds {
+        let fp = scan_r.at(r, offset);
+        if let Some(home) = checkpoints.slot(fp) {
+            build.passed += 1;
+            table.insert_first(fp, home, offset, &mut build);
         }
     }
 
-    if verbose {
-        let passed_pct = if num_seeds > 0 {
-            dbg_build_passed as f64 / num_seeds as f64 * 100.0
-        } else {
-            0.0
-        };
-        let stored_count = if use_splay { h_r_sp.len() } else { dbg_build_stored };
-        let occ_pct = if cap > 0 {
-            stored_count as f64 / cap as f64 * 100.0
-        } else {
-            0.0
-        };
+    if opts.verbose {
+        let stored = table.len(&build);
         eprintln!(
             "  build: {} seeds, {} passed checkpoint ({:.2}%), \
              {} stored, {} extra probes\n  \
              build: table occupancy {}/{} ({:.1}%), elapsed {:.2}s",
-            num_seeds, dbg_build_passed, passed_pct,
-            dbg_build_stored, dbg_build_probes,
-            stored_count, cap, occ_pct,
+            num_seeds,
+            build.passed,
+            percent(build.passed, num_seeds),
+            build.stored,
+            build.probes,
+            stored,
+            cap,
+            percent(stored, cap),
             build_start.elapsed().as_secs_f64()
         );
     }
 
-    // Lookup helper — linear probing mirrors the build chain.
-    let lookup_r = |h_r_ht: &[CSlot], h_r_sp: &mut SplayTree<(u64, usize)>, fp_v: u64, f_v: u64| -> Option<(u64, usize)> {
-        if use_splay {
-            h_r_sp.find(fp_v).copied()
-        } else {
-            let mut i = (f_v / m) as usize;
-            let i0 = i;
-            while h_r_ht[i].fp != u64::MAX {
-                if h_r_ht[i].fp == fp_v { return Some((fp_v, h_r_ht[i].offset)); }
-                i += 1; if i == cap { i = 0; }
-                if i == i0 { return None; } // full table — not found
-            }
-            None
-        }
+    let mut lookback = Lookback {
+        buf: VecDeque::new(),
+        cap: opts.buf_cap,
     };
+    let mut scan_v = SeedScanner::new(p);
+    let mut v_c = 0; // current position in V
+    let mut v_s = 0; // start of the part of V not yet encoded
 
-    // ── Encoding lookback buffer (Section 5.2) ───────────────────────
-    let mut buf: VecDeque<BufEntry> = VecDeque::new();
-
-    let flush_buf = |buf: &mut VecDeque<BufEntry>, commands: &mut Vec<Command>| {
-        for entry in buf.drain(..) {
-            if !entry.dummy {
-                commands.push(entry.cmd);
-            }
-        }
-    };
-
-    // Step (2): initialize scan pointers
-    let mut v_c: usize = 0;
-    let mut v_s: usize = 0;
-
-    // Rolling hash for O(1) per-position V fingerprinting.
-    let v_seeds = if v.len() >= p { v.len() - p + 1 } else { 0 };
-    let mut rh_v = if v_seeds > 0 { Some(RollingHash::new(v, 0, p)) } else { None };
-    let mut rh_v_pos: usize = 0;
+    // Verbose statistics.
+    let mut scan_checkpoints = 0;
+    let mut scan_matches = 0;
+    let mut byte_mismatches = 0;
 
     while v_c + p <= v.len() {
-        // Step (3): condition in while header.
-
-        // Step (4): generate footprint at v_c, apply checkpoint test.
-        let fp_v = if let Some(ref mut rh) = rh_v {
-            if v_c == rh_v_pos {
-                rh.value()
-            } else if v_c == rh_v_pos + 1 {
-                rh.roll(v[v_c - 1], v[v_c + p - 1]);
-                rh_v_pos = v_c;
-                rh.value()
-            } else {
-                *rh = RollingHash::new(v, v_c, p);
-                rh_v_pos = v_c;
-                rh.value()
-            }
-        } else {
-            break;
-        };
-        let f_v = fp_v % f_size;
-        if f_v % m != k {
+        let fp = scan_v.at(v, v_c);
+        let Some(home) = checkpoints.slot(fp) else {
             v_c += 1;
-            continue; // not a checkpoint — skip
+            continue;
+        };
+        scan_checkpoints += 1;
+        let Some(r_offset) = table.lookup(fp, home) else {
+            v_c += 1;
+            continue;
+        };
+        // Equal fingerprints do not imply equal seeds.
+        if r[r_offset..r_offset + p] != v[v_c..v_c + p] {
+            byte_mismatches += 1;
+            v_c += 1;
+            continue;
         }
+        scan_matches += 1;
 
-        // Checkpoint passed — look up R.
-        dbg_scan_checkpoints += 1;
-
-        let entry = lookup_r(&h_r_ht, &mut h_r_sp, fp_v, f_v);
-
-        let r_offset = match entry {
-            Some((stored_fp, offset)) if stored_fp == fp_v => {
-                // Full fingerprint matches — verify bytes.
-                if r[offset..offset + p] != v[v_c..v_c + p] {
-                    dbg_scan_byte_mismatch += 1;
-                    v_c += 1;
-                    continue;
-                }
-                dbg_scan_match += 1;
-                offset
-            }
-            Some(_) => {
-                dbg_scan_fp_mismatch += 1;
-                v_c += 1;
-                continue;
-            }
-            None => {
-                v_c += 1;
-                continue;
-            }
-        };
-
-        // Step (5): extend match forwards and backwards
-        // (Section 7, Step 5; Section 8.2 backward extension, p. 349)
-        // Pre-compute max extension, compare slices (one bounds check).
-        let max_fwd = (v.len() - v_c).min(r.len() - r_offset);
-        let fwd = p + v[v_c + p..v_c + max_fwd]
-            .iter()
-            .zip(&r[r_offset + p..r_offset + max_fwd])
-            .position(|(a, b)| a != b)
-            .unwrap_or(max_fwd - p);
-
-        let max_bwd = v_c.min(r_offset);
-        let bwd = if max_bwd == 0 {
-            0
-        } else {
-            v[v_c - max_bwd..v_c]
-                .iter()
-                .rev()
-                .zip(r[r_offset - max_bwd..r_offset].iter().rev())
-                .position(|(a, b)| a != b)
-                .unwrap_or(max_bwd)
-        };
-
+        let fwd = p + common_prefix(&v[v_c + p..], &r[r_offset + p..]);
+        let bwd = common_suffix(&v[..v_c], &r[..r_offset]);
         let v_m = v_c - bwd;
         let r_m = r_offset - bwd;
-        let ml = bwd + fwd;
-        let match_end = v_m + ml;
+        let match_end = v_c + fwd;
 
-        // Step (6): encode with correction
         if v_s <= v_m {
-            // (6a) match is entirely in unencoded suffix (Section 7)
+            // The match lies wholly in the part of V not yet encoded.
             if v_s < v_m {
-                if buf.len() >= buf_cap {
-                    let oldest = buf.pop_front().unwrap();
-                    if !oldest.dummy {
-                        commands.push(oldest.cmd);
-                    }
-                }
-                buf.push_back(BufEntry {
-                    v_start: v_s,
-                    v_end: v_m,
-                    cmd: Command::Add {
-                        data: v[v_s..v_m].to_vec(),
+                lookback.push(
+                    Tentative {
+                        v_start: v_s,
+                        v_end: v_m,
+                        cmd: Command::Add {
+                            data: v[v_s..v_m].to_vec(),
+                        },
                     },
-                    dummy: false,
-                });
+                    &mut commands,
+                );
             }
-            if buf.len() >= buf_cap {
-                let oldest = buf.pop_front().unwrap();
-                if !oldest.dummy {
-                    commands.push(oldest.cmd);
-                }
-            }
-            buf.push_back(BufEntry {
-                v_start: v_m,
-                v_end: match_end,
-                cmd: Command::Copy {
-                    offset: r_m,
-                    length: ml,
-                },
-                dummy: false,
-            });
-            v_s = match_end;
-        } else {
-            // (6b) match extends backward into encoded prefix —
-            // tail correction (Section 5.1, p. 339)
-            let mut effective_start = v_s;
-
-            while let Some(tail) = buf.back() {
-                if tail.dummy {
-                    buf.pop_back();
-                    continue;
-                }
-
-                if tail.v_start >= v_m && tail.v_end <= match_end {
-                    // Wholly within new match — absorb
-                    effective_start = effective_start.min(tail.v_start);
-                    buf.pop_back();
-                    continue;
-                }
-
-                if tail.v_end > v_m && tail.v_start < v_m {
-                    if matches!(tail.cmd, Command::Add { .. }) {
-                        // Partial add — trim to [v_start, v_m)
-                        let keep = v_m - tail.v_start;
-                        if keep > 0 {
-                            let back = buf.back_mut().unwrap();
-                            back.cmd = Command::Add {
-                                data: v[back.v_start..v_m].to_vec(),
-                            };
-                            back.v_end = v_m;
-                        } else {
-                            buf.pop_back();
-                        }
-                        effective_start = effective_start.min(v_m);
-                    }
-                    // Partial copy — don't reclaim (Section 5.1)
-                    break;
-                }
-
-                // No overlap with match
-                break;
-            }
-
-            let adj = effective_start - v_m;
-            let new_len = match_end - effective_start;
-            if new_len > 0 {
-                if buf.len() >= buf_cap {
-                    let oldest = buf.pop_front().unwrap();
-                    if !oldest.dummy {
-                        commands.push(oldest.cmd);
-                    }
-                }
-                buf.push_back(BufEntry {
-                    v_start: effective_start,
+            lookback.push(
+                Tentative {
+                    v_start: v_m,
                     v_end: match_end,
                     cmd: Command::Copy {
-                        offset: r_m + adj,
-                        length: new_len,
+                        offset: r_m,
+                        length: match_end - v_m,
                     },
-                    dummy: false,
-                });
+                },
+                &mut commands,
+            );
+        } else {
+            // The match reaches back into the encoded part.  Encode as much
+            // of it as the buffered commands will give up.
+            let start = lookback.reclaim(v_m, match_end, v_s);
+            if start < match_end {
+                lookback.push(
+                    Tentative {
+                        v_start: start,
+                        v_end: match_end,
+                        cmd: Command::Copy {
+                            offset: r_m + (start - v_m),
+                            length: match_end - start,
+                        },
+                    },
+                    &mut commands,
+                );
             }
-            v_s = match_end;
         }
-
-        // Step (7): advance past matched region
+        v_s = match_end;
         v_c = match_end;
     }
 
-    // Step (8): flush buffer and trailing add
-    flush_buf(&mut buf, &mut commands);
+    commands.extend(lookback.buf.into_iter().map(|entry| entry.cmd));
     if v_s < v.len() {
         commands.push(Command::Add {
             data: v[v_s..].to_vec(),
         });
     }
 
-    if verbose {
-        let v_seeds = if v.len() >= p { v.len() - p + 1 } else { 0 };
-        let cp_pct = if v_seeds > 0 {
-            dbg_scan_checkpoints as f64 / v_seeds as f64 * 100.0
-        } else {
-            0.0
-        };
-        let hit_pct = if dbg_scan_checkpoints > 0 {
-            dbg_scan_match as f64 / dbg_scan_checkpoints as f64 * 100.0
-        } else {
-            0.0
-        };
+    if opts.verbose {
+        let v_seeds = seed_count(v.len(), p);
+        // The table is searched by full fingerprint, so a lookup never
+        // returns a seed with a different one; the count is always 0.
+        let fp_collisions = 0;
         eprintln!(
             "  scan: {} V positions, {} checkpoints ({:.3}%), {} matches\n  \
              scan: hit rate {:.1}% (of checkpoints), \
              fp collisions {}, byte mismatches {}",
-            v_seeds, dbg_scan_checkpoints, cp_pct, dbg_scan_match,
-            hit_pct, dbg_scan_fp_mismatch, dbg_scan_byte_mismatch
+            v_seeds,
+            scan_checkpoints,
+            percent(scan_checkpoints, v_seeds),
+            scan_matches,
+            percent(scan_matches, scan_checkpoints),
+            fp_collisions,
+            byte_mismatches
         );
-        super::print_command_stats(&commands);
+        print_command_stats(&commands);
     }
-
     commands
 }
 
-/// Convenience wrapper with default parameters.
+/// Runs [`diff_correcting`] with the default options.
 pub fn diff_correcting_default(r: &[u8], v: &[u8]) -> Vec<Command> {
     diff_correcting(r, v, &DiffOptions::default())
 }

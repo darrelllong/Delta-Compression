@@ -1,9 +1,6 @@
-// fuzz_decode — feed arbitrary bytes to decode_delta().
+// Feeds arbitrary bytes to decode_delta, which must return an error for
+// malformed input and never panic.
 //
-// Invariant: decode_delta() must never panic regardless of input.
-// Returning Err is the expected rejection path for malformed data.
-//
-// Run:
 //   cargo fuzz run fuzz_decode -- -max_total_time=300
 //   cargo fuzz run fuzz_decode corpus/fuzz_decode -- -max_total_time=300 -jobs=4
 

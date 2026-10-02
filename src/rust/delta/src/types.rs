@@ -1,52 +1,66 @@
+//! Commands, options, errors, and the constants of the wire format.
+//!
+//! Section numbers refer to Ajtai, Burns, Fagin, Long and Stockmeyer,
+//! JACM 49(3), 2002, unless another paper is named.
+
 use std::fmt;
 
-// ============================================================================
-// Constants (Ajtai, Burns, Fagin, Long — JACM 2002)
-//
-// Hash parameters (Section 2.1.3):
-//   p (SEED_LEN)  = minimum match length / fingerprint window
-//   b (HASH_BASE) = polynomial base for Karp-Rabin hash
-//   Q (HASH_MOD)  = Mersenne prime 2^61-1 for fingerprint arithmetic
-//   q (TABLE_SIZE) = hash table capacity; correcting uses checkpointing
-//                    (Section 8) to fit any |R| into fixed-size table
-// Delta commands: Section 2.1.1
-// ============================================================================
-
+/// Default seed length p: the fingerprint window and the shortest match
+/// (Section 2.1.3).
 pub const SEED_LEN: usize = 16;
-pub const TABLE_SIZE: usize = 1048573;      // largest prime < 2^20
-pub const MAX_TABLE_SIZE: usize = 1_073_741_827; // prime near 2^30; default ceiling for auto-sizing
-                                                  // Section 8: correcting uses checkpointing to fit any |R|
+/// Default hash table capacity floor q: the largest prime below 2^20.
+pub const TABLE_SIZE: usize = 1_048_573;
+/// Default ceiling for an auto-sized hash table: a prime near 2^30.
+pub const MAX_TABLE_SIZE: usize = 1_073_741_827;
+/// Base of the Karp-Rabin polynomial.
 pub const HASH_BASE: u64 = 263;
-pub const HASH_MOD: u64 = (1 << 61) - 1; // Mersenne prime 2^61-1
-pub const DELTA_MAGIC:    &[u8; 4] = b"DLT\x03";
-pub const DELTA_MAGIC_LARGE: &[u8; 4] = b"DLT\x04";
-pub const DELTA_FLAG_INPLACE:  u8 = 0x01;
-pub const DELTA_CMD_END:     u8 = 0;
-pub const DELTA_CMD_COPY:    u8 = 1;
-pub const DELTA_CMD_ADD:     u8 = 2;
-pub const DELTA_CMD_BIGCOPY: u8 = 3;
-pub const DELTA_CMD_BIGADD:  u8 = 4;
-pub const DELTA_CMD_MOVE:    u8 = 5;
-pub const DELTA_CMD_BIGMOVE: u8 = 6;
-pub const DELTA_CRC_SIZE:        usize = 8;
-pub const DELTA_U32_SIZE:        usize = 4;
-pub const DELTA_U64_SIZE:        usize = 8;
-pub const DELTA_HEADER_SIZE:     usize = 25; // magic(4)+flags(1)+version_size(4)+crcs(16)
-pub const DELTA_HEADER_SIZE_LARGE:  usize = 29; // magic(4)+flags(1)+version_size(8)+crcs(16)
-pub const DELTA_COPY_PAYLOAD:    usize = 12; // src(4)+dst(4)+len(4)
-pub const DELTA_ADD_HEADER:      usize = 8;  // dst(4)+len(4)
-pub const DELTA_BIGCOPY_PAYLOAD: usize = 24; // src(8)+dst(8)+len(8)
-pub const DELTA_BIGADD_HEADER:   usize = 16; // dst(8)+len(8)
+/// Modulus of the Karp-Rabin polynomial: the Mersenne prime 2^61 - 1.
+pub const HASH_MOD: u64 = (1 << 61) - 1;
+/// Default depth of the correcting algorithm's lookback buffer.
 pub const DELTA_BUF_CAP: usize = 256;
 
-// ============================================================================
-// Delta Commands (Section 2.1.1)
-// ============================================================================
+/// Magic of the 32-bit format.
+pub const DELTA_MAGIC: &[u8; 4] = b"DLT\x03";
+/// Magic of the format with 64-bit fields and MOVE commands.
+pub const DELTA_MAGIC_LARGE: &[u8; 4] = b"DLT\x04";
+/// Header flag bit: the commands are ordered for in-place application.
+pub const DELTA_FLAG_INPLACE: u8 = 0x01;
 
-/// Algorithm output: copy from reference or add literal bytes.
+pub const DELTA_CMD_END: u8 = 0;
+pub const DELTA_CMD_COPY: u8 = 1;
+pub const DELTA_CMD_ADD: u8 = 2;
+/// COPY with u64 fields; `DLT\x04` only, as are the three that follow.
+pub const DELTA_CMD_BIGCOPY: u8 = 3;
+pub const DELTA_CMD_BIGADD: u8 = 4;
+pub const DELTA_CMD_MOVE: u8 = 5;
+pub const DELTA_CMD_BIGMOVE: u8 = 6;
+
+/// Bytes in a CRC-64 digest.
+pub const DELTA_CRC_SIZE: usize = 8;
+/// Bytes in a field of a `DLT\x03` command.
+pub const DELTA_U32_SIZE: usize = 4;
+/// Bytes in a field of a BIG command.
+pub const DELTA_U64_SIZE: usize = 8;
+/// Header bytes: magic(4) + flags(1) + version_size(4) + two CRCs(16).
+pub const DELTA_HEADER_SIZE: usize = 25;
+/// `DLT\x04` header bytes: magic(4) + flags(1) + version_size(8) + two CRCs(16).
+pub const DELTA_HEADER_SIZE_LARGE: usize = 29;
+/// Bytes after a COPY or MOVE tag: src(4) + dst(4) + len(4).
+pub const DELTA_COPY_PAYLOAD: usize = 12;
+/// Bytes after an ADD tag and before its literal: dst(4) + len(4).
+pub const DELTA_ADD_HEADER: usize = 8;
+/// Bytes after a BIGCOPY or BIGMOVE tag: src(8) + dst(8) + len(8).
+pub const DELTA_BIGCOPY_PAYLOAD: usize = 24;
+/// Bytes after a BIGADD tag and before its literal: dst(8) + len(8).
+pub const DELTA_BIGADD_HEADER: usize = 16;
+
+/// The output of a differencing algorithm (Section 2.1.1).  Commands are
+/// applied in order, each appending to the version.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
+    /// Append `length` bytes of the reference starting at `offset`.
     Copy { offset: usize, length: usize },
+    /// Append literal bytes.
     Add { data: Vec<u8> },
 }
 
@@ -54,35 +68,34 @@ impl fmt::Display for Command {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Command::Copy { offset, length } => write!(f, "COPY(off={}, len={})", offset, length),
-            Command::Add { data } => {
-                if data.len() <= 20 {
-                    write!(f, "ADD({:?})", data)
-                } else {
-                    write!(f, "ADD(len={})", data.len())
-                }
-            }
+            Command::Add { data } if data.len() <= 20 => write!(f, "ADD({:?})", data),
+            Command::Add { data } => write!(f, "ADD(len={})", data.len()),
         }
     }
 }
 
-// ============================================================================
-// Placed Commands — ready for encoding and application
-// ============================================================================
-
-/// A command with explicit source and destination offsets.
+/// A command with an explicit destination, as stored in a delta file.
 ///
-/// For standard deltas, `Copy::src` is an offset into the reference and
-/// `Copy::dst` is the write position in the output.  For in-place deltas,
-/// both refer to positions in the shared working buffer.
-///
-/// `Move` copies from already-written output buffer at `src` to `dst`.
-/// Constraint: `src + length <= dst` (only previously written bytes).
-/// DLT\x04 only; always safe for in-place (no CRWI cycle possible).
+/// In a standard delta `Copy::src` is an offset in the reference and `dst`
+/// an offset in the output.  In an in-place delta both are offsets in the
+/// one buffer that starts out holding the reference.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlacedCommand {
-    Copy { src: usize, dst: usize, length: usize },
-    Add  { dst: usize, data: Vec<u8> },
-    Move { src: usize, dst: usize, length: usize },
+    Copy {
+        src: usize,
+        dst: usize,
+        length: usize,
+    },
+    Add {
+        dst: usize,
+        data: Vec<u8>,
+    },
+    /// Copy output already written: `src + length <= dst`.  `DLT\x04` only.
+    Move {
+        src: usize,
+        dst: usize,
+        length: usize,
+    },
 }
 
 impl fmt::Display for PlacedCommand {
@@ -91,13 +104,10 @@ impl fmt::Display for PlacedCommand {
             PlacedCommand::Copy { src, dst, length } => {
                 write!(f, "COPY(src={}, dst={}, len={})", src, dst, length)
             }
-            PlacedCommand::Add { dst, data } => {
-                if data.len() <= 20 {
-                    write!(f, "ADD(dst={}, {:?})", dst, data)
-                } else {
-                    write!(f, "ADD(dst={}, len={})", dst, data.len())
-                }
+            PlacedCommand::Add { dst, data } if data.len() <= 20 => {
+                write!(f, "ADD(dst={}, {:?})", dst, data)
             }
+            PlacedCommand::Add { dst, data } => write!(f, "ADD(dst={}, len={})", dst, data.len()),
             PlacedCommand::Move { src, dst, length } => {
                 write!(f, "MOVE(src={}, dst={}, len={})", src, dst, length)
             }
@@ -105,44 +115,45 @@ impl fmt::Display for PlacedCommand {
     }
 }
 
-// ============================================================================
-// Algorithm and Policy enums
-// ============================================================================
-
-/// Differencing algorithm selection.
+/// Differencing algorithm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Algorithm {
-    /// Optimal under simple cost; O(|V|·|R|) time, O(|R|) space (Section 3).
+    /// Optimal under the simple cost measure; O(|V| |R|) time, O(|R|) space
+    /// (Section 3).
     Greedy,
-    /// Linear time and near-constant space; concurrent scan of R and V (Section 4).
+    /// Linear time, constant space; scans R and V together (Section 4).
     Onepass,
-    /// Near-optimal, 1.5-pass; hash table with fingerprint checkpointing (Sections 7–8).
+    /// Near-optimal 1.5 passes, with fingerprint checkpointing
+    /// (Sections 7 and 8).
     Correcting,
 }
 
-/// Cycle-breaking policy for in-place reordering (Section 4.3 of Burns et al. 2003).
+/// How in-place conversion chooses the copy to turn into an add when copies
+/// form a cycle (Burns, Long and Stockmeyer, IEEE TKDE 2003, Section 4.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CyclePolicy {
-    /// Break each cycle at the copy with the shortest length, minimising literal bytes added.
+    /// The shortest copy on the cycle, which adds the fewest literal bytes.
     Localmin,
-    /// Break each cycle at the first remaining vertex; simpler but ignores copy lengths.
+    /// The lowest-numbered remaining copy, without looking for the cycle.
     Constant,
 }
 
-/// Tuning parameters for differencing algorithms.
+/// Tuning parameters for the differencing algorithms.
 #[derive(Clone, Debug)]
 pub struct DiffOptions {
-    /// Seed length: minimum match length and fingerprint window (Section 2.1.3).
+    /// Seed length: fingerprint window and minimum match length.  At least 1.
     pub p: usize,
-    /// Hash table capacity floor; algorithms auto-size upward from input length.
+    /// Floor for the hash table capacity; the algorithms size the table
+    /// upward from the length of the reference.
     pub q: usize,
-    /// Lookback buffer depth for the correcting algorithm (Section 5.2).
+    /// Number of commands the correcting algorithm can still revise
+    /// (Section 5.2).
     pub buf_cap: usize,
-    /// Print per-run statistics to stderr when true.
+    /// Print statistics to stderr.
     pub verbose: bool,
-    /// Use a Sleator-Tarjan splay tree instead of a hash table for R lookups.
+    /// Index fingerprints in a splay tree instead of a hash table.
     pub use_splay: bool,
-    /// Auto-sizing ceiling; prevents unbounded memory use on very large inputs.
+    /// Ceiling for the correcting algorithm's table capacity.
     pub max_table: usize,
 }
 
@@ -159,18 +170,13 @@ impl Default for DiffOptions {
     }
 }
 
-// ============================================================================
-// Error type
-// ============================================================================
-
-/// Errors produced by delta encoding, decoding, and I/O.
+/// An error in encoding, decoding, or validating a delta.
 #[derive(Debug)]
 pub enum DeltaError {
-    /// The binary data does not match the expected delta format.
+    /// The data is not a well-formed delta; the string says why.
     InvalidFormat(String),
-    /// The delta data ended before all commands were read.
+    /// The data ends in the middle of a command.
     UnexpectedEof,
-    /// An I/O error occurred while reading or writing a file.
     IoError(std::io::Error),
 }
 
@@ -192,11 +198,7 @@ impl From<std::io::Error> for DeltaError {
     }
 }
 
-// ============================================================================
-// Summary statistics
-// ============================================================================
-
-/// Summary statistics for a set of commands.
+/// Counts and byte totals for a list of commands.
 #[derive(Debug)]
 pub struct DeltaSummary {
     pub num_commands: usize,
@@ -204,66 +206,48 @@ pub struct DeltaSummary {
     pub num_adds: usize,
     pub copy_bytes: usize,
     pub add_bytes: usize,
+    /// `copy_bytes + add_bytes`: the size of the reconstructed version.
     pub total_output_bytes: usize,
 }
 
-/// Compute summary statistics from algorithm-level commands.
-pub fn delta_summary(commands: &[Command]) -> DeltaSummary {
-    let mut num_copies = 0;
-    let mut num_adds = 0;
-    let mut copy_bytes = 0;
-    let mut add_bytes = 0;
-    for cmd in commands {
-        match cmd {
-            Command::Copy { length, .. } => {
-                num_copies += 1;
-                copy_bytes += length;
-            }
-            Command::Add { data } => {
-                num_adds += 1;
-                add_bytes += data.len();
+impl DeltaSummary {
+    /// Summarizes commands given as (is a copy, bytes produced).
+    fn of(commands: impl Iterator<Item = (bool, usize)>) -> Self {
+        let mut s = DeltaSummary {
+            num_commands: 0,
+            num_copies: 0,
+            num_adds: 0,
+            copy_bytes: 0,
+            add_bytes: 0,
+            total_output_bytes: 0,
+        };
+        for (is_copy, bytes) in commands {
+            s.num_commands += 1;
+            if is_copy {
+                s.num_copies += 1;
+                s.copy_bytes += bytes;
+            } else {
+                s.num_adds += 1;
+                s.add_bytes += bytes;
             }
         }
-    }
-    DeltaSummary {
-        num_commands: commands.len(),
-        num_copies,
-        num_adds,
-        copy_bytes,
-        add_bytes,
-        total_output_bytes: copy_bytes + add_bytes,
+        s.total_output_bytes = s.copy_bytes + s.add_bytes;
+        s
     }
 }
 
-/// Compute summary statistics from placed commands.
+/// Summarizes the output of a differencing algorithm.
+pub fn delta_summary(commands: &[Command]) -> DeltaSummary {
+    DeltaSummary::of(commands.iter().map(|cmd| match cmd {
+        Command::Copy { length, .. } => (true, *length),
+        Command::Add { data } => (false, data.len()),
+    }))
+}
+
+/// Summarizes placed commands.  A move counts as a copy.
 pub fn placed_summary(commands: &[PlacedCommand]) -> DeltaSummary {
-    let mut num_copies = 0;
-    let mut num_adds = 0;
-    let mut copy_bytes = 0;
-    let mut add_bytes = 0;
-    for cmd in commands {
-        match cmd {
-            PlacedCommand::Copy { length, .. } => {
-                num_copies += 1;
-                copy_bytes += length;
-            }
-            PlacedCommand::Add { data, .. } => {
-                num_adds += 1;
-                add_bytes += data.len();
-            }
-            PlacedCommand::Move { length, .. } => {
-                // Move is counted with copies: it copies from already-written output.
-                num_copies += 1;
-                copy_bytes += length;
-            }
-        }
-    }
-    DeltaSummary {
-        num_commands: commands.len(),
-        num_copies,
-        num_adds,
-        copy_bytes,
-        add_bytes,
-        total_output_bytes: copy_bytes + add_bytes,
-    }
+    DeltaSummary::of(commands.iter().map(|cmd| match cmd {
+        PlacedCommand::Copy { length, .. } | PlacedCommand::Move { length, .. } => (true, *length),
+        PlacedCommand::Add { data, .. } => (false, data.len()),
+    }))
 }

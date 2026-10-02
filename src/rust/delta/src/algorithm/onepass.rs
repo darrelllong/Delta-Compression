@@ -1,226 +1,176 @@
-use crate::hash::{next_prime, RollingHash};
+use super::{common_prefix, index_name, percent, print_command_stats, seed_count};
+use crate::hash::{next_prime, SeedScanner};
 use crate::splay::SplayTree;
 use crate::types::{Command, DiffOptions};
 
-/// Flat hash-table slot — sentinel-based (no Option overhead).
-/// Empty/stale slots have version == u64::MAX (valid versions start at 0).
+/// One seed remembered from one of the two strings.
 #[derive(Clone, Copy)]
 struct Slot {
     fp: u64,
     offset: usize,
+    /// The table generation the slot was written in; see `SeedTable`.
     version: u64,
 }
 
-const EMPTY_SLOT: Slot = Slot {
-    fp: 0,
-    offset: 0,
-    version: u64::MAX,
-};
+/// No scan produces this many matches, so it marks a slot never written.
+const NO_VERSION: u64 = u64::MAX;
 
-/// One-Pass algorithm (Section 4.1, Figure 3).
+/// The seeds seen in one string since the last match, at most one per
+/// fingerprint: the first one seen is kept (Section 4.1).
 ///
-/// Scans R and V concurrently with two hash tables (one per string).
-/// Each table stores at most one offset per footprint (retain-existing
-/// policy: first entry wins, later collisions are discarded).
-/// Hash tables are logically flushed after each match via version counter
-/// (next-match policy).
-/// Time: O(np + q), space: O(q) — both constant for fixed p, q (Section 4.2).
-/// Suboptimal on transpositions: cannot match blocks that appear in
-/// different order between R and V (Section 4.3).
+/// Figure 3 flushes both tables after every match.  Clearing them would
+/// cost O(q) each time, so instead every entry carries the number of
+/// matches made when it was written, its version, and an entry from an
+/// earlier version counts as absent.
+enum SeedTable {
+    /// Direct-mapped on `fp % len`.  Two fingerprints with the same index
+    /// contend for one slot, and the earlier one keeps it.
+    Hash(Vec<Slot>),
+    /// Fingerprint to (offset, version).
+    Splay(SplayTree<(usize, u64)>),
+}
+
+impl SeedTable {
+    fn new(q: usize, use_splay: bool) -> Self {
+        if use_splay {
+            SeedTable::Splay(SplayTree::new())
+        } else {
+            let empty = Slot {
+                fp: 0,
+                offset: 0,
+                version: NO_VERSION,
+            };
+            SeedTable::Hash(vec![empty; q])
+        }
+    }
+
+    /// Records the seed at `offset` unless one is already recorded in its
+    /// place for this version.
+    #[inline]
+    fn store(&mut self, fp: u64, offset: usize, version: u64) {
+        match self {
+            SeedTable::Hash(slots) => {
+                let i = (fp % slots.len() as u64) as usize;
+                if slots[i].version != version {
+                    slots[i] = Slot {
+                        fp,
+                        offset,
+                        version,
+                    };
+                }
+            }
+            SeedTable::Splay(tree) => {
+                let entry = tree.insert_or_get(fp, (offset, version));
+                if entry.1 != version {
+                    *entry = (offset, version);
+                }
+            }
+        }
+    }
+
+    /// Returns the offset recorded for `fp` in this version.
+    #[inline]
+    fn lookup(&mut self, fp: u64, version: u64) -> Option<usize> {
+        match self {
+            SeedTable::Hash(slots) => {
+                let slot = &slots[(fp % slots.len() as u64) as usize];
+                (slot.version == version && slot.fp == fp).then_some(slot.offset)
+            }
+            SeedTable::Splay(tree) => match tree.find(fp) {
+                Some(&mut (offset, ver)) if ver == version => Some(offset),
+                _ => None,
+            },
+        }
+    }
+}
+
+/// The one-pass algorithm (Section 4.1, Figure 3).
 ///
-/// The hash table is auto-sized to max(q, num_seeds / p) so that large
-/// inputs get one slot per seed-length chunk of R.  TABLE_SIZE acts as a
-/// floor for small files.
+/// It scans R and V together, remembering the seeds of each in a table of
+/// its own and looking each new seed up in the other string's table.  On a
+/// match it extends the match forward, encodes it, forgets every seed, and
+/// resumes after the match in both strings.  Time is linear and space is
+/// O(q) (Section 4.2).  Because it never looks back, it cannot match blocks
+/// that occur in a different order in R and V (Section 4.3).
+///
+/// The tables have a prime number of slots, at least `opts.q` and at least
+/// one for every `p` bytes of R.
 pub fn diff_onepass(r: &[u8], v: &[u8], opts: &DiffOptions) -> Vec<Command> {
     let p = opts.p;
-    let q = opts.q;
-    let verbose = opts.verbose;
-    let use_splay = opts.use_splay;
-
     let mut commands = Vec::new();
     if v.is_empty() {
         return commands;
     }
 
-    // Auto-size hash table: one slot per p-byte chunk of R (floor = q).
-    let num_seeds = if r.len() >= p { r.len() - p + 1 } else { 0 };
-    let q = next_prime(q.max(num_seeds / p));
-
-    if verbose {
+    let q = next_prime(opts.q.max(seed_count(r.len(), p) / p));
+    if opts.verbose {
         eprintln!(
             "onepass: {}, q={}, |R|={}, |V|={}, seed_len={}",
-            if use_splay { "splay tree" } else { "hash table" },
-            q, r.len(), v.len(), p
+            index_name(opts),
+            q,
+            r.len(),
+            v.len(),
+            p
         );
     }
 
-    // Step (1): lookup structures with version-based logical flushing.
-    // Flat slot array — sentinel version u64::MAX marks empty/stale slots.
-    let mut h_v_ht: Vec<Slot> = if !use_splay { vec![EMPTY_SLOT; q] } else { Vec::new() };
-    let mut h_r_ht: Vec<Slot> = if !use_splay { vec![EMPTY_SLOT; q] } else { Vec::new() };
+    let mut seen_v = SeedTable::new(q, opts.use_splay);
+    let mut seen_r = SeedTable::new(q, opts.use_splay);
+    let mut scan_v = SeedScanner::new(p);
+    let mut scan_r = SeedScanner::new(p);
+    let mut version = 0; // the number of matches so far
+    let mut r_c = 0; // current position in R
+    let mut v_c = 0; // current position in V
+    let mut v_s = 0; // start of the part of V not yet encoded
 
-    // Splay tree path: value is (offset, version)
-    let mut h_v_sp: SplayTree<(usize, u64)> = SplayTree::new();
-    let mut h_r_sp: SplayTree<(usize, u64)> = SplayTree::new();
-
-    let mut ver: u64 = 0;
-
-    // Debug counters (verbose mode only)
-    let mut dbg_positions: usize = 0;
-    let mut dbg_lookups: usize = 0;
-    let mut dbg_matches: usize = 0;
-
-    // Step (2): initialize scan pointers
-    let mut r_c: usize = 0;
-    let mut v_c: usize = 0;
-    let mut v_s: usize = 0;
-
-    // Rolling hashes for O(1) per-position fingerprinting.
-    // Initialized lazily on first use and reinitialized after match jumps.
-    let mut rh_v: Option<RollingHash> = if v.len() >= p { Some(RollingHash::new(v, 0, p)) } else { None };
-    let mut rh_r: Option<RollingHash> = if r.len() >= p { Some(RollingHash::new(r, 0, p)) } else { None };
-    let mut rh_v_pos: usize = 0; // position rh_v currently represents
-    let mut rh_r_pos: usize = 0;
+    // Verbose statistics.
+    let mut positions = 0;
+    let mut lookups = 0;
 
     loop {
-        // Step (3): check for end of V and R
-        let can_v = v_c + p <= v.len();
-        let can_r = r_c + p <= r.len();
-
-        if !can_v && !can_r {
+        let fp_v = (v_c + p <= v.len()).then(|| scan_v.at(v, v_c));
+        let fp_r = (r_c + p <= r.len()).then(|| scan_r.at(r, r_c));
+        if fp_v.is_none() && fp_r.is_none() {
             break;
         }
-        dbg_positions += 1;
+        positions += 1;
 
-        let fp_v = if can_v {
-            if let Some(ref mut rh) = rh_v {
-                if v_c == rh_v_pos {
-                    // Already at the right position
-                } else if v_c == rh_v_pos + 1 {
-                    rh.roll(v[v_c - 1], v[v_c + p - 1]);
-                    rh_v_pos = v_c;
-                } else {
-                    // Jump — reinitialize
-                    *rh = RollingHash::new(v, v_c, p);
-                    rh_v_pos = v_c;
-                }
-                Some(rh.value())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        let fp_r = if can_r {
-            if let Some(ref mut rh) = rh_r {
-                if r_c == rh_r_pos {
-                    // Already at the right position
-                } else if r_c == rh_r_pos + 1 {
-                    rh.roll(r[r_c - 1], r[r_c + p - 1]);
-                    rh_r_pos = r_c;
-                } else {
-                    *rh = RollingHash::new(r, r_c, p);
-                    rh_r_pos = r_c;
-                }
-                Some(rh.value())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        // Step (4a): store offsets (retain-existing policy)
         if let Some(fp) = fp_v {
-            if use_splay {
-                let existing = h_v_sp.find(fp);
-                if existing.is_none() || existing.unwrap().1 != ver {
-                    h_v_sp.insert(fp, (v_c, ver));
-                }
-            } else {
-                let idx = (fp % q as u64) as usize;
-                let slot = &mut h_v_ht[idx];
-                if slot.version != ver {
-                    *slot = Slot { fp, offset: v_c, version: ver };
-                }
-            }
+            seen_v.store(fp, v_c, version);
         }
         if let Some(fp) = fp_r {
-            if use_splay {
-                let existing = h_r_sp.find(fp);
-                if existing.is_none() || existing.unwrap().1 != ver {
-                    h_r_sp.insert(fp, (r_c, ver));
-                }
-            } else {
-                let idx = (fp % q as u64) as usize;
-                let slot = &mut h_r_ht[idx];
-                if slot.version != ver {
-                    *slot = Slot { fp, offset: r_c, version: ver };
-                }
-            }
+            seen_r.store(fp, r_c, version);
         }
 
-        // Step (4b): look for a matching seed in the other table
-        let mut match_found = false;
-        let mut r_m: usize = 0;
-        let mut v_m: usize = 0;
-
+        // Both seeds are stored before either is looked up, so that the
+        // seeds at v_c and r_c can match each other.  The seed of R is
+        // tried first.
+        let mut found = None;
         if let Some(fp) = fp_r {
-            let v_cand = if use_splay {
-                h_v_sp.find(fp).and_then(|&mut (off, v)| if v == ver { Some(off) } else { None })
-            } else {
-                let idx = (fp % q as u64) as usize;
-                let slot = &h_v_ht[idx];
-                if slot.version == ver && slot.fp == fp { Some(slot.offset) } else { None }
-            };
-            if let Some(v_cand) = v_cand {
-                dbg_lookups += 1;
-                if r[r_c..r_c + p] == v[v_cand..v_cand + p] {
-                    r_m = r_c;
-                    v_m = v_cand;
-                    match_found = true;
+            if let Some(v_m) = seen_v.lookup(fp, version) {
+                lookups += 1;
+                if r[r_c..r_c + p] == v[v_m..v_m + p] {
+                    found = Some((r_c, v_m));
                 }
             }
         }
-
-        if !match_found {
+        if found.is_none() {
             if let Some(fp) = fp_v {
-                let r_cand = if use_splay {
-                    h_r_sp.find(fp).and_then(|&mut (off, v)| if v == ver { Some(off) } else { None })
-                } else {
-                    let idx = (fp % q as u64) as usize;
-                    let slot = &h_r_ht[idx];
-                    if slot.version == ver && slot.fp == fp { Some(slot.offset) } else { None }
-                };
-                if let Some(r_cand) = r_cand {
-                    dbg_lookups += 1;
-                    if v[v_c..v_c + p] == r[r_cand..r_cand + p] {
-                        v_m = v_c;
-                        r_m = r_cand;
-                        match_found = true;
+                if let Some(r_m) = seen_r.lookup(fp, version) {
+                    lookups += 1;
+                    if v[v_c..v_c + p] == r[r_m..r_m + p] {
+                        found = Some((r_m, v_c));
                     }
                 }
             }
         }
-
-        if !match_found {
+        let Some((r_m, v_m)) = found else {
             v_c += 1;
             r_c += 1;
             continue;
-        }
-        dbg_matches += 1;
+        };
 
-        // Step (5): extend match forward
-        // Pre-compute max extension, then compare slices (one bounds check
-        // instead of per-byte).
-        let max_ext = (v.len() - v_m).min(r.len() - r_m);
-        let ml = v[v_m..v_m + max_ext]
-            .iter()
-            .zip(&r[r_m..r_m + max_ext])
-            .position(|(a, b)| a != b)
-            .unwrap_or(max_ext);
-
-        // Step (6): encode
+        let length = common_prefix(&v[v_m..], &r[r_m..]);
         if v_s < v_m {
             commands.push(Command::Add {
                 data: v[v_s..v_m].to_vec(),
@@ -228,37 +178,37 @@ pub fn diff_onepass(r: &[u8], v: &[u8], opts: &DiffOptions) -> Vec<Command> {
         }
         commands.push(Command::Copy {
             offset: r_m,
-            length: ml,
+            length,
         });
-        v_s = v_m + ml;
-
-        // Step (7): advance pointers and flush tables
-        v_c = v_m + ml;
-        r_c = r_m + ml;
-        ver += 1;
+        v_c = v_m + length;
+        r_c = r_m + length;
+        v_s = v_c;
+        version += 1;
     }
 
-    // Step (8): trailing add
     if v_s < v.len() {
         commands.push(Command::Add {
             data: v[v_s..].to_vec(),
         });
     }
 
-    if verbose {
-        let hit_pct = if dbg_lookups > 0 { dbg_matches as f64 / dbg_lookups as f64 * 100.0 } else { 0.0 };
+    if opts.verbose {
+        // Every match advances the version, so the two counts are equal.
+        let matches = version as usize;
         eprintln!(
             "  scan: {} positions, {} lookups, {} matches (flushes)\n  \
              scan: hit rate {:.1}% (of lookups)",
-            dbg_positions, dbg_lookups, dbg_matches, hit_pct
+            positions,
+            lookups,
+            matches,
+            percent(matches, lookups)
         );
-        super::print_command_stats(&commands);
+        print_command_stats(&commands);
     }
-
     commands
 }
 
-/// Convenience wrapper with default parameters.
+/// Runs [`diff_onepass`] with the default options.
 pub fn diff_onepass_default(r: &[u8], v: &[u8]) -> Vec<Command> {
     diff_onepass(r, v, &DiffOptions::default())
 }

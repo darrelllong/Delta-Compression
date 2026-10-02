@@ -1,15 +1,13 @@
-//! Karp-Rabin rolling hash (Karp & Rabin 1987; Section 2.1.3).
-//!
-//! Polynomial fingerprints over the Mersenne prime 2^61-1.
-//! Full 61-bit fingerprints are used for collision-free seed comparison;
-//! `fp_to_index` maps them into the bounded hash table via F mod q.
+//! Karp-Rabin fingerprints over the Mersenne prime 2^61 - 1 (Section 2.1.3),
+//! the CRC-64/XZ checksum of the delta header, and the primality test that
+//! sizes hash tables.
 
-use crate::types::{HASH_BASE, HASH_MOD};
+use crate::types::{DELTA_CRC_SIZE, HASH_BASE, HASH_MOD};
 
-/// Reduce a u128 value modulo the Mersenne prime 2^61-1.
+/// Reduces `x` modulo 2^61 - 1 without dividing.
 ///
-/// Uses the Mersenne identity: for M = 2^61-1, x mod M = (x >> 61) + (x & M),
-/// with a final correction if the result >= M. No division needed.
+/// Since 2^61 = 1 (mod 2^61 - 1), the high bits fold onto the low ones.
+/// One fold of a u128 leaves up to 68 bits, so it is done twice.
 #[inline]
 pub fn mod_mersenne(x: u128) -> u64 {
     let m = HASH_MOD as u128;
@@ -17,26 +15,23 @@ pub fn mod_mersenne(x: u128) -> u64 {
     if r >= m {
         r -= m;
     }
-    // One more reduction in case the first wasn't enough (x >> 61 can be large)
-    let mut r2 = (r >> 61) + (r & m);
-    if r2 >= m {
-        r2 -= m;
+    r = (r >> 61) + (r & m);
+    if r >= m {
+        r -= m;
     }
-    r2 as u64
+    r as u64
 }
 
-/// Compute the Karp-Rabin fingerprint of data[offset..offset+p] (Eq. 1, Section 2.1.3).
-///
-/// F(X) = (x_0 * b^{p-1} + x_1 * b^{p-2} + ... + x_{p-1}) mod (2^61-1)
+/// Returns the fingerprint of the seed `data[offset..offset + p]` (Eq. 1):
+/// its bytes taken as the digits, most significant first, of a number in
+/// base [`HASH_BASE`], modulo [`HASH_MOD`].
 pub fn fingerprint(data: &[u8], offset: usize, p: usize) -> u64 {
-    let mut h: u64 = 0;
-    for i in 0..p {
-        h = mod_mersenne(h as u128 * HASH_BASE as u128 + data[offset + i] as u128);
-    }
-    h
+    data[offset..offset + p].iter().fold(0, |h, &byte| {
+        mod_mersenne(h as u128 * HASH_BASE as u128 + byte as u128)
+    })
 }
 
-/// Precompute HASH_BASE^{p-1} mod HASH_MOD.
+/// Returns `HASH_BASE^(p-1) mod HASH_MOD`, the weight of a seed's first byte.
 pub fn precompute_bp(p: usize) -> u64 {
     if p == 0 {
         return 1;
@@ -44,7 +39,6 @@ pub fn precompute_bp(p: usize) -> u64 {
     let mut result: u64 = 1;
     let mut base = HASH_BASE;
     let mut exp = p - 1;
-    // Modular exponentiation by squaring
     while exp > 0 {
         if exp & 1 == 1 {
             result = mod_mersenne(result as u128 * base as u128);
@@ -55,72 +49,100 @@ pub fn precompute_bp(p: usize) -> u64 {
     result
 }
 
-/// Map a full fingerprint to a hash table index (F mod q, Section 2.1.3).
+/// Maps a fingerprint to a slot in a table of `table_size` slots.
 #[inline]
 pub fn fp_to_index(fp: u64, table_size: usize) -> usize {
     (fp % table_size as u64) as usize
 }
 
-/// Rolling hash for O(1) incremental fingerprint updates.
-///
-/// After `new()`, call `roll()` to slide the window one byte to the right.
+/// The fingerprint of a seed-length window that can slide one byte at a
+/// time in constant time.
 pub struct RollingHash {
     value: u64,
-    bp: u64, // HASH_BASE^{p-1} mod HASH_MOD
+    bp: u64, // HASH_BASE^(p-1) mod HASH_MOD
 }
 
 impl RollingHash {
-    /// Create a new RollingHash from data[offset..offset+p].
+    /// Returns the hash of the window `data[offset..offset + p]`.
     pub fn new(data: &[u8], offset: usize, p: usize) -> Self {
-        let bp = precompute_bp(p);
-        let value = fingerprint(data, offset, p);
-        RollingHash { value, bp }
+        RollingHash {
+            value: fingerprint(data, offset, p),
+            bp: precompute_bp(p),
+        }
     }
 
-    /// Current fingerprint value.
+    /// The fingerprint of the current window.
     #[inline]
     pub fn value(&self) -> u64 {
         self.value
     }
 
-    /// Slide the window: remove `old_byte` from the left, add `new_byte` to the right (Eq. 2).
-    ///
-    /// F(X_{r+1}) = ((F(X_r) - old_byte * b^{p-1}) * b + new_byte) mod (2^61-1)
+    /// Slides the window one byte to the right (Eq. 2): `old_byte` is the
+    /// byte that leaves on the left, `new_byte` the one that enters.
     #[inline]
     pub fn roll(&mut self, old_byte: u8, new_byte: u8) {
-        // Subtract old_byte * bp, using HASH_MOD to keep positive
         let sub = mod_mersenne(old_byte as u128 * self.bp as u128);
         let v = if self.value >= sub {
             self.value - sub
         } else {
             HASH_MOD - (sub - self.value)
         };
-        // Multiply by base and add new_byte
         self.value = mod_mersenne(v as u128 * HASH_BASE as u128 + new_byte as u128);
     }
-
 }
 
-// ── CRC-64/XZ checksum (ECMA-182 reflected) ──────────────────────────────
+/// Fingerprints the seeds of one string for a scan that mostly moves forward
+/// one byte at a time and now and then jumps past a match.
+pub(crate) struct SeedScanner {
+    hash: RollingHash,
+    /// Start of the window `hash` covers, or `NOWHERE` before the first use.
+    pos: usize,
+    p: usize,
+}
 
-use crate::types::DELTA_CRC_SIZE;
+/// Neither a seed offset nor one less than a seed offset.
+const NOWHERE: usize = usize::MAX - 1;
 
-/// CRC-64/XZ lookup table.  Reflected poly: 0xC96C5795D7870F42.
-/// Generated at compile time via const fn.
+impl SeedScanner {
+    pub(crate) fn new(p: usize) -> Self {
+        SeedScanner {
+            hash: RollingHash {
+                value: 0,
+                bp: precompute_bp(p),
+            },
+            pos: NOWHERE,
+            p,
+        }
+    }
+
+    /// Returns the fingerprint of `data[i..i + p]`.  Every call must pass
+    /// the same `data`.
+    #[inline]
+    pub(crate) fn at(&mut self, data: &[u8], i: usize) -> u64 {
+        if i == self.pos + 1 {
+            self.hash.roll(data[i - 1], data[i + self.p - 1]);
+        } else if i != self.pos {
+            self.hash.value = fingerprint(data, i, self.p);
+        }
+        self.pos = i;
+        self.hash.value
+    }
+}
+
 const fn make_crc64_table() -> [u64; 256] {
-    let poly: u64 = 0xC96C5795D7870F42;
+    const POLY: u64 = 0xC96C5795D7870F42; // ECMA-182, reflected
     let mut table = [0u64; 256];
-    let mut i = 0usize;
+    let mut i = 0;
     while i < 256 {
         let mut crc = i as u64;
-        let mut j = 0;
-        while j < 8 {
-            if crc & 1 != 0 {
-                crc = (crc >> 1) ^ poly;
+        let mut bit = 0;
+        while bit < 8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ POLY
             } else {
-                crc >>= 1;
-            }
-            j += 1;
+                crc >> 1
+            };
+            bit += 1;
         }
         table[i] = crc;
         i += 1;
@@ -130,28 +152,24 @@ const fn make_crc64_table() -> [u64; 256] {
 
 static CRC64_TABLE: [u64; 256] = make_crc64_table();
 
-/// Compute CRC-64/XZ of `data`; returns 8 bytes big-endian.
+/// Returns the CRC-64/XZ of `data`, most significant byte first.
 ///
-/// Standard check value: crc64_xz(b"123456789") = 0x995DC9BBDF1939FA.
-/// Empty input: crc64_xz(b"") = 0x0000000000000000.
+/// The check value, for `b"123456789"`, is `0x995DC9BBDF1939FA`.
 pub fn crc64_xz(data: &[u8]) -> [u8; DELTA_CRC_SIZE] {
-    let mut crc: u64 = 0xFFFFFFFFFFFFFFFF;
-    for &byte in data {
-        crc = CRC64_TABLE[((crc ^ byte as u64) & 0xFF) as usize] ^ (crc >> 8);
-    }
-    (crc ^ 0xFFFFFFFFFFFFFFFF).to_be_bytes()
+    let crc = data.iter().fold(u64::MAX, |crc, &byte| {
+        CRC64_TABLE[((crc ^ byte as u64) & 0xFF) as usize] ^ (crc >> 8)
+    });
+    (crc ^ u64::MAX).to_be_bytes()
 }
 
-// ── Primality testing (for hash table auto-sizing) ───────────────────────
-
-/// Modular exponentiation: base^exp mod modulus (uses u128 to avoid overflow).
+/// Returns `base^exp mod modulus`.
 fn power_mod(base: u64, mut exp: u64, modulus: u64) -> u64 {
     if modulus == 1 {
         return 0;
     }
     let m = modulus as u128;
     let mut result: u128 = 1;
-    let mut b: u128 = base as u128 % m;
+    let mut b = base as u128 % m;
     while exp > 0 {
         if exp & 1 == 1 {
             result = result * b % m;
@@ -162,21 +180,14 @@ fn power_mod(base: u64, mut exp: u64, modulus: u64) -> u64 {
     result as u64
 }
 
-/// Factor n into d * 2^r, returning (d, r).
-fn get_d_r(mut n: u64) -> (u64, u32) {
-    let mut r: u32 = 0;
-    while n % 2 == 0 {
-        n /= 2;
-        r += 1;
-    }
-    (n, r)
+/// Writes `n` as `d * 2^r` with `d` odd and returns `(d, r)`.  `n` is not 0.
+fn get_d_r(n: u64) -> (u64, u32) {
+    let r = n.trailing_zeros();
+    (n >> r, r)
 }
 
-/// The witness loop of the Miller-Rabin probabilistic primality test.
-///
-/// Returns `true` if `a` is a witness to the compositeness of `n`
-/// (i.e., n is definitely composite).  Returns `false` if `a` is a
-/// "liar" — n may be prime.
+/// Reports whether `a` is a Miller-Rabin witness that `n` is composite.
+/// A false result leaves the question open.
 fn witness(a: u64, n: u64) -> bool {
     let (d, r) = get_d_r(n - 1);
     let mut x = power_mod(a, d, n);
@@ -190,42 +201,29 @@ fn witness(a: u64, n: u64) -> bool {
     x != 1
 }
 
-/// Fixed witnesses for deterministic Miller-Rabin.
-///
-/// Sufficient for all n < 3,317,044,064,679,887,385,961,981 (> 2^81).
-/// Jaeschke, Math. Comp. 61(204), 1993.
+/// With these witnesses Miller-Rabin errs for no n below
+/// 318,665,857,834,031,151,167,461, which exceeds 2^64 (Sorenson and
+/// Webster, Math. Comp. 86(304), 2017).
 const WITNESSES: &[u64] = &[2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37];
 
-/// Deterministic Miller-Rabin primality test.
-///
-/// Writes n-1 = 2^r * d, then for each witness a checks whether
-/// a^d ≡ 1 (mod n) or a^{2^j d} ≡ -1 (mod n) for some j < r.
-/// If neither holds, n is composite.  With the fixed witnesses above,
-/// the test is deterministic for all n relevant to hash table sizing.
+/// Reports whether `n` is prime.  The test is deterministic.
 pub fn is_prime(n: usize) -> bool {
     let n = n as u64;
-    if n < 2 || (n != 2 && n % 2 == 0) {
+    if n < 2 || (n != 2 && n & 1 == 0) {
         return false;
     }
-    if n == 2 || n == 3 {
-        return true;
-    }
-    for &a in WITNESSES {
-        if a >= n { break; }
-        if witness(a, n) { return false; }
-    }
-    true
+    !WITNESSES
+        .iter()
+        .take_while(|&&a| a < n)
+        .any(|&a| witness(a, n))
 }
 
-/// Smallest prime >= n.
-///
-/// Searches odd candidates upward from n.  By the prime number theorem,
-/// the expected gap is O(log n), so this terminates quickly.
+/// Returns the smallest prime that is at least `n`.
 pub fn next_prime(n: usize) -> usize {
     if n <= 2 {
         return 2;
     }
-    let mut candidate = if n % 2 == 0 { n + 1 } else { n };
+    let mut candidate = n | 1;
     while !is_prime(candidate) {
         candidate += 2;
     }
@@ -269,7 +267,15 @@ mod tests {
         }
     }
 
-    // ── Primality testing ────────────────────────────────────────────────
+    #[test]
+    fn test_seed_scanner_rolls_and_jumps() {
+        let data = b"The quick brown fox jumps over the lazy dog.";
+        let p = 8;
+        let mut scan = SeedScanner::new(p);
+        for i in [0, 0, 1, 2, 3, 20, 21, 21, 5, 6, data.len() - p] {
+            assert_eq!(scan.at(data, i), fingerprint(data, i, p), "offset {}", i);
+        }
+    }
 
     #[test]
     fn test_get_d_r() {
@@ -283,13 +289,12 @@ mod tests {
 
     #[test]
     fn test_witness_composite() {
-        assert!(witness(2, 9));    // 9 = 3^2 is composite
+        assert!(witness(2, 9));
         assert!(witness(2, 15));
     }
 
     #[test]
     fn test_witness_prime() {
-        // No a in [2, 13) should be a witness for the prime 13
         for a in 2..12 {
             assert!(!witness(a, 13), "a={} should not be a witness for 13", a);
         }
@@ -298,10 +303,9 @@ mod tests {
     #[test]
     fn test_known_primes() {
         let primes = [
-            2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47,
-            53, 59, 61, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113,
-            127, 131, 137, 139, 149, 151, 157, 163, 167, 173, 179, 181, 191,
-            193, 197, 199, 211, 223, 227, 229,
+            2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83,
+            89, 97, 101, 103, 107, 109, 113, 127, 131, 137, 139, 149, 151, 157, 163, 167, 173, 179,
+            181, 191, 193, 197, 199, 211, 223, 227, 229,
         ];
         for &p in &primes {
             assert!(is_prime(p), "{} should be prime", p);
@@ -311,9 +315,8 @@ mod tests {
     #[test]
     fn test_known_composites() {
         let composites = [
-            0, 1, 4, 6, 8, 9, 10, 12, 14, 15, 16, 18, 20,
-            21, 25, 27, 33, 35, 49, 51, 55, 63, 65, 77, 91,
-            100, 121, 143, 169, 221, 1000, 1000000,
+            0, 1, 4, 6, 8, 9, 10, 12, 14, 15, 16, 18, 20, 21, 25, 27, 33, 35, 49, 51, 55, 63, 65,
+            77, 91, 100, 121, 143, 169, 221, 1000, 1000000,
         ];
         for &c in &composites {
             assert!(!is_prime(c), "{} should be composite", c);
@@ -322,15 +325,14 @@ mod tests {
 
     #[test]
     fn test_large_primes() {
-        assert!(is_prime(1048573));   // largest prime < 2^20
-        assert!(is_prime(2097143));   // largest prime < 2^21
-        assert!(is_prime(104729));    // 10000th prime
+        assert!(is_prime(1048573)); // largest prime < 2^20
+        assert!(is_prime(2097143)); // largest prime < 2^21
+        assert!(is_prime(104729)); // 10000th prime
     }
 
     #[test]
     fn test_carmichael_numbers() {
-        // Carmichael numbers pass the Fermat test for all bases
-        // but Miller-Rabin with random witnesses catches them.
+        // These pass the Fermat test for every base coprime to them.
         let carmichaels = [561, 1105, 1729, 2465, 2821, 6601, 8911];
         for &c in &carmichaels {
             assert!(!is_prime(c), "Carmichael number {} should be composite", c);
@@ -355,7 +357,6 @@ mod tests {
 
     #[test]
     fn test_next_prime_consecutive() {
-        // Verify next_prime produces valid primes for a range of inputs
         for n in 2..500 {
             let np = next_prime(n);
             assert!(np >= n);
@@ -363,17 +364,13 @@ mod tests {
         }
     }
 
-    // ── CRC-64/XZ check values ────────────────────────────────────────────
-
     #[test]
     fn test_crc64_empty() {
-        // CRC-64/XZ of empty input is all-zeros.
         assert_eq!(crc64_xz(b""), [0u8; 8]);
     }
 
     #[test]
     fn test_crc64_check_value() {
-        // Standard check value: CRC-64/XZ of b"123456789" = 0x995DC9BBDF1939FA.
         let expected: [u8; 8] = [0x99, 0x5D, 0xC9, 0xBB, 0xDF, 0x19, 0x39, 0xFA];
         assert_eq!(crc64_xz(b"123456789"), expected);
     }

@@ -2,18 +2,18 @@ use delta::{
     apply_delta, apply_delta_inplace, apply_placed_to, crc64_xz, decode_delta, diff_correcting,
     diff_greedy, diff_onepass, encode_delta, encode_delta_large, is_inplace_delta, is_prime,
     make_inplace, next_prime, output_size, place_commands, unplace_commands,
-    validate_placed_commands, Command, CyclePolicy, DeltaError, DiffOptions,
-    DELTA_HEADER_SIZE_LARGE, DELTA_MAGIC_LARGE,
-    PlacedCommand, TABLE_SIZE,
+    validate_placed_commands, Command, CyclePolicy, DeltaError, DiffOptions, PlacedCommand,
+    DELTA_HEADER_SIZE_LARGE, DELTA_MAGIC_LARGE, TABLE_SIZE,
 };
 use std::fs;
-
-// ── helpers ──────────────────────────────────────────────────────────────
 
 type DiffFn = fn(&[u8], &[u8], &DiffOptions) -> Vec<Command>;
 
 fn opts(p: usize) -> DiffOptions {
-    DiffOptions { p, ..DiffOptions::default() }
+    DiffOptions {
+        p,
+        ..DiffOptions::default()
+    }
 }
 
 fn roundtrip(algo_fn: DiffFn, r: &[u8], v: &[u8], p: usize) -> Vec<u8> {
@@ -24,7 +24,6 @@ fn roundtrip(algo_fn: DiffFn, r: &[u8], v: &[u8], p: usize) -> Vec<u8> {
     let (placed2, _, _, sc, dc) = decode_delta(&delta).unwrap();
     assert_eq!(sc, crc64_xz(r));
     assert_eq!(dc, crc64_xz(v));
-    // Apply standard: read from r, write sequentially
     let mut out = vec![0u8; v.len()];
     delta::apply_placed_to(r, &placed2, &mut out);
     out
@@ -73,19 +72,23 @@ fn all_policies() -> Vec<(&'static str, CyclePolicy)> {
     ]
 }
 
-// ── standard differencing ────────────────────────────────────────────────
+// Standard differencing.
 
-// TestPaperExample — Section 2.1.1 of Ajtai et al. 2002
+// The example of Section 2.1.1 of Ajtai et al. 2002.
 #[test]
 fn test_paper_example() {
     let r = b"ABCDEFGHIJKLMNOP";
     let v = b"QWIJKLMNOBCDEFGHZDEFGHIJKL";
     for (name, algo) in all_algos() {
-        assert_eq!(apply_delta(r, &algo(r, v, &opts(2))), v, "failed for {}", name);
+        assert_eq!(
+            apply_delta(r, &algo(r, v, &opts(2))),
+            v,
+            "failed for {}",
+            name
+        );
     }
 }
 
-// TestIdentical
 #[test]
 fn test_identical() {
     let data: Vec<u8> = b"The quick brown fox jumps over the lazy dog."
@@ -98,24 +101,27 @@ fn test_identical() {
         let cmds = algo(&data, &data, &opts(2));
         assert_eq!(apply_delta(&data, &cmds), data, "failed for {}", name);
         assert!(
-            cmds.iter()
-                .all(|c| matches!(c, Command::Copy { .. })),
-            "{}: identical strings should produce no adds", name
+            cmds.iter().all(|c| matches!(c, Command::Copy { .. })),
+            "{}: identical strings should produce no adds",
+            name
         );
     }
 }
 
-// TestCompletelyDifferent
 #[test]
 fn test_completely_different() {
     let r: Vec<u8> = (0..=255u8).cycle().take(512).collect();
     let v: Vec<u8> = (0..=255u8).rev().cycle().take(512).collect();
     for (name, algo) in all_algos() {
-        assert_eq!(apply_delta(&r, &algo(&r, &v, &opts(2))), v, "failed for {}", name);
+        assert_eq!(
+            apply_delta(&r, &algo(&r, &v, &opts(2))),
+            v,
+            "failed for {}",
+            name
+        );
     }
 }
 
-// TestEmptyVersion
 #[test]
 fn test_empty_version() {
     for (name, algo) in all_algos() {
@@ -125,16 +131,19 @@ fn test_empty_version() {
     }
 }
 
-// TestEmptyReference
 #[test]
 fn test_empty_reference() {
     let v = b"hello world";
     for (name, algo) in all_algos() {
-        assert_eq!(apply_delta(b"", &algo(b"", v, &opts(2))), v, "failed for {}", name);
+        assert_eq!(
+            apply_delta(b"", &algo(b"", v, &opts(2))),
+            v,
+            "failed for {}",
+            name
+        );
     }
 }
 
-// TestBinaryRoundTrip
 #[test]
 fn test_binary_roundtrip() {
     let r: Vec<u8> = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -154,10 +163,10 @@ fn test_binary_roundtrip() {
     }
 }
 
-// TestBinaryEncoding — unified format encode/decode
+// The binary format.
 #[test]
 fn test_binary_encoding_roundtrip() {
-    // Build placed commands manually and verify encode→decode roundtrip
+    // Build placed commands manually and verify encode/decode roundtrip
     let placed = vec![
         PlacedCommand::Add {
             dst: 0,
@@ -214,7 +223,10 @@ fn test_binary_encoding_magic_small() {
 fn test_binary_encoding_wrong_magic_rejected() {
     let mut bad = encode_delta(&[], false, 0, &[0u8; 8], &[0u8; 8]).unwrap();
     bad[3] = 0x02; // downgrade to v2
-    assert!(matches!(decode_delta(&bad), Err(DeltaError::InvalidFormat(_))));
+    assert!(matches!(
+        decode_delta(&bad),
+        Err(DeltaError::InvalidFormat(_))
+    ));
 }
 
 #[test]
@@ -285,7 +297,6 @@ fn test_real_data_roundtrip() {
     }
 }
 
-// TestLargeCopy
 #[test]
 fn test_large_copy_roundtrip() {
     let placed = vec![PlacedCommand::Copy {
@@ -308,7 +319,6 @@ fn test_large_copy_roundtrip() {
     }
 }
 
-// TestLargeAdd
 #[test]
 fn test_large_add_roundtrip() {
     let big_data: Vec<u8> = (0..=255u8).cycle().take(256 * 4).collect();
@@ -330,7 +340,6 @@ fn test_large_add_roundtrip() {
     }
 }
 
-// TestBackwardExtension
 #[test]
 fn test_backward_extension() {
     let block: Vec<u8> = b"ABCDEFGHIJKLMNOP"
@@ -346,11 +355,15 @@ fn test_backward_extension() {
     v.extend_from_slice(&block);
     v.extend_from_slice(b"**");
     for (name, algo) in all_algos() {
-        assert_eq!(apply_delta(&r, &algo(&r, &v, &opts(4))), v, "failed for {}", name);
+        assert_eq!(
+            apply_delta(&r, &algo(&r, &v, &opts(4))),
+            v,
+            "failed for {}",
+            name
+        );
     }
 }
 
-// TestTransposition
 #[test]
 fn test_transposition() {
     let x: Vec<u8> = b"FIRST_BLOCK_DATA_"
@@ -370,11 +383,15 @@ fn test_transposition() {
     let mut v = y;
     v.extend_from_slice(&x);
     for (name, algo) in all_algos() {
-        assert_eq!(apply_delta(&r, &algo(&r, &v, &opts(4))), v, "failed for {}", name);
+        assert_eq!(
+            apply_delta(&r, &algo(&r, &v, &opts(4))),
+            v,
+            "failed for {}",
+            name
+        );
     }
 }
 
-// TestScatteredModifications
 #[test]
 fn test_scattered_modifications() {
     use rand::rngs::StdRng;
@@ -391,24 +408,19 @@ fn test_scattered_modifications() {
     }
 }
 
-// ── in-place basics ──────────────────────────────────────────────────────
+// In-place basics.
 
-// TestInPlacePaperExample
 #[test]
 fn test_inplace_paper_example() {
     let r = b"ABCDEFGHIJKLMNOP";
     let v = b"QWIJKLMNOBCDEFGHZDEFGHIJKL";
     for (_, algo) in all_algos() {
         for (_, pol) in all_policies() {
-            assert_eq!(
-                inplace_roundtrip(algo, r, v, pol, 2),
-                v,
-            );
+            assert_eq!(inplace_roundtrip(algo, r, v, pol, 2), v,);
         }
     }
 }
 
-// TestInPlaceBinaryRoundTrip
 #[test]
 fn test_inplace_binary_roundtrip() {
     let r: Vec<u8> = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -430,7 +442,6 @@ fn test_inplace_binary_roundtrip() {
     }
 }
 
-// TestInPlaceSimpleTransposition
 #[test]
 fn test_inplace_simple_transposition() {
     let x: Vec<u8> = b"FIRST_BLOCK_DATA_"
@@ -456,15 +467,9 @@ fn test_inplace_simple_transposition() {
     }
 }
 
-// TestInPlaceVersionLarger
 #[test]
 fn test_inplace_version_larger() {
-    let r: Vec<u8> = b"ABCDEFGH"
-        .iter()
-        .cycle()
-        .take(8 * 50)
-        .copied()
-        .collect();
+    let r: Vec<u8> = b"ABCDEFGH".iter().cycle().take(8 * 50).copied().collect();
     let mut v: Vec<u8> = b"XXABCDEFGH"
         .iter()
         .cycle()
@@ -485,7 +490,6 @@ fn test_inplace_version_larger() {
     }
 }
 
-// TestInPlaceVersionSmaller
 #[test]
 fn test_inplace_version_smaller() {
     let r: Vec<u8> = b"ABCDEFGHIJKLMNOP"
@@ -494,12 +498,7 @@ fn test_inplace_version_smaller() {
         .take(16 * 100)
         .copied()
         .collect();
-    let v: Vec<u8> = b"EFGHIJKL"
-        .iter()
-        .cycle()
-        .take(8 * 50)
-        .copied()
-        .collect();
+    let v: Vec<u8> = b"EFGHIJKL".iter().cycle().take(8 * 50).copied().collect();
     for (_, algo) in all_algos() {
         for (_, pol) in all_policies() {
             assert_eq!(inplace_roundtrip(algo, &r, &v, pol, 4), v);
@@ -507,7 +506,6 @@ fn test_inplace_version_smaller() {
     }
 }
 
-// TestInPlaceIdentical
 #[test]
 fn test_inplace_identical() {
     let data: Vec<u8> = b"The quick brown fox jumps over the lazy dog."
@@ -523,7 +521,6 @@ fn test_inplace_identical() {
     }
 }
 
-// TestInPlaceEmptyVersion
 #[test]
 fn test_inplace_empty_version() {
     for (_, algo) in all_algos() {
@@ -533,7 +530,6 @@ fn test_inplace_empty_version() {
     }
 }
 
-// TestInPlaceScattered
 #[test]
 fn test_inplace_scattered() {
     use rand::rngs::StdRng;
@@ -552,21 +548,10 @@ fn test_inplace_scattered() {
     }
 }
 
-// TestInPlaceFormatDetection
 #[test]
 fn test_standard_not_detected_as_inplace() {
-    let r: Vec<u8> = b"ABCDEFGH"
-        .iter()
-        .cycle()
-        .take(8 * 10)
-        .copied()
-        .collect();
-    let v: Vec<u8> = b"EFGHABCD"
-        .iter()
-        .cycle()
-        .take(8 * 10)
-        .copied()
-        .collect();
+    let r: Vec<u8> = b"ABCDEFGH".iter().cycle().take(8 * 10).copied().collect();
+    let v: Vec<u8> = b"EFGHABCD".iter().cycle().take(8 * 10).copied().collect();
     let cmds = diff_greedy(&r, &v, &opts(2));
     let placed = place_commands(cmds);
     let delta = encode_delta(&placed, false, v.len(), &crc64_xz(&r), &crc64_xz(&v)).unwrap();
@@ -575,25 +560,15 @@ fn test_standard_not_detected_as_inplace() {
 
 #[test]
 fn test_inplace_detected() {
-    let r: Vec<u8> = b"ABCDEFGH"
-        .iter()
-        .cycle()
-        .take(8 * 10)
-        .copied()
-        .collect();
-    let v: Vec<u8> = b"EFGHABCD"
-        .iter()
-        .cycle()
-        .take(8 * 10)
-        .copied()
-        .collect();
+    let r: Vec<u8> = b"ABCDEFGH".iter().cycle().take(8 * 10).copied().collect();
+    let v: Vec<u8> = b"EFGHABCD".iter().cycle().take(8 * 10).copied().collect();
     let cmds = diff_greedy(&r, &v, &opts(2));
     let (ip, _) = make_inplace(&r, &cmds, CyclePolicy::Localmin);
     let delta = encode_delta(&ip, true, v.len(), &crc64_xz(&r), &crc64_xz(&v)).unwrap();
     assert!(is_inplace_delta(&delta));
 }
 
-// ── in-place: variable-length transpositions ─────────────────────────────
+// In-place: variable-length transpositions.
 
 fn make_blocks() -> Vec<Vec<u8>> {
     let sizes = [200, 500, 1234, 3000, 800, 4999, 1500, 2750];
@@ -612,7 +587,7 @@ fn blocks_ref(blocks: &[Vec<u8>]) -> Vec<u8> {
     blocks.iter().flat_map(|b| b.iter().copied()).collect()
 }
 
-// TestInPlaceVarlenPermutation — random permutation of all 8 blocks
+// Random permutation of all 8 blocks.
 #[test]
 fn test_inplace_varlen_permutation() {
     let blocks = make_blocks();
@@ -636,12 +611,16 @@ fn test_inplace_varlen_permutation() {
     }
 }
 
-// TestInPlaceVarlenReverse — all 8 blocks in reverse order
+// All 8 blocks in reverse order.
 #[test]
 fn test_inplace_varlen_reverse() {
     let blocks = make_blocks();
     let r = blocks_ref(&blocks);
-    let v: Vec<u8> = blocks.iter().rev().flat_map(|b| b.iter().copied()).collect();
+    let v: Vec<u8> = blocks
+        .iter()
+        .rev()
+        .flat_map(|b| b.iter().copied())
+        .collect();
 
     for (_, algo) in all_algos() {
         for (_, pol) in all_policies() {
@@ -650,7 +629,7 @@ fn test_inplace_varlen_reverse() {
     }
 }
 
-// TestInPlaceVarlenJunk — permuted blocks interleaved with random junk
+// Permuted blocks interleaved with random junk.
 #[test]
 fn test_inplace_varlen_junk() {
     let blocks = make_blocks();
@@ -678,7 +657,7 @@ fn test_inplace_varlen_junk() {
     }
 }
 
-// TestInPlaceVarlenDropDup — drop some blocks, duplicate others
+// Drop some blocks, duplicate others.
 #[test]
 fn test_inplace_varlen_drop_dup() {
     let blocks = make_blocks();
@@ -697,7 +676,7 @@ fn test_inplace_varlen_drop_dup() {
     }
 }
 
-// TestInPlaceVarlenDoubleSized — version is 2x reference
+// Version is 2x reference.
 #[test]
 fn test_inplace_varlen_double_sized() {
     let blocks = make_blocks();
@@ -711,14 +690,8 @@ fn test_inplace_varlen_double_sized() {
     p1.shuffle(&mut rng);
     let mut p2: Vec<usize> = (0..8).collect();
     p2.shuffle(&mut rng);
-    let mut v: Vec<u8> = p1
-        .iter()
-        .flat_map(|&i| blocks[i].iter().copied())
-        .collect();
-    let v2: Vec<u8> = p2
-        .iter()
-        .flat_map(|&i| blocks[i].iter().copied())
-        .collect();
+    let mut v: Vec<u8> = p1.iter().flat_map(|&i| blocks[i].iter().copied()).collect();
+    let v2: Vec<u8> = p2.iter().flat_map(|&i| blocks[i].iter().copied()).collect();
     v.extend_from_slice(&v2);
 
     for (_, algo) in all_algos() {
@@ -728,7 +701,7 @@ fn test_inplace_varlen_double_sized() {
     }
 }
 
-// TestInPlaceVarlenSubset — version is much smaller, just two blocks
+// Version is much smaller, just two blocks.
 #[test]
 fn test_inplace_varlen_subset() {
     let blocks = make_blocks();
@@ -744,7 +717,7 @@ fn test_inplace_varlen_subset() {
     }
 }
 
-// TestInPlaceVarlenHalfBlockScramble — split each block in half, shuffle all 16 halves
+// Split each block in half, shuffle all 16 halves.
 #[test]
 fn test_inplace_varlen_half_block_scramble() {
     let blocks = make_blocks();
@@ -783,7 +756,7 @@ fn test_inplace_varlen_half_block_scramble() {
     }
 }
 
-// TestInPlaceVarlenRandomTrials — 20 random trials
+// 20 random trials.
 #[test]
 fn test_inplace_varlen_random_trials() {
     let blocks = make_blocks();
@@ -822,12 +795,15 @@ fn test_inplace_varlen_random_trials() {
     }
 }
 
-// TestLocalminPicksSmallest
 #[test]
 fn test_localmin_picks_smallest() {
     let blocks = make_blocks();
     let r = blocks_ref(&blocks);
-    let v: Vec<u8> = blocks.iter().rev().flat_map(|b| b.iter().copied()).collect();
+    let v: Vec<u8> = blocks
+        .iter()
+        .rev()
+        .flat_map(|b| b.iter().copied())
+        .collect();
 
     let cmds = diff_greedy(&r, &v, &opts(4));
     let (ip_const, _) = make_inplace(&r, &cmds, CyclePolicy::Constant);
@@ -855,7 +831,7 @@ fn test_localmin_picks_smallest() {
     );
 }
 
-// ── checkpointing: correcting with various table sizes ──────────────────
+// Checkpointing: correcting with various table sizes.
 
 #[test]
 fn test_correcting_checkpointing_tiny_table() {
@@ -864,7 +840,15 @@ fn test_correcting_checkpointing_tiny_table() {
     let mut v = r[..160].to_vec();
     v.extend_from_slice(b"XXXXYYYY");
     v.extend_from_slice(&r[160..]);
-    let cmds = diff_correcting(&r, &v, &DiffOptions { p: 16, q: 7, ..DiffOptions::default() });
+    let cmds = diff_correcting(
+        &r,
+        &v,
+        &DiffOptions {
+            p: 16,
+            q: 7,
+            ..DiffOptions::default()
+        },
+    );
     let recovered = apply_delta(&r, &cmds);
     assert_eq!(recovered, v);
 }
@@ -877,7 +861,15 @@ fn test_correcting_checkpointing_various_sizes() {
     v.extend_from_slice(&[0xFFu8; 50]);
     v.extend_from_slice(&r[500..]);
     for q in [7, 31, 101, 1009, TABLE_SIZE] {
-        let cmds = diff_correcting(&r, &v, &DiffOptions { p: 16, q, ..DiffOptions::default() });
+        let cmds = diff_correcting(
+            &r,
+            &v,
+            &DiffOptions {
+                p: 16,
+                q,
+                ..DiffOptions::default()
+            },
+        );
         let recovered = apply_delta(&r, &cmds);
         assert_eq!(recovered, v, "failed with q={}", q);
     }
@@ -892,14 +884,30 @@ fn test_next_prime_is_prime() {
     assert_eq!(next_prime(1048573), 1048573);
 }
 
-// ── inplace subcommand path ───────────────────────────────────────────────
-//
+// With no lookback buffer every command is final at once, and a match that
+// extends backward can reclaim nothing.
+#[test]
+fn test_correcting_without_lookback() {
+    let r: Vec<u8> = (0..2000u32).map(|i| (i * 7 + i / 13) as u8).collect();
+    let mut v = r[500..1500].to_vec();
+    v.extend_from_slice(&r[..700]);
+    v[300] ^= 0xFF;
+    for buf_cap in [0, 1, 2] {
+        let opts = DiffOptions {
+            p: 4,
+            buf_cap,
+            ..DiffOptions::default()
+        };
+        assert_eq!(apply_delta(&r, &diff_correcting(&r, &v, &opts)), v);
+    }
+}
+
 // The `delta inplace` subcommand converts a standard delta to inplace format
-// without re-encoding from source: decode → unplace → make_inplace → encode.
+// without re-encoding from source: decode, unplace, make_inplace, encode.
 // These tests verify that path is equivalent to the direct encode --inplace path.
 
 /// Simulate the `delta inplace` subcommand: encode a standard delta, then
-/// convert it via decode → unplace_commands → make_inplace → encode(inplace).
+/// convert it via decode, unplace_commands, make_inplace, encode(inplace).
 fn via_inplace_subcommand(
     algo_fn: DiffFn,
     r: &[u8],
@@ -907,13 +915,11 @@ fn via_inplace_subcommand(
     policy: CyclePolicy,
     p: usize,
 ) -> Vec<u8> {
-    // Step 1: encode a standard delta (compute CRCs in same pass as data)
     let cmds = algo_fn(r, v, &opts(p));
     let placed = place_commands(cmds);
     let sc = crc64_xz(r);
     let dc = crc64_xz(v);
     let standard = encode_delta(&placed, false, v.len(), &sc, &dc).unwrap();
-    // Step 2: decode it back, unplace, convert to inplace; preserve CRCs
     let (placed2, is_ip, version_size, src_crc, dst_crc) = decode_delta(&standard).unwrap();
     assert!(!is_ip, "standard delta should not be flagged as inplace");
     let cmds2 = unplace_commands(placed2);
@@ -923,7 +929,7 @@ fn via_inplace_subcommand(
 
 #[test]
 fn test_inplace_subcommand_roundtrip() {
-    // encode standard → inplace subcommand → decode → apply produces original V
+    // Encode standard, convert, decode and apply: the result is V.
     let cases: &[(&[u8], &[u8])] = &[
         (b"ABCDEF", b"FEDCBA"),
         (b"AAABBBCCC", b"CCCBBBAAA"),
@@ -940,8 +946,11 @@ fn test_inplace_subcommand_roundtrip() {
                 assert_eq!(sc, crc64_xz(r));
                 assert_eq!(dc, crc64_xz(v));
                 let recovered = apply_delta_inplace(r, &cmds, v.len());
-                assert_eq!(recovered, *v,
-                    "subcommand roundtrip failed for r={:?} v={:?}", r, v);
+                assert_eq!(
+                    recovered, *v,
+                    "subcommand roundtrip failed for r={:?} v={:?}",
+                    r, v
+                );
             }
         }
     }
@@ -973,7 +982,7 @@ fn test_inplace_subcommand_idempotent() {
 
 #[test]
 fn test_inplace_subcommand_equiv_direct() {
-    // The subcommand path (encode standard → convert) and the direct path
+    // The subcommand path (encode standard, then convert) and the direct path
     // (encode --inplace directly) must produce byte-identical output, since
     // both call make_inplace with the same reference and commands.
     let cases: &[(&[u8], &[u8])] = &[
@@ -995,14 +1004,17 @@ fn test_inplace_subcommand_equiv_direct() {
                 // Subcommand path
                 let subcommand_bytes = via_inplace_subcommand(algo_fn, r, v, pol, 2);
 
-                assert_eq!(direct_bytes, subcommand_bytes,
-                    "direct vs subcommand path differ for r={:?} v={:?}", r, v);
+                assert_eq!(
+                    direct_bytes, subcommand_bytes,
+                    "direct vs subcommand path differ for r={:?} v={:?}",
+                    r, v
+                );
             }
         }
     }
 }
 
-// ── crc64_xz tests ───────────────────────────────────────────────────────
+// crc64_xz.
 
 #[test]
 fn test_crc64_output_length() {
@@ -1033,15 +1045,21 @@ fn test_crc64_check_value() {
     assert_eq!(crc64_xz(b"123456789"), expected);
 }
 
-// ── edge cases and boundaries ─────────────────────────────────────────────
+// Edge cases and boundaries.
 
 #[test]
 fn test_single_byte() {
     for (_, algo) in all_algos() {
-        assert_eq!(apply_delta(b"\x41", &algo(b"\x41", b"\x41", &opts(1))), b"\x41");
-        assert_eq!(apply_delta(b"\x41", &algo(b"\x41", b"\x42", &opts(1))), b"\x42");
-        assert_eq!(apply_delta(b"\x41", &algo(b"\x41", b"",     &opts(1))), b"");
-        assert_eq!(apply_delta(b"",     &algo(b"",     b"\x41", &opts(1))), b"\x41");
+        assert_eq!(
+            apply_delta(b"\x41", &algo(b"\x41", b"\x41", &opts(1))),
+            b"\x41"
+        );
+        assert_eq!(
+            apply_delta(b"\x41", &algo(b"\x41", b"\x42", &opts(1))),
+            b"\x42"
+        );
+        assert_eq!(apply_delta(b"\x41", &algo(b"\x41", b"", &opts(1))), b"");
+        assert_eq!(apply_delta(b"", &algo(b"", b"\x41", &opts(1))), b"\x41");
     }
 }
 
@@ -1049,19 +1067,22 @@ fn test_single_byte() {
 fn test_boundary_byte_mutations() {
     let n = 64usize;
     let r: Vec<u8> = (0..n).map(|i| (i & 0xFF) as u8).collect();
-    let mut v_first = r.clone(); v_first[0] ^= 0xFF;
-    let mut v_last  = r.clone(); v_last[n - 1] ^= 0xFF;
-    let mut v_app   = r.clone(); v_app.push(0x5A);
+    let mut v_first = r.clone();
+    v_first[0] ^= 0xFF;
+    let mut v_last = r.clone();
+    v_last[n - 1] ^= 0xFF;
+    let mut v_app = r.clone();
+    v_app.push(0x5A);
     let v_drop: Vec<u8> = r[..n - 1].to_vec();
     for (_, algo) in all_algos() {
         assert_eq!(roundtrip(algo, &r, &v_first, 4), v_first);
-        assert_eq!(roundtrip(algo, &r, &v_last,  4), v_last);
-        assert_eq!(roundtrip(algo, &r, &v_app,   4), v_app);
-        assert_eq!(roundtrip(algo, &r, &v_drop,  4), v_drop);
+        assert_eq!(roundtrip(algo, &r, &v_last, 4), v_last);
+        assert_eq!(roundtrip(algo, &r, &v_app, 4), v_app);
+        assert_eq!(roundtrip(algo, &r, &v_drop, 4), v_drop);
     }
 }
 
-// rLen in [0, p): no seeds extractable, exercises all-add path.
+// |R| in [0, p): no seeds extractable, exercises all-add path.
 #[test]
 fn test_ref_shorter_than_seed() {
     let p = 8usize;
@@ -1069,45 +1090,82 @@ fn test_ref_shorter_than_seed() {
     for r_len in 0..p {
         let r: Vec<u8> = (1..=r_len).map(|i| (i & 0xFF) as u8).collect();
         for (_, algo) in all_algos() {
-            assert_eq!(apply_delta(&r, &algo(&r, &v, &opts(p))), v, "r_len={}", r_len);
+            assert_eq!(
+                apply_delta(&r, &algo(&r, &v, &opts(p))),
+                v,
+                "r_len={}",
+                r_len
+            );
         }
     }
 }
 
-// Sizes at 0, 1, p±1, and byte-width transitions; catches loop-bound off-by-ones.
+// Sizes at 0, 1, p-1, p+1, and byte-width transitions; catches loop-bound off-by-ones.
 #[test]
 fn test_size_sweep() {
     let p = 4usize;
-    let sizes: &[usize] = &[0, 1, 2, 3, 4, 5, 7, 8, 9,
-                             63, 64, 65, 127, 128, 129, 255, 256, 257, 511, 512, 513];
+    let sizes: &[usize] = &[
+        0, 1, 2, 3, 4, 5, 7, 8, 9, 63, 64, 65, 127, 128, 129, 255, 256, 257, 511, 512, 513,
+    ];
     let big_ref: Vec<u8> = (0..600u16).map(|i| ((i * 3) & 0xFF) as u8).collect();
 
     for &v_len in sizes {
         let v_prefix: Vec<u8> = big_ref[..v_len].to_vec();
         let v_new: Vec<u8> = (0..v_len).map(|i| ((i * 7 + 1) & 0xFF) as u8).collect();
         for (_, algo) in all_algos() {
-            assert_eq!(roundtrip(algo, &big_ref, &v_prefix, p), v_prefix, "vLen={} prefix", v_len);
-            assert_eq!(roundtrip(algo, &big_ref, &v_new,    p), v_new,    "vLen={} new",    v_len);
+            assert_eq!(
+                roundtrip(algo, &big_ref, &v_prefix, p),
+                v_prefix,
+                "vLen={} prefix",
+                v_len
+            );
+            assert_eq!(
+                roundtrip(algo, &big_ref, &v_new, p),
+                v_new,
+                "vLen={} new",
+                v_len
+            );
         }
     }
     let fixed_ver: Vec<u8> = big_ref[..64].to_vec();
     for &r_len in sizes {
         let r: Vec<u8> = big_ref[..r_len].to_vec();
         for (_, algo) in all_algos() {
-            assert_eq!(roundtrip(algo, &r, &fixed_ver, p), fixed_ver, "rLen={}", r_len);
+            assert_eq!(
+                roundtrip(algo, &r, &fixed_ver, p),
+                fixed_ver,
+                "rLen={}",
+                r_len
+            );
         }
     }
 }
 
-// version_size at byte-sign-extension boundaries (128, 256, 32768, 65536, …).
+// version_size at byte-sign-extension boundaries (128, 256, 32768, 65536, ...).
 #[test]
 fn test_encoding_version_size_boundaries() {
     let zh = [0u8; 8];
-    for sz in [0, 1, 127, 128, 255, 256, 257,
-               32767, 32768, 32769,
-               65535, 65536, 65537,
-               8388607, 8388608, 8388609,
-               16777215, 16777216, 16777217usize] {
+    for sz in [
+        0,
+        1,
+        127,
+        128,
+        255,
+        256,
+        257,
+        32767,
+        32768,
+        32769,
+        65535,
+        65536,
+        65537,
+        8388607,
+        8388608,
+        8388609,
+        16777215,
+        16777216,
+        16777217usize,
+    ] {
         let encoded = encode_delta(&[], false, sz, &zh, &zh).unwrap();
         let (decoded, _, vs, _, _) = decode_delta(&encoded).unwrap();
         assert_eq!(vs, sz, "version_size={}", sz);
@@ -1123,19 +1181,35 @@ fn test_encoding_command_field_boundaries() {
 
     // src
     for src in offsets {
-        let placed = vec![PlacedCommand::Copy { src, dst: 0, length: 1 }];
-        let (dec, _, _, _, _) = decode_delta(&encode_delta(&placed, false, 1, &zh, &zh).unwrap()).unwrap();
+        let placed = vec![PlacedCommand::Copy {
+            src,
+            dst: 0,
+            length: 1,
+        }];
+        let (dec, _, _, _, _) =
+            decode_delta(&encode_delta(&placed, false, 1, &zh, &zh).unwrap()).unwrap();
         match &dec[0] {
-            PlacedCommand::Copy { src: s, dst: d, length: l } => {
-                assert_eq!(*s, src); assert_eq!(*d, 0); assert_eq!(*l, 1);
+            PlacedCommand::Copy {
+                src: s,
+                dst: d,
+                length: l,
+            } => {
+                assert_eq!(*s, src);
+                assert_eq!(*d, 0);
+                assert_eq!(*l, 1);
             }
             _ => panic!("expected Copy"),
         }
     }
     // dst
     for dst in offsets {
-        let placed = vec![PlacedCommand::Copy { src: 0, dst, length: 1 }];
-        let (dec, _, _, _, _) = decode_delta(&encode_delta(&placed, false, dst + 1, &zh, &zh).unwrap()).unwrap();
+        let placed = vec![PlacedCommand::Copy {
+            src: 0,
+            dst,
+            length: 1,
+        }];
+        let (dec, _, _, _, _) =
+            decode_delta(&encode_delta(&placed, false, dst + 1, &zh, &zh).unwrap()).unwrap();
         match &dec[0] {
             PlacedCommand::Copy { dst: d, .. } => assert_eq!(*d, dst),
             _ => panic!("expected Copy"),
@@ -1143,8 +1217,13 @@ fn test_encoding_command_field_boundaries() {
     }
     // length
     for len in [1usize, 127, 128, 255, 256, 257, 65535, 65536] {
-        let placed = vec![PlacedCommand::Copy { src: 0, dst: 0, length: len }];
-        let (dec, _, _, _, _) = decode_delta(&encode_delta(&placed, false, len, &zh, &zh).unwrap()).unwrap();
+        let placed = vec![PlacedCommand::Copy {
+            src: 0,
+            dst: 0,
+            length: len,
+        }];
+        let (dec, _, _, _, _) =
+            decode_delta(&encode_delta(&placed, false, len, &zh, &zh).unwrap()).unwrap();
         match &dec[0] {
             PlacedCommand::Copy { length: l, .. } => assert_eq!(*l, len),
             _ => panic!("expected Copy"),
@@ -1152,8 +1231,12 @@ fn test_encoding_command_field_boundaries() {
     }
     // add dst
     for dst in offsets {
-        let placed = vec![PlacedCommand::Add { dst, data: vec![0xFF] }];
-        let (dec, _, _, _, _) = decode_delta(&encode_delta(&placed, false, dst + 1, &zh, &zh).unwrap()).unwrap();
+        let placed = vec![PlacedCommand::Add {
+            dst,
+            data: vec![0xFF],
+        }];
+        let (dec, _, _, _, _) =
+            decode_delta(&encode_delta(&placed, false, dst + 1, &zh, &zh).unwrap()).unwrap();
         match &dec[0] {
             PlacedCommand::Add { dst: d, data } => {
                 assert_eq!(*d, dst);
@@ -1214,12 +1297,12 @@ fn test_inplace_version_same_size_tight() {
 #[test]
 fn test_inplace_version_one_byte_min() {
     let r: Vec<u8> = (0u8..64).collect();
-    let v_copy = vec![r[32]];    // byte in R → copy
-    let v_add  = vec![0xABu8];   // 0xAB = 171 > 63, not in R → add
+    let v_copy = vec![r[32]]; // in R, so a copy
+    let v_add = vec![0xABu8]; // 0xAB = 171 > 63, not in R, so an add
     for (_, algo) in all_algos() {
         for (_, pol) in all_policies() {
             assert_eq!(inplace_roundtrip(algo, &r, &v_copy, pol, 2), v_copy);
-            assert_eq!(inplace_roundtrip(algo, &r, &v_add,  pol, 2), v_add);
+            assert_eq!(inplace_roundtrip(algo, &r, &v_add, pol, 2), v_add);
         }
     }
 }
@@ -1236,9 +1319,18 @@ fn test_seed_length_boundaries() {
     }
     // p > |R| with varying v sizes
     for (_, algo) in all_algos() {
-        assert_eq!(apply_delta(r, &algo(r, b"QW",                                      &opts(r.len() + 1))), b"QW");
-        assert_eq!(apply_delta(r, &algo(r, b"QWIJKLMNOBCDEFGHZDEFGHIJKLMNOPQRSTUVWXYZ", &opts(r.len() + 1))),
-                   b"QWIJKLMNOBCDEFGHZDEFGHIJKLMNOPQRSTUVWXYZ");
+        assert_eq!(apply_delta(r, &algo(r, b"QW", &opts(r.len() + 1))), b"QW");
+        assert_eq!(
+            apply_delta(
+                r,
+                &algo(
+                    r,
+                    b"QWIJKLMNOBCDEFGHZDEFGHIJKLMNOPQRSTUVWXYZ",
+                    &opts(r.len() + 1)
+                )
+            ),
+            b"QWIJKLMNOBCDEFGHZDEFGHIJKLMNOPQRSTUVWXYZ"
+        );
     }
 }
 
@@ -1246,42 +1338,77 @@ fn test_seed_length_boundaries() {
 fn test_encode_delta_rejects_version_size_overflow() {
     let z = [0u8; 8];
     let result = encode_delta(&[], false, (u32::MAX as usize) + 1, &z, &z);
-    assert!(matches!(result, Err(DeltaError::InvalidFormat(_))), "expected Err, got {:?}", result);
+    assert!(
+        matches!(result, Err(DeltaError::InvalidFormat(_))),
+        "expected Err, got {:?}",
+        result
+    );
 }
 
 #[test]
 fn test_encode_delta_rejects_copy_src_overflow() {
     let z = [0u8; 8];
-    let cmd = PlacedCommand::Copy { src: (u32::MAX as usize) + 1, dst: 0, length: 1 };
+    let cmd = PlacedCommand::Copy {
+        src: (u32::MAX as usize) + 1,
+        dst: 0,
+        length: 1,
+    };
     let result = encode_delta(&[cmd], false, 1, &z, &z);
-    assert!(matches!(result, Err(DeltaError::InvalidFormat(_))), "expected Err, got {:?}", result);
+    assert!(
+        matches!(result, Err(DeltaError::InvalidFormat(_))),
+        "expected Err, got {:?}",
+        result
+    );
 }
 
 #[test]
 fn test_encode_delta_rejects_copy_dst_overflow() {
     let z = [0u8; 8];
-    let cmd = PlacedCommand::Copy { src: 0, dst: (u32::MAX as usize) + 1, length: 1 };
+    let cmd = PlacedCommand::Copy {
+        src: 0,
+        dst: (u32::MAX as usize) + 1,
+        length: 1,
+    };
     let result = encode_delta(&[cmd], false, 1, &z, &z);
-    assert!(matches!(result, Err(DeltaError::InvalidFormat(_))), "expected Err, got {:?}", result);
+    assert!(
+        matches!(result, Err(DeltaError::InvalidFormat(_))),
+        "expected Err, got {:?}",
+        result
+    );
 }
 
 #[test]
 fn test_encode_delta_rejects_copy_length_overflow() {
     let z = [0u8; 8];
-    let cmd = PlacedCommand::Copy { src: 0, dst: 0, length: (u32::MAX as usize) + 1 };
+    let cmd = PlacedCommand::Copy {
+        src: 0,
+        dst: 0,
+        length: (u32::MAX as usize) + 1,
+    };
     let result = encode_delta(&[cmd], false, 1, &z, &z);
-    assert!(matches!(result, Err(DeltaError::InvalidFormat(_))), "expected Err, got {:?}", result);
+    assert!(
+        matches!(result, Err(DeltaError::InvalidFormat(_))),
+        "expected Err, got {:?}",
+        result
+    );
 }
 
 #[test]
 fn test_encode_delta_rejects_add_dst_overflow() {
     let z = [0u8; 8];
-    let cmd = PlacedCommand::Add { dst: (u32::MAX as usize) + 1, data: vec![0u8] };
+    let cmd = PlacedCommand::Add {
+        dst: (u32::MAX as usize) + 1,
+        data: vec![0u8],
+    };
     let result = encode_delta(&[cmd], false, 1, &z, &z);
-    assert!(matches!(result, Err(DeltaError::InvalidFormat(_))), "expected Err, got {:?}", result);
+    assert!(
+        matches!(result, Err(DeltaError::InvalidFormat(_))),
+        "expected Err, got {:?}",
+        result
+    );
 }
 
-// ── DLT\x04 tests ────────────────────────────────────────────────────────────
+// DLT\x04 tests.
 
 // Header
 
@@ -1299,8 +1426,7 @@ fn test_large_header_version_size_u64() {
     let vs: usize = (u32::MAX as usize) + 1; // 2^32; doesn't fit in u32
     let bytes = encode_delta_large(&[], false, vs, &z, &z, false);
     let decoded = u64::from_be_bytes([
-        bytes[5], bytes[6], bytes[7], bytes[8],
-        bytes[9], bytes[10], bytes[11], bytes[12],
+        bytes[5], bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12],
     ]) as usize;
     assert_eq!(decoded, vs);
 }
@@ -1318,9 +1444,9 @@ fn test_large_header_crcs_preserved() {
 fn test_large_inplace_flag() {
     let z = [0u8; 8];
     let standard = encode_delta_large(&[], false, 0, &z, &z, false);
-    let inplace  = encode_delta_large(&[], true,  0, &z, &z, false);
+    let inplace = encode_delta_large(&[], true, 0, &z, &z, false);
     assert_eq!(standard[4], 0x00);
-    assert_eq!(inplace[4],  0x01);
+    assert_eq!(inplace[4], 0x01);
 }
 
 #[test]
@@ -1336,13 +1462,17 @@ fn test_large_decode_roundtrip_header() {
     assert_eq!(dc, dst_crc);
 }
 
-// COPY (small — fits in u32)
+// COPY with fields that fit in u32.
 
 #[test]
 fn test_large_copy_small_roundtrip() {
     let z = [0u8; 8];
-    let cmd = PlacedCommand::Copy { src: 0, dst: 0, length: 5 };
-    let bytes = encode_delta_large(&[cmd.clone()], false, 5, &z, &z, false);
+    let cmd = PlacedCommand::Copy {
+        src: 0,
+        dst: 0,
+        length: 5,
+    };
+    let bytes = encode_delta_large(std::slice::from_ref(&cmd), false, 5, &z, &z, false);
     let (cmds, _, _, _, _) = decode_delta(&bytes).unwrap();
     assert_eq!(cmds, vec![cmd]);
 }
@@ -1351,22 +1481,29 @@ fn test_large_copy_small_roundtrip() {
 fn test_large_copy_u32_max_boundary() {
     let z = [0u8; 8];
     let max = u32::MAX as usize;
-    let cmd = PlacedCommand::Copy { src: max, dst: 0, length: 0 };
-    // Zero-length copy — just check it encodes/decodes without overflow error.
-    let bytes = encode_delta_large(&[cmd.clone()], false, 0, &z, &z, false);
+    let cmd = PlacedCommand::Copy {
+        src: max,
+        dst: 0,
+        length: 0,
+    };
+    // A zero-length copy must encode and decode without an overflow error.
+    let bytes = encode_delta_large(std::slice::from_ref(&cmd), false, 0, &z, &z, false);
     // decode validates dst+length <= version_size; length=0 so dst=0 is fine.
     let (cmds, _, _, _, _) = decode_delta(&bytes).unwrap();
     assert_eq!(cmds, vec![cmd]);
 }
 
-// ADD (small — fits in u32)
+// ADD with fields that fit in u32.
 
 #[test]
 fn test_large_add_small_roundtrip() {
     let z = [0u8; 8];
     let data = b"hello".to_vec();
-    let cmd = PlacedCommand::Add { dst: 0, data: data.clone() };
-    let bytes = encode_delta_large(&[cmd.clone()], false, data.len(), &z, &z, false);
+    let cmd = PlacedCommand::Add {
+        dst: 0,
+        data: data.clone(),
+    };
+    let bytes = encode_delta_large(std::slice::from_ref(&cmd), false, data.len(), &z, &z, false);
     let (cmds, _, _, _, _) = decode_delta(&bytes).unwrap();
     assert_eq!(cmds, vec![cmd]);
 }
@@ -1376,7 +1513,10 @@ fn test_large_add_payload_intact() {
     let z = [0u8; 8];
     let payload: Vec<u8> = (0u8..=255).collect();
     let len = payload.len();
-    let cmd = PlacedCommand::Add { dst: 0, data: payload.clone() };
+    let cmd = PlacedCommand::Add {
+        dst: 0,
+        data: payload.clone(),
+    };
     let bytes = encode_delta_large(&[cmd], false, len, &z, &z, false);
     let (cmds, _, _, _, _) = decode_delta(&bytes).unwrap();
     if let PlacedCommand::Add { data, .. } = &cmds[0] {
@@ -1391,8 +1531,12 @@ fn test_large_add_payload_intact() {
 #[test]
 fn test_large_move_roundtrip() {
     let z = [0u8; 8];
-    let cmd = PlacedCommand::Move { src: 0, dst: 5, length: 5 };
-    let bytes = encode_delta_large(&[cmd.clone()], false, 10, &z, &z, false);
+    let cmd = PlacedCommand::Move {
+        src: 0,
+        dst: 5,
+        length: 5,
+    };
+    let bytes = encode_delta_large(std::slice::from_ref(&cmd), false, 10, &z, &z, false);
     let (cmds, _, _, _, _) = decode_delta(&bytes).unwrap();
     assert_eq!(cmds, vec![cmd]);
 }
@@ -1400,7 +1544,11 @@ fn test_large_move_roundtrip() {
 #[test]
 fn test_large_move_rejected_on_small() {
     let z = [0u8; 8];
-    let cmd = PlacedCommand::Move { src: 0, dst: 5, length: 5 };
+    let cmd = PlacedCommand::Move {
+        src: 0,
+        dst: 5,
+        length: 5,
+    };
     let result = encode_delta(&[cmd], false, 10, &z, &z);
     assert!(matches!(result, Err(DeltaError::InvalidFormat(_))));
 }
@@ -1415,7 +1563,11 @@ fn test_small_rejects_large_command_bytes_with_diagnostic() {
     bad.push(0); // END
     match decode_delta(&bad) {
         Err(DeltaError::InvalidFormat(msg)) => {
-            assert!(msg.contains("requires DLT"), "expected DLT\\x04 hint, got: {}", msg);
+            assert!(
+                msg.contains("requires DLT"),
+                "expected DLT\\x04 hint, got: {}",
+                msg
+            );
         }
         other => panic!("expected InvalidFormat, got {:?}", other),
     }
@@ -1423,11 +1575,18 @@ fn test_small_rejects_large_command_bytes_with_diagnostic() {
 
 #[test]
 fn test_large_move_apply_standard() {
-    // Encode: ADD "hello" at dst=0, MOVE src=0 dst=5 len=5 → "hellohello"
+    // Encode: ADD "hello" at dst=0, MOVE src=0 dst=5 len=5 gives "hellohello"
     let z = [0u8; 8];
     let cmds = vec![
-        PlacedCommand::Add  { dst: 0, data: b"hello".to_vec() },
-        PlacedCommand::Move { src: 0, dst: 5, length: 5 },
+        PlacedCommand::Add {
+            dst: 0,
+            data: b"hello".to_vec(),
+        },
+        PlacedCommand::Move {
+            src: 0,
+            dst: 5,
+            length: 5,
+        },
     ];
     let bytes = encode_delta_large(&cmds, false, 10, &z, &z, false);
     let (decoded, _, vs, _, _) = decode_delta(&bytes).unwrap();
@@ -1438,10 +1597,17 @@ fn test_large_move_apply_standard() {
 
 #[test]
 fn test_large_move_apply_inplace() {
-    // Encode: ADD "hello" at dst=0, MOVE src=0 dst=5 len=5 → "hellohello"
+    // Encode: ADD "hello" at dst=0, MOVE src=0 dst=5 len=5 gives "hellohello"
     let cmds = vec![
-        PlacedCommand::Add  { dst: 0, data: b"hello".to_vec() },
-        PlacedCommand::Move { src: 0, dst: 5, length: 5 },
+        PlacedCommand::Add {
+            dst: 0,
+            data: b"hello".to_vec(),
+        },
+        PlacedCommand::Move {
+            src: 0,
+            dst: 5,
+            length: 5,
+        },
     ];
     let result = delta::apply_delta_inplace(&[], &cmds, 10);
     assert_eq!(&result, b"hellohello");
@@ -1449,27 +1615,39 @@ fn test_large_move_apply_inplace() {
 
 #[test]
 fn test_large_validate_move_src_past_dst_rejected() {
-    let cmd = PlacedCommand::Move { src: 5, dst: 3, length: 3 }; // src+len=8 > dst=3
+    let cmd = PlacedCommand::Move {
+        src: 5,
+        dst: 3,
+        length: 3,
+    }; // src+len=8 > dst=3
     let result = validate_placed_commands(&[cmd], 100, 100, false);
     assert!(matches!(result, Err(DeltaError::InvalidFormat(_))));
 }
 
 #[test]
 fn test_large_validate_move_out_of_range() {
-    let cmd = PlacedCommand::Move { src: 0, dst: 98, length: 5 }; // dst+len=103 > version_size=100
+    let cmd = PlacedCommand::Move {
+        src: 0,
+        dst: 98,
+        length: 5,
+    }; // dst+len=103 > version_size=100
     let result = validate_placed_commands(&[cmd], 100, 100, false);
     assert!(matches!(result, Err(DeltaError::InvalidFormat(_))));
 }
 
-// BIGCOPY / BIGADD — roundtrip using synthetic large offsets
+// BIGCOPY and BIGADD with offsets above 2^32.
 
 #[test]
 fn test_large_bigcopy_roundtrip() {
     let z = [0u8; 8];
-    let big = (u32::MAX as usize) + 1; // 2^32 — forces BIGCOPY
-    // Zero-length BIGCOPY: src at 2^32, dst=0, length=0 — no bounds violation.
-    let cmd = PlacedCommand::Copy { src: big, dst: 0, length: 0 };
-    let bytes = encode_delta_large(&[cmd.clone()], false, 0, &z, &z, false);
+    // 2^32 forces BIGCOPY.  With length 0 the copy stays within any version.
+    let big = (u32::MAX as usize) + 1;
+    let cmd = PlacedCommand::Copy {
+        src: big,
+        dst: 0,
+        length: 0,
+    };
+    let bytes = encode_delta_large(std::slice::from_ref(&cmd), false, 0, &z, &z, false);
     assert_eq!(bytes[DELTA_HEADER_SIZE_LARGE], 3); // DELTA_CMD_BIGCOPY = 3
     let (cmds, _, _, _, _) = decode_delta(&bytes).unwrap();
     assert_eq!(cmds, vec![cmd]);
@@ -1484,10 +1662,23 @@ fn test_large_bigadd_encoder_path() {
     let z = [0u8; 8];
     let big_dst = (u32::MAX as usize) + 1;
     let data = b"hello".to_vec();
-    let cmd = PlacedCommand::Add { dst: big_dst, data: data.clone() };
+    let cmd = PlacedCommand::Add {
+        dst: big_dst,
+        data: data.clone(),
+    };
     let version_size = big_dst + data.len();
-    let bytes = encode_delta_large(&[cmd.clone()], false, version_size, &z, &z, false);
-    assert_eq!(bytes[DELTA_HEADER_SIZE_LARGE], 4, "expected DELTA_CMD_BIGADD=4");
+    let bytes = encode_delta_large(
+        std::slice::from_ref(&cmd),
+        false,
+        version_size,
+        &z,
+        &z,
+        false,
+    );
+    assert_eq!(
+        bytes[DELTA_HEADER_SIZE_LARGE], 4,
+        "expected DELTA_CMD_BIGADD=4"
+    );
     let (cmds, _, _, _, _) = decode_delta(&bytes).unwrap();
     assert_eq!(cmds, vec![cmd]);
 }
@@ -1495,10 +1686,15 @@ fn test_large_bigadd_encoder_path() {
 #[test]
 fn test_large_bigmove_roundtrip() {
     let z = [0u8; 8];
-    let big = (u32::MAX as usize) + 1; // forces BIGMOVE
-    // src=0, dst=2^32, length=0 — no bounds violation with version_size=big.
-    let cmd = PlacedCommand::Move { src: 0, dst: big, length: 0 };
-    let bytes = encode_delta_large(&[cmd.clone()], false, big, &z, &z, false);
+    // A dst of 2^32 forces BIGMOVE.  With length 0 the move stays within
+    // a version of that size.
+    let big = (u32::MAX as usize) + 1;
+    let cmd = PlacedCommand::Move {
+        src: 0,
+        dst: big,
+        length: 0,
+    };
+    let bytes = encode_delta_large(std::slice::from_ref(&cmd), false, big, &z, &z, false);
     assert_eq!(bytes[DELTA_HEADER_SIZE_LARGE], 6); // DELTA_CMD_BIGMOVE = 6
     let (cmds, _, _, _, _) = decode_delta(&bytes).unwrap();
     assert_eq!(cmds, vec![cmd]);
@@ -1510,9 +1706,9 @@ fn test_large_bigmove_roundtrip() {
 fn test_large_is_inplace_detected() {
     let z = [0u8; 8];
     let standard = encode_delta_large(&[], false, 0, &z, &z, false);
-    let inplace  = encode_delta_large(&[], true,  0, &z, &z, false);
+    let inplace = encode_delta_large(&[], true, 0, &z, &z, false);
     assert!(!is_inplace_delta(&standard));
-    assert!( is_inplace_delta(&inplace));
+    assert!(is_inplace_delta(&inplace));
 }
 
 // Algorithm roundtrip through V4 encoding
@@ -1537,7 +1733,14 @@ fn test_large_algo_roundtrip_onepass() {
     let v = b"QWIJKLMNOBCDEFGHZDEFGHIJKL";
     let z_r = crc64_xz(r);
     let z_v = crc64_xz(v);
-    let placed = place_commands(diff_onepass(r, v, &DiffOptions { p: 2, ..DiffOptions::default() }));
+    let placed = place_commands(diff_onepass(
+        r,
+        v,
+        &DiffOptions {
+            p: 2,
+            ..DiffOptions::default()
+        },
+    ));
     let bytes = encode_delta_large(&placed, false, v.len(), &z_r, &z_v, false);
     let (decoded, _, vs, sc, dc) = decode_delta(&bytes).unwrap();
     assert_eq!(sc, z_r);
@@ -1561,4 +1764,3 @@ fn test_large_algo_roundtrip_correcting() {
     apply_placed_to(&r, &decoded, &mut out);
     assert_eq!(out, v);
 }
-
