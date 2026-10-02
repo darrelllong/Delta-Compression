@@ -1,41 +1,60 @@
 package delta;
 
-import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import static delta.Types.*;
 
-/** Dispatch to the appropriate differencing algorithm. */
+/** Entry point to the differencing algorithms, and the pieces they share. */
 public final class Diff {
     private Diff() {}
 
-    // ── Shared utilities used by all three algorithm implementations ──
-
-    /** Compare byte subarrays for equality. */
-    static boolean arrayEquals(byte[] a, int aOff, byte[] b, int bOff, int len) {
-        for (int i = 0; i < len; i++) {
-            if (a[aOff + i] != b[bOff + i]) return false;
-        }
-        return true;
+    /** Returns commands that build v from r, computed by the given algorithm. */
+    public static List<Command> diff(Algorithm algo, byte[] r, byte[] v,
+                                     DiffOptions opts) {
+        return switch (algo) {
+            case GREEDY     -> Greedy.diff(r, v, opts);
+            case ONEPASS    -> Onepass.diff(r, v, opts);
+            case CORRECTING -> Correcting.diff(r, v, opts);
+        };
     }
 
-    /** Copy a range of bytes into a new array. */
-    static byte[] copyRange(byte[] data, int from, int to) {
-        byte[] result = new byte[to - from];
-        System.arraycopy(data, from, result, 0, to - from);
-        return result;
+    /** Calls {@link #diff} with the default options. */
+    public static List<Command> diffDefault(Algorithm algo, byte[] r, byte[] v) {
+        return diff(algo, r, v, new DiffOptions());
     }
 
-    /** Print delta compression statistics to stderr. */
+    /** Returns the number of p-byte seeds in data. */
+    static int seedCount(byte[] data, int p) {
+        return data.length >= p ? data.length - p + 1 : 0;
+    }
+
+    /** Reports whether the p bytes at a[aOff] equal the p bytes at b[bOff]. */
+    static boolean seedsEqual(byte[] a, int aOff, byte[] b, int bOff, int p) {
+        return Arrays.equals(a, aOff, aOff + p, b, bOff, bOff + p);
+    }
+
+    /** Returns how many bytes starting at a[aOff] and b[bOff] agree. */
+    static int matchLength(byte[] a, int aOff, byte[] b, int bOff) {
+        int n = Math.min(a.length - aOff, b.length - bOff);
+        int diff = Arrays.mismatch(a, aOff, aOff + n, b, bOff, bOff + n);
+        return diff < 0 ? n : diff;
+    }
+
+    /** Returns an add of v[from..to). */
+    static AddCmd literal(byte[] v, int from, int to) {
+        return new AddCmd(Arrays.copyOfRange(v, from, to));
+    }
+
+    /** Prints the verbose summary of a finished diff to stderr. */
     static void printStats(List<Command> commands) {
-        List<Long> copyLens = new ArrayList<>();
-        long totalCopy = 0, totalAdd = 0;
+        long[] copyLens = new long[commands.size()];
         int numCopies = 0, numAdds = 0;
+        long totalCopy = 0, totalAdd = 0;
         for (Command cmd : commands) {
             if (cmd instanceof CopyCmd c) {
                 totalCopy += c.length();
-                numCopies++;
-                copyLens.add(c.length());
+                copyLens[numCopies++] = c.length();
             } else if (cmd instanceof AddCmd a) {
                 totalAdd += a.data().length;
                 numAdds++;
@@ -46,27 +65,11 @@ public final class Diff {
         System.err.printf("  result: %d copies (%d bytes), %d adds (%d bytes)%n" +
             "  result: copy coverage %.1f%%, output %d bytes%n",
             numCopies, totalCopy, numAdds, totalAdd, copyPct, totalOut);
-        if (!copyLens.isEmpty()) {
-            copyLens.sort(null);
-            double mean = totalCopy / (double) copyLens.size();
-            long median = copyLens.get(copyLens.size() / 2);
+        if (numCopies > 0) {
+            Arrays.sort(copyLens, 0, numCopies);
+            double mean = totalCopy / (double) numCopies;
             System.err.printf("  copies: %d regions, min=%d max=%d mean=%.1f median=%d bytes%n",
-                copyLens.size(), copyLens.get(0), copyLens.get(copyLens.size() - 1), mean, median);
+                numCopies, copyLens[0], copyLens[numCopies - 1], mean, copyLens[numCopies / 2]);
         }
-    }
-
-    /** Run the selected algorithm to produce a command list for R→V. */
-    public static List<Command> diff(Algorithm algo, byte[] r, byte[] v,
-                                     DiffOptions opts) {
-        return switch (algo) {
-            case GREEDY     -> Greedy.diff(r, v, opts);
-            case ONEPASS    -> Onepass.diff(r, v, opts);
-            case CORRECTING -> Correcting.diff(r, v, opts);
-        };
-    }
-
-    /** Run the selected algorithm with default tuning options. */
-    public static List<Command> diffDefault(Algorithm algo, byte[] r, byte[] v) {
-        return diff(algo, r, v, new DiffOptions());
     }
 }

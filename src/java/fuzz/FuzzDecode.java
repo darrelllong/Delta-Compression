@@ -3,29 +3,22 @@ package fuzz;
 import delta.Encoding;
 
 /**
- * Jazzer fuzz target: feed arbitrary bytes to Encoding.decodeDelta().
+ * Jazzer target: decodeDelta on arbitrary bytes.  It may reject them with an
+ * IllegalArgumentException; any other throwable is a bug.
  *
- * Invariant: decodeDelta must never throw anything other than
- * IllegalArgumentException (or its subclasses) regardless of input.
- * Any other throwable — NullPointerException, ArrayIndexOutOfBoundsException,
- * NegativeArraySizeException, StackOverflowError, etc. — is a bug.
- *
- * Run:
- *   # build first:
- *   cd src/java
- *   make
- *   javac -cp out:fuzz/jazzer_standalone.jar fuzz/FuzzDecode.java -d out/
- *
- *   # fuzz:
+ * <pre>
+ *   cd src/java &amp;&amp; make
+ *   javac -cp out:fuzz/jazzer_standalone.jar -d out fuzz/FuzzDecode.java
  *   fuzz/jazzer --target_class=fuzz.FuzzDecode --cp=out/ --instrumentation_includes=delta.** \
  *       --reproducer_path=fuzz/findings/ -max_total_time=300
+ * </pre>
  */
 public class FuzzDecode {
     public static void fuzzerTestOneInput(byte[] data) {
         try {
             Encoding.decodeDelta(data);
         } catch (IllegalArgumentException e) {
-            // expected rejection path for malformed input
+            // Malformed input, rejected as it should be.
         }
     }
 }

@@ -1,16 +1,14 @@
 package delta;
 
 /**
- * Tarjan-Sleator splay tree keyed on long (fingerprint).
+ * A splay tree from long keys to values (Sleator and Tarjan, "Self-Adjusting
+ * Binary Search Trees", JACM 32(3), 1985).
  *
- * A self-adjusting binary search tree: every access (find/insert)
- * splays the accessed node to the root via zig/zig-zig/zig-zag
- * rotations.  Amortized O(log n) per operation.
+ * Every operation moves the key it touches to the root, so keys used often
+ * stay near the top.  Operations take O(log n) amortized time.
  *
- * Reference: Sleator & Tarjan, "Self-Adjusting Binary Search Trees",
- * JACM 32(3), 1985.
- *
- * @param <V> value type
+ * @param <V> the value type; null is not a useful value, since find returns
+ *            null for a missing key
  */
 public final class SplayTree<V> {
     private static final class Node<V> {
@@ -27,117 +25,103 @@ public final class SplayTree<V> {
     private Node<V> root;
     private int size;
 
-    public int size() { return size; }
-    public boolean isEmpty() { return size == 0; }
+    // Scratch node for splay: its right and left children collect the trees
+    // of keys smaller and larger than the one sought.
+    private final Node<V> header = new Node<>(0, null);
 
-    /** Find key; returns value or null. Splays found node to root. */
+    /** Returns the number of keys. */
+    public int size() { return size; }
+
+    /** Returns the value stored for key, or null if there is none. */
     public V find(long key) {
         if (root == null) return null;
         splay(key);
         return root.key == key ? root.value : null;
     }
 
-    /** Insert if absent; return existing or new value. */
+    /** Returns the value stored for key, first storing value if there is none. */
     public V insertOrGet(long key, V value) {
-        if (root == null) {
-            root = new Node<>(key, value);
-            size++;
-            return root.value;
+        if (root != null) {
+            splay(key);
+            if (root.key == key) return root.value;
         }
-        splay(key);
-        if (root.key == key) return root.value;
-
-        Node<V> node = new Node<>(key, value);
-        size++;
-        if (key < root.key) {
-            node.left = root.left;
-            node.right = root;
-            root.left = null;
-        } else {
-            node.right = root.right;
-            node.left = root;
-            root.right = null;
-        }
-        root = node;
-        return root.value;
+        addRoot(key, value);
+        return value;
     }
 
-    /** Insert key with value, overwriting any existing entry. */
+    /** Stores value for key, replacing any value already there. */
     public void insert(long key, V value) {
-        if (root == null) {
-            root = new Node<>(key, value);
-            size++;
-            return;
+        if (root != null) {
+            splay(key);
+            if (root.key == key) {
+                root.value = value;
+                return;
+            }
         }
-        splay(key);
-        if (root.key == key) {
-            root.value = value;
-            return;
-        }
+        addRoot(key, value);
+    }
 
+    /**
+     * Makes a new node for key the root.  Requires that key is absent and
+     * that the tree, if not empty, has just been splayed on key, so that the
+     * old root is key's neighbour and splits the tree around it.
+     */
+    private void addRoot(long key, V value) {
         Node<V> node = new Node<>(key, value);
-        size++;
-        if (key < root.key) {
-            node.left = root.left;
-            node.right = root;
-            root.left = null;
-        } else {
-            node.right = root.right;
-            node.left = root;
-            root.right = null;
+        if (root != null) {
+            if (key < root.key) {
+                node.left = root.left;
+                node.right = root;
+                root.left = null;
+            } else {
+                node.right = root.right;
+                node.left = root;
+                root.right = null;
+            }
         }
         root = node;
+        size++;
     }
 
-    /** Set value for existing key (after find). */
-    public void setValue(V value) {
-        if (root != null) root.value = value;
-    }
-
-    /** Top-down splay (Sleator & Tarjan 1985). */
+    /**
+     * Top-down splay: moves the node for key to the root, or, if key is
+     * absent, the last node on the search path.  Requires a non-empty tree.
+     */
     private void splay(long key) {
-        if (root == null) return;
-
-        // Sentinel header — only left/right used.
-        Node<V> header = new Node<>(0, null);
         Node<V> l = header, r = header;
         Node<V> t = root;
+        header.left = header.right = null;
 
         for (;;) {
             if (key < t.key) {
                 if (t.left == null) break;
                 if (key < t.left.key) {
-                    // Zig-zig: rotate right
-                    Node<V> y = t.left;
+                    Node<V> y = t.left; // rotate right
                     t.left = y.right;
                     y.right = t;
                     t = y;
                     if (t.left == null) break;
                 }
-                // Link right
-                r.left = t;
+                r.left = t; // t and its right subtree are larger than key
                 r = t;
                 t = t.left;
             } else if (key > t.key) {
                 if (t.right == null) break;
                 if (key > t.right.key) {
-                    // Zig-zig: rotate left
-                    Node<V> y = t.right;
+                    Node<V> y = t.right; // rotate left
                     t.right = y.left;
                     y.left = t;
                     t = y;
                     if (t.right == null) break;
                 }
-                // Link left
-                l.right = t;
+                l.right = t; // t and its left subtree are smaller than key
                 l = t;
                 t = t.right;
             } else {
-                break; // found
+                break;
             }
         }
 
-        // Assemble
         l.right = t.left;
         r.left = t.right;
         t.left = header.right;

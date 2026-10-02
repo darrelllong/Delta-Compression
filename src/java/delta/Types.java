@@ -1,128 +1,124 @@
 package delta;
 
-/** Shared types and constants (Ajtai et al. 2002). */
+/**
+ * Constants and value types shared by the library.
+ *
+ * Section numbers refer to Ajtai, Burns, Fagin, Long and Stockmeyer, JACM 2002,
+ * unless Burns, Long and Stockmeyer, IEEE TKDE 2003, is named.
+ */
 public final class Types {
     private Types() {}
 
-    public static final int  SEED_LEN      = 16;
-    public static final int  TABLE_SIZE    = 1048573;       // largest prime < 2^20
-    public static final int  MAX_TABLE_SIZE = 1073741827;   // prime near 2^30; default ceiling for auto-sizing
-    public static final long HASH_BASE     = 263;
-    public static final long HASH_MOD      = (1L << 61) - 1; // Mersenne prime
+    /** Default seed length p, in bytes. */
+    public static final int  SEED_LEN       = 16;
+    /** Default hash table size: the largest prime below 2^20. */
+    public static final int  TABLE_SIZE     = 1048573;
+    /** Default ceiling for an auto-sized table: a prime just above 2^30. */
+    public static final int  MAX_TABLE_SIZE = 1073741827;
+    public static final long HASH_BASE      = 263;
+    /** The Mersenne prime 2^61 - 1. */
+    public static final long HASH_MOD       = (1L << 61) - 1;
 
-    // Binary delta format constants
+    // The wire format.  DLT\x03 has u32 fields and only COPY and ADD; DLT\x04
+    // has a u64 version size and adds the commands numbered 3 to 6.
     public static final byte[] DELTA_MAGIC             = {'D', 'L', 'T', 0x03};
     public static final byte[] DELTA_MAGIC_LARGE       = {'D', 'L', 'T', 0x04};
     public static final byte   DELTA_FLAG_INPLACE      = 0x01;
     public static final int    DELTA_CMD_END           = 0;
     public static final int    DELTA_CMD_COPY          = 1;
     public static final int    DELTA_CMD_ADD           = 2;
-    public static final int    DELTA_CMD_BIGCOPY       = 3; // DLT\x04: COPY with u64 fields
-    public static final int    DELTA_CMD_BIGADD        = 4; // DLT\x04: ADD with u64 dst/len header
-    public static final int    DELTA_CMD_MOVE          = 5; // DLT\x04: copy from already-written output (u32)
-    public static final int    DELTA_CMD_BIGMOVE       = 6; // DLT\x04: MOVE with u64 fields
-    public static final int    DELTA_CRC_SIZE          = 8;  // CRC-64/XZ digest bytes
-    public static final int    DELTA_HEADER_SIZE       = 25; // magic(4)+flags(1)+version_size(4)+crcs(16)
-    public static final int    DELTA_HEADER_SIZE_LARGE = 29; // magic(4)+flags(1)+version_size(8)+crcs(16)
+    public static final int    DELTA_CMD_BIGCOPY       = 3;  // COPY with u64 fields
+    public static final int    DELTA_CMD_BIGADD        = 4;  // ADD with u64 dst and length
+    public static final int    DELTA_CMD_MOVE          = 5;  // copy within the output, u32 fields
+    public static final int    DELTA_CMD_BIGMOVE       = 6;  // MOVE with u64 fields
+    public static final int    DELTA_CRC_SIZE          = 8;  // CRC-64/XZ, big-endian
+    public static final int    DELTA_HEADER_SIZE       = 25; // magic(4) flags(1) version_size(4) crcs(16)
+    public static final int    DELTA_HEADER_SIZE_LARGE = 29; // magic(4) flags(1) version_size(8) crcs(16)
     public static final int    DELTA_U32_SIZE          = 4;
     public static final int    DELTA_U64_SIZE          = 8;
-    public static final int    DELTA_COPY_PAYLOAD      = 12; // src(4)+dst(4)+len(4)
-    public static final int    DELTA_ADD_HEADER        = 8;  // dst(4)+len(4)
-    public static final int    DELTA_BIGCOPY_PAYLOAD   = 24; // src(8)+dst(8)+len(8)
-    public static final int    DELTA_BIGADD_HEADER     = 16; // dst(8)+len(8)
+    public static final int    DELTA_COPY_PAYLOAD      = 12; // src(4) dst(4) len(4)
+    public static final int    DELTA_ADD_HEADER        = 8;  // dst(4) len(4)
+    public static final int    DELTA_BIGCOPY_PAYLOAD   = 24; // src(8) dst(8) len(8)
+    public static final int    DELTA_BIGADD_HEADER     = 16; // dst(8) len(8)
+    /** Default capacity of the correcting algorithm's lookback buffer, in commands. */
     public static final int    DELTA_BUF_CAP           = 256;
 
-    /** Differencing algorithm selection. */
+    /** A differencing algorithm. */
     public enum Algorithm {
-        /** Optimal under simple cost; O(|V|·|R|) time, O(|R|) space (Section 3). */
+        /** Optimal under the simple cost measure; O(|V| |R|) time, O(|R|) space (Section 3). */
         GREEDY,
-        /** Linear time and near-constant space; concurrent scan of R and V (Section 4). */
+        /** Linear time, constant space; scans R and V together (Section 4). */
         ONEPASS,
-        /** Near-optimal, 1.5-pass; hash table with fingerprint checkpointing (Sections 7–8). */
+        /** Near-optimal 1.5-pass with checkpointed fingerprints (Sections 7 and 8). */
         CORRECTING
     }
 
-    /** Cycle-breaking policy for in-place reordering (Section 4.3 of Burns et al. 2003). */
+    /** How in-place conversion chooses the copy to give up when copies form a cycle. */
     public enum CyclePolicy {
-        /** Break each cycle at the copy with the shortest length, minimising literal bytes added. */
+        /** The shortest copy on a cycle, so the fewest literal bytes are added. */
         LOCALMIN,
-        /** Break each cycle at the first remaining vertex; simpler but ignores copy lengths. */
+        /** The lowest-numbered remaining copy; no cycle search, but ignores lengths. */
         CONSTANT
     }
 
-    // ── Algorithm-level commands (offset into R, no destination yet) ──
-
     /**
-     * Algorithm-level command, as produced by the diff algorithms.
-     *
-     * Offsets are positions in R or V at the time of the diff scan; destinations
-     * are not yet assigned.  Call placeCommands (or makeInplace) to get
-     * PlacedCommands ready for encoding and application.
+     * A command as the differencing algorithms produce it: the commands of a
+     * delta, in order, write V from left to right, so no destination is stored.
      */
     public sealed interface Command permits CopyCmd, AddCmd {}
 
-    /** Copy {@code length} bytes starting at {@code offset} in the reference R. */
+    /** Copy {@code length} bytes of R starting at {@code offset}. */
     public record CopyCmd(long offset, long length) implements Command {}
 
-    /** Append literal bytes from V that could not be matched in R. */
-    public record AddCmd(byte[] data)               implements Command {}
-
-    // ── Placed commands (explicit src/dst for binary encoding) ──
+    /** Append the literal bytes {@code data}.  The array is not copied. */
+    public record AddCmd(byte[] data) implements Command {}
 
     /**
-     * A command with explicit source and destination byte offsets (Section 2.1.1).
-     *
-     * Produced by placeCommands or makeInplace; required for delta encoding and
-     * for in-place or standard application.
+     * A command with an explicit destination, which is what the wire format
+     * carries and what lets an in-place delta run its commands out of order.
      */
     public sealed interface PlacedCommand permits PlacedCopy, PlacedAdd, PlacedMove {}
 
-    /** Copy {@code length} bytes from {@code src} in R (or working buffer) to {@code dst} in output. */
+    /**
+     * Copy {@code length} bytes from {@code src} to {@code dst}.  The source is
+     * R in a standard delta and the buffer being rewritten in an in-place one.
+     */
     public record PlacedCopy(long src, long dst, long length) implements PlacedCommand {}
 
-    /** Write literal bytes to {@code dst} in the output. */
-    public record PlacedAdd(long dst, byte[] data)            implements PlacedCommand {}
+    /** Write the literal bytes {@code data} at {@code dst}.  The array is not copied. */
+    public record PlacedAdd(long dst, byte[] data) implements PlacedCommand {}
 
     /**
-     * Copy {@code length} bytes from {@code src} in the already-written output to {@code dst}.
-     * The encoder guarantees {@code src + length <= dst} (source fully written before it is read).
-     * Only valid in DLT\x04 format; use {@code encodeDeltaLarge} to encode PlacedMove commands.
+     * Copy {@code length} bytes of output already written at {@code src} to
+     * {@code dst}.  Requires {@code src + length <= dst}, and the DLT\x04 format.
      */
     public record PlacedMove(long src, long dst, long length) implements PlacedCommand {}
 
-    // ── Diff options (mutable — not a record) ──
-
-    /**
-     * Tuning parameters for differencing algorithms.
-     *
-     * All fields are public for direct mutation; no defensive copy is made.
-     */
+    /** Tuning parameters for the differencing algorithms.  Set the fields directly. */
     public static final class DiffOptions {
-        /** Seed length: minimum match length and fingerprint window (Section 2.1.3). */
+        /** Seed length: the fingerprint window and the shortest match (Section 2.1.3). */
         public int     p        = SEED_LEN;
-        /** Hash table capacity floor; algorithms auto-size upward from input length. */
+        /** Smallest hash table to use; the algorithms grow it with the input. */
         public int     q        = TABLE_SIZE;
-        /** Lookback buffer depth for the correcting algorithm (Section 5.2). */
+        /** Commands the correcting algorithm can still revise (Section 5.2). */
         public int     bufCap   = DELTA_BUF_CAP;
-        /** Print per-run statistics to stderr when true. */
+        /** Print statistics to stderr. */
         public boolean verbose  = false;
-        /** Use a Sleator-Tarjan splay tree instead of a hash table for R lookups. */
+        /** Index fingerprints in a splay tree instead of a hash table. */
         public boolean useSplay = false;
-        /** Auto-sizing ceiling; prevents unbounded memory use on very large inputs. */
+        /** Largest table the correcting algorithm may grow to; 0 means MAX_TABLE_SIZE. */
         public int     maxTable = MAX_TABLE_SIZE;
     }
 
-    // ── Statistics ──
-
     /**
-     * Summary statistics for a set of placed commands.
+     * Counts over a list of placed commands.  A MOVE counts as a copy.
      *
-     * @param numCommands      Total number of commands (copies + adds).
-     * @param numCopies        Number of COPY commands.
-     * @param numAdds          Number of ADD commands.
-     * @param copyBytes        Total bytes reproduced by COPY commands.
-     * @param addBytes         Total literal bytes in ADD commands.
-     * @param totalOutputBytes Reconstructed output size (= copyBytes + addBytes).
+     * @param numCommands      copies plus adds
+     * @param numCopies        number of COPY and MOVE commands
+     * @param numAdds          number of ADD commands
+     * @param copyBytes        bytes produced by copies
+     * @param addBytes         literal bytes
+     * @param totalOutputBytes copyBytes + addBytes
      */
     public record PlacedSummary(
         int  numCommands,

@@ -1,120 +1,129 @@
 package delta;
 
 import java.math.BigInteger;
+
 import static delta.Types.*;
 
 /**
- * Karp-Rabin rolling hash (Karp &amp; Rabin 1987; Section 2.1.3).
+ * Karp-Rabin fingerprints over the Mersenne prime 2^61 - 1 (Section 2.1.3),
+ * primes for sizing hash tables, and CRC-64/XZ.
  *
- * Polynomial fingerprints over the Mersenne prime 2^61-1.
+ * A fingerprint is always in [0, HASH_MOD), so it is non-negative as a long.
  */
 public final class Hash {
     private Hash() {}
 
-    /** Reduce 128-bit value (hi:lo) modulo 2^61-1. */
+    /**
+     * Reduces the unsigned 128-bit value hi:lo modulo 2^61 - 1.
+     * Requires hi &lt; 2^58, which holds for a product of two residues.
+     */
     public static long modMersenne(long hi, long lo) {
-        long P = HASH_MOD;
-        long upper = (hi << 3) | (lo >>> 61);
-        long lower = lo & P;
-        long r = upper + lower;
-        if (Long.compareUnsigned(r, P) >= 0) r -= P;
-        // Second reduction
-        long upper2 = r >>> 61;
-        long lower2 = r & P;
-        long r2 = upper2 + lower2;
-        if (Long.compareUnsigned(r2, P) >= 0) r2 -= P;
-        return r2;
+        // 2^61 = 1 (mod 2^61 - 1), so the value is congruent to the sum of
+        // its high part (bits 61 and up) and its low 61 bits.
+        long x = ((hi << 3) | (lo >>> 61)) + (lo & HASH_MOD);
+        if (x >= HASH_MOD) x -= HASH_MOD;
+        x = (x >>> 61) + (x & HASH_MOD);
+        if (x >= HASH_MOD) x -= HASH_MOD;
+        return x;
     }
 
-    /** (a * b) mod (2^61-1) using 128-bit intermediate. */
+    /** Returns a * b mod 2^61 - 1, for residues a and b. */
     public static long mulmod(long a, long b) {
-        long hi = Math.multiplyHigh(a, b);
-        long lo = a * b;
-        return modMersenne(hi, lo);
+        return modMersenne(Math.multiplyHigh(a, b), a * b);
     }
 
-    /** Karp-Rabin fingerprint of data[offset..offset+p] (Eq. 1, Section 2.1.3). */
+    /** Returns (h * HASH_BASE + b) mod 2^61 - 1, for a residue h and a byte b in [0, 255]. */
+    private static long append(long h, int b) {
+        long hi = Math.multiplyHigh(h, HASH_BASE);
+        long lo = h * HASH_BASE;
+        long sum = lo + b;
+        if (Long.compareUnsigned(sum, lo) < 0) hi++;
+        return modMersenne(hi, sum);
+    }
+
+    /** Returns the fingerprint of the p bytes at data[offset] (Eq. 1). */
     public static long fingerprint(byte[] data, int offset, int p) {
         long h = 0;
         for (int i = 0; i < p; i++) {
-            int b = data[offset + i] & 0xFF;
-            long hi = Math.multiplyHigh(h, HASH_BASE);
-            long lo = h * HASH_BASE;
-            long newLo = lo + b;
-            long newHi = hi;
-            if (Long.compareUnsigned(newLo, lo) < 0) newHi++;
-            h = modMersenne(newHi, newLo);
+            h = append(h, data[offset + i] & 0xFF);
         }
         return h;
     }
 
-    /** Precompute HASH_BASE^{p-1} mod HASH_MOD. */
+    /** Returns HASH_BASE^(p-1) mod 2^61 - 1, the weight of a window's first byte. */
     public static long precomputeBp(int p) {
-        if (p == 0) return 1;
         long result = 1;
         long base = HASH_BASE;
-        int exp = p - 1;
-        while (exp > 0) {
+        for (int exp = p - 1; exp > 0; exp >>= 1) {
             if ((exp & 1) == 1) result = mulmod(result, base);
             base = mulmod(base, base);
-            exp >>= 1;
         }
         return result;
     }
 
-    // ── Rolling hash ─────────────────────────────────────────────────
-
-    /** Rolling hash for O(1) incremental fingerprint updates (Eq. 2). */
+    /** The fingerprint of a p-byte window that moves over one array (Eq. 2). */
     public static final class RollingHash {
+        private final byte[] data;
+        private final int p;
+        private final long bp; // HASH_BASE^(p-1): the weight of the window's first byte
+        private int pos;       // where the window starts
         private long value;
-        private final long bp; // HASH_BASE^{p-1} mod HASH_MOD
 
+        /** Places the window at data[offset].  Requires offset + p &lt;= data.length. */
         public RollingHash(byte[] data, int offset, int p) {
+            this.data = data;
+            this.p = p;
             this.bp = precomputeBp(p);
+            this.pos = offset;
             this.value = fingerprint(data, offset, p);
         }
 
+        /** Returns the fingerprint of the window. */
         public long value() { return value; }
 
-        /** Slide window: remove oldByte from left, add newByte to right. */
+        /**
+         * Moves the window one byte to the right, given the byte that leaves
+         * and the byte that enters, each in [0, 255].
+         */
         public void roll(int oldByte, int newByte) {
             long sub = mulmod(oldByte, bp);
-            long v = Long.compareUnsigned(value, sub) >= 0
-                ? (value - sub)
-                : (HASH_MOD - (sub - value));
-            long hi = Math.multiplyHigh(v, HASH_BASE);
-            long lo = v * HASH_BASE;
-            long newLo = lo + newByte;
-            long newHi = hi;
-            if (Long.compareUnsigned(newLo, lo) < 0) newHi++;
-            value = modMersenne(newHi, newLo);
+            long rest = value >= sub ? value - sub : HASH_MOD - (sub - value);
+            value = append(rest, newByte);
+            pos++;
+        }
+
+        /**
+         * Moves the window to data[target] and returns its fingerprint.
+         * A move of one byte to the right costs O(1); any other move costs O(p).
+         */
+        long seek(int target) {
+            if (target == pos + 1) {
+                roll(data[pos] & 0xFF, data[pos + p] & 0xFF);
+            } else if (target != pos) {
+                value = fingerprint(data, target, p);
+                pos = target;
+            }
+            return value;
         }
     }
 
-    // ── Primality testing ────────────────────────────────────────────
-
     /**
-     * Fixed witnesses for deterministic Miller-Rabin.
-     * Sufficient for all n &lt; 3,317,044,064,679,887,385,961,981 (&gt; 2^81).
-     * Jaeschke, Math. Comp. 61(204), 1993.
+     * These witnesses make Miller-Rabin deterministic for every n below
+     * 3.18e23 (Sorenson and Webster, Math. Comp. 86(304), 2017), which
+     * covers every long.
      */
     private static final long[] MR_WITNESSES = {
         2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37
     };
 
-    /**
-     * Deterministic Miller-Rabin primality test.
-     *
-     * Writes n-1 = 2^r * d, then for each witness a checks whether
-     * a^d ≡ 1 (mod n) or a^{2^j d} ≡ -1 (mod n) for some j &lt; r.
-     * If neither holds, n is composite.  With the fixed witnesses above,
-     * the test is deterministic for all n relevant to hash table sizing.
-     */
+    /** Reports whether n is prime, by the Miller-Rabin test. */
     public static boolean isPrime(long n) {
         if (n < 2) return false;
         if (n < 4) return true;
         if (n % 2 == 0) return false;
 
+        // n - 1 = 2^r * d with d odd.  n passes for witness a if a^d = 1 or
+        // a^(2^j * d) = -1 (mod n) for some j < r.
         BigInteger bn = BigInteger.valueOf(n);
         BigInteger nm1 = bn.subtract(BigInteger.ONE);
         int r = nm1.getLowestSetBit();
@@ -123,18 +132,17 @@ public final class Hash {
         for (long a : MR_WITNESSES) {
             if (a >= n) break;
             BigInteger x = BigInteger.valueOf(a).modPow(d, bn);
-            if (x.equals(BigInteger.ONE) || x.equals(nm1)) continue;
-            boolean found = false;
-            for (int j = 0; j < r - 1; j++) {
-                x = x.modPow(BigInteger.TWO, bn);
-                if (x.equals(nm1)) { found = true; break; }
+            if (x.equals(BigInteger.ONE)) continue;
+            int j = 0;
+            while (!x.equals(nm1)) {
+                if (++j == r) return false;
+                x = x.multiply(x).mod(bn);
             }
-            if (!found) return false;
         }
         return true;
     }
 
-    /** Smallest prime >= n. */
+    /** Returns the smallest prime that is at least n. */
     public static long nextPrime(long n) {
         if (n <= 2) return 2;
         if (n % 2 == 0) n++;
@@ -142,36 +150,38 @@ public final class Hash {
         return n;
     }
 
-    // ── CRC-64/XZ (ECMA-182 reflected) — 8-byte output ─────────────
-    //
-    // Reflected poly: 0xC96C5795D7870F42, Init = XorOut = 0xFFFFFFFFFFFFFFFF.
-    // Check value: Crc64.hash8(b"123456789") = 0x995DC9BBDF1939FA big-endian.
-
+    /**
+     * CRC-64/XZ: the ECMA-182 polynomial, reflected, with initial value and
+     * final XOR of all ones.  The check value for "123456789" is
+     * 0x995DC9BBDF1939FA.
+     */
     public static final class Crc64 {
+        private Crc64() {}
+
         private static final long POLY = 0xC96C5795D7870F42L;
-        private static final long[] TABLE;
+        private static final long[] TABLE = new long[256];
 
         static {
-            TABLE = new long[256];
             for (int i = 0; i < 256; i++) {
-                long c = (long) i;
-                for (int j = 0; j < 8; j++)
-                    c = (c & 1L) != 0 ? (c >>> 1) ^ POLY : (c >>> 1);
+                long c = i;
+                for (int j = 0; j < 8; j++) {
+                    c = (c & 1) != 0 ? (c >>> 1) ^ POLY : c >>> 1;
+                }
                 TABLE[i] = c;
             }
         }
 
-        private Crc64() {}
-
-        /** Compute CRC-64/XZ of data, return 8 bytes big-endian. */
+        /** Returns the CRC of data as 8 bytes, most significant first. */
         public static byte[] hash8(byte[] data) {
-            long crc = 0xFFFFFFFFFFFFFFFFL;
-            for (byte b : data)
-                crc = TABLE[(int)((crc ^ b) & 0xFF)] ^ (crc >>> 8);
-            crc ^= 0xFFFFFFFFFFFFFFFFL;
-            byte[] out = new byte[8];
-            for (int i = 0; i < 8; i++)
+            long crc = ~0L;
+            for (byte b : data) {
+                crc = TABLE[(int) ((crc ^ b) & 0xFF)] ^ (crc >>> 8);
+            }
+            crc = ~crc;
+            byte[] out = new byte[DELTA_CRC_SIZE];
+            for (int i = 0; i < out.length; i++) {
                 out[i] = (byte) (crc >>> (56 - 8 * i));
+            }
             return out;
         }
     }

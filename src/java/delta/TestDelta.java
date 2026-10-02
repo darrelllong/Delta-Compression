@@ -12,14 +12,9 @@ import java.util.Random;
 import static delta.Types.*;
 
 /**
- * Integration tests for the Java delta compression library.
- *
- * Mirrors the Rust and Python test suites: standard differencing, binary
- * encoding, in-place reconstruction, variable-length block transpositions,
- * cycle policy, checkpointing, primality, inplace subcommand, and splay tree.
- *
- * Run:  java -cp out delta.TestDelta
- * Or:   make test  (from src/java/)
+ * Tests for the library, run by {@code make test} or
+ * {@code java -cp out delta.TestDelta} from src/java.  The real-data test
+ * reads README.md and HOWTO.md from two directories up.
  */
 public class TestDelta {
 
@@ -27,8 +22,6 @@ public class TestDelta {
 
     static final Algorithm[]   ALL_ALGOS    = Algorithm.values();
     static final CyclePolicy[] ALL_POLICIES = CyclePolicy.values();
-
-    // ── assertion helpers ─────────────────────────────────────────────────────
 
     static void assertArrayEquals(byte[] expected, byte[] actual, String msg) {
         if (!Arrays.equals(expected, actual))
@@ -48,13 +41,27 @@ public class TestDelta {
         if (cond) throw new AssertionError(msg);
     }
 
+    /**
+     * Asserts that body throws an IllegalArgumentException, with the given
+     * message unless message is null.
+     */
+    static void assertRejects(String what, Runnable body, String message) {
+        try {
+            body.run();
+        } catch (IllegalArgumentException e) {
+            if (message != null && !message.equals(e.getMessage()))
+                throw new AssertionError(String.format(
+                    "%s: expected \"%s\", got \"%s\"", what, message, e.getMessage()));
+            return;
+        }
+        throw new AssertionError(what + " should be rejected");
+    }
+
     static void assertEquals(long expected, long actual, String msg) {
         if (expected != actual)
             throw new AssertionError(String.format(
                 "%s: expected %d, got %d", msg, expected, actual));
     }
-
-    // ── test runner ───────────────────────────────────────────────────────────
 
     static void check(String name, Runnable r) {
         tests++;
@@ -68,8 +75,6 @@ public class TestDelta {
             System.out.printf("FAIL  %s: %s%n", name, msg != null ? msg : t.toString());
         }
     }
-
-    // ── helpers ───────────────────────────────────────────────────────────────
 
     /** Build a DiffOptions with seed length p and all other fields defaulted. */
     static DiffOptions opts(int p) {
@@ -104,12 +109,10 @@ public class TestDelta {
         return s.getBytes(StandardCharsets.ISO_8859_1);
     }
 
-    /**
-     * Standard encode path: diff → place → encode → decode → applyPlacedTo.
-     * Exercises the binary format roundtrip.
-     */
+    /** Stands in for the CRCs, which the library carries but does not check. */
     static final byte[] ZERO_HASH = new byte[DELTA_CRC_SIZE];
 
+    /** Returns what diff, place, encode, decode and apply make of v. */
     static byte[] roundtrip(Algorithm algo, byte[] r, byte[] v, int p) {
         List<Command> cmds = Diff.diff(algo, r, v, opts(p));
         List<PlacedCommand> placed = Apply.placeCommands(cmds);
@@ -120,7 +123,7 @@ public class TestDelta {
         return out;
     }
 
-    /** In-place path: diff → makeInplace → applyDeltaInplace (no binary I/O). */
+    /** Returns what diff, makeInplace and applyDeltaInplace make of v, with no encoding. */
     static byte[] inplaceRoundtrip(Algorithm algo, byte[] r, byte[] v,
                                     CyclePolicy pol, int p) {
         List<Command> cmds = Diff.diff(algo, r, v, opts(p));
@@ -128,7 +131,7 @@ public class TestDelta {
         return Apply.applyDeltaInplace(r, ip, v.length);
     }
 
-    /** In-place binary path: diff → makeInplace → encode → decode → applyDeltaInplace. */
+    /** As inplaceRoundtrip, but through encode and decode. */
     static byte[] inplaceBinaryRoundtrip(Algorithm algo, byte[] r, byte[] v,
                                           CyclePolicy pol, int p) {
         List<Command> cmds = Diff.diff(algo, r, v, opts(p));
@@ -139,8 +142,8 @@ public class TestDelta {
     }
 
     /**
-     * Simulate the {@code delta inplace} subcommand:
-     * encode standard → decode → unplaceCommands → makeInplace → encode(inplace).
+     * Returns the in-place delta that the {@code inplace} subcommand would
+     * write: a standard delta, decoded, unplaced, converted and encoded again.
      */
     static byte[] viaInplaceSubcommand(Algorithm algo, byte[] r, byte[] v,
                                         CyclePolicy pol, int p) {
@@ -182,8 +185,6 @@ public class TestDelta {
             int tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
         }
     }
-
-    // ── standard differencing ─────────────────────────────────────────────────
 
     /** Section 2.1.1 of Ajtai et al. 2002. */
     static void testPaperExample() {
@@ -241,7 +242,7 @@ public class TestDelta {
             assertArrayEquals(v, roundtrip(algo, r, v, 4), algo + " binary roundtrip");
     }
 
-    /** Manually-built placed commands: verify encode → decode preserves fields. */
+    /** Encode and decode preserve the fields of hand-built commands. */
     static void testBinaryEncodingRoundtrip() {
         List<PlacedCommand> placed = new ArrayList<>();
         placed.add(new PlacedAdd(0, new byte[]{100, 101, 102}));
@@ -263,50 +264,30 @@ public class TestDelta {
     static void testDecodeRejectsMissingEnd() {
         byte[] encoded = Encoding.encodeDelta(new ArrayList<>(), false, 0, ZERO_HASH, ZERO_HASH);
         byte[] truncated = Arrays.copyOf(encoded, encoded.length - 1);
-        boolean threw = false;
-        try {
-            Encoding.decodeDelta(truncated);
-        } catch (IllegalArgumentException e) {
-            threw = "missing END command".equals(e.getMessage());
-        }
-        assertTrue(threw, "missing END should be rejected");
+        assertRejects("missing END", () -> Encoding.decodeDelta(truncated), "missing END command");
     }
 
     static void testDecodeRejectsTrailingData() {
         byte[] encoded = Encoding.encodeDelta(new ArrayList<>(), false, 0, ZERO_HASH, ZERO_HASH);
         byte[] bad = Arrays.copyOf(encoded, encoded.length + 1);
         bad[bad.length - 1] = 0x7F;
-        boolean threw = false;
-        try {
-            Encoding.decodeDelta(bad);
-        } catch (IllegalArgumentException e) {
-            threw = "trailing data after END".equals(e.getMessage());
-        }
-        assertTrue(threw, "trailing data should be rejected");
+        assertRejects("trailing data", () -> Encoding.decodeDelta(bad), "trailing data after END");
     }
 
     static void testDecodeRejectsCopyPastVersionSize() {
         List<PlacedCommand> cmds = new ArrayList<>();
         cmds.add(new PlacedCopy(0, 1, 2));
-        boolean threw = false;
-        try {
-            Encoding.decodeDelta(Encoding.encodeDelta(cmds, false, 2, ZERO_HASH, ZERO_HASH));
-        } catch (IllegalArgumentException e) {
-            threw = "COPY extends past version size".equals(e.getMessage());
-        }
-        assertTrue(threw, "copy past version size should be rejected");
+        assertRejects("copy past version size",
+            () -> Encoding.decodeDelta(Encoding.encodeDelta(cmds, false, 2, ZERO_HASH, ZERO_HASH)),
+            "COPY extends past version size");
     }
 
     static void testValidatePlacedCommandsRejectsSourceOverflow() {
         List<PlacedCommand> cmds = new ArrayList<>();
         cmds.add(new PlacedCopy(1, 0, 2));
-        boolean threw = false;
-        try {
-            Apply.validatePlacedCommands(cmds, 2, 2, false);
-        } catch (IllegalArgumentException e) {
-            threw = "copy source out of range".equals(e.getMessage());
-        }
-        assertTrue(threw, "source overflow should be rejected");
+        assertRejects("source overflow",
+            () -> Apply.validatePlacedCommands(cmds, 2, 2, false),
+            "copy source out of range");
     }
 
     /** The inplace flag bit in the header is set/clear independently of commands. */
@@ -380,8 +361,6 @@ public class TestDelta {
         for (Algorithm algo : ALL_ALGOS)
             assertArrayEquals(v, roundtrip(algo, r, v, 4), algo + " scattered modifications");
     }
-
-    // ── in-place basics ───────────────────────────────────────────────────────
 
     static void testInplacePaperExample() {
         byte[] r = b("ABCDEFGHIJKLMNOP");
@@ -481,8 +460,6 @@ public class TestDelta {
         assertTrue(Encoding.isInplaceDelta(delta), "inplace delta should be detected");
     }
 
-    // ── in-place variable-length blocks ───────────────────────────────────────
-
     /** Random permutation of all 8 blocks. */
     static void testInplaceVarlenPermutation() {
         List<byte[]> blocks = makeBlocks();
@@ -546,7 +523,7 @@ public class TestDelta {
                     algo + "/" + pol + " varlen drop+dup");
     }
 
-    /** V is two independent shuffles of all 8 blocks concatenated (~2× size of R). */
+    /** V is two independent shuffles of all 8 blocks concatenated (about twice the size of R). */
     static void testInplaceVarlenDoubleSized() {
         List<byte[]> blocks = makeBlocks();
         byte[] r = blocksRef(blocks);
@@ -563,7 +540,7 @@ public class TestDelta {
                     algo + "/" + pol + " varlen double-sized");
     }
 
-    /** V is just two of the eight blocks — much smaller than R. */
+    /** V is just two of the eight blocks, much smaller than R. */
     static void testInplaceVarlenSubset() {
         List<byte[]> blocks = makeBlocks();
         byte[] r = blocksRef(blocks);
@@ -600,12 +577,12 @@ public class TestDelta {
             }
     }
 
-    /** 20 random trials: random subset of 3–8 blocks in random order. */
+    /** 20 random trials: random subset of 3 to 8 blocks in random order. */
     static void testInplaceVarlenRandomTrials() {
         List<byte[]> blocks = makeBlocks();
         byte[] r = blocksRef(blocks);
         Random rng = new Random(9999);
-        // Pre-generate 20 trials so all algo×policy combinations use the same data.
+        // Every algorithm and policy gets the same 20 trials.
         int[][] trials = new int[20][];
         for (int t = 0; t < 20; t++) {
             int k = 3 + rng.nextInt(6);       // 3..8 inclusive
@@ -625,11 +602,8 @@ public class TestDelta {
                 }
     }
 
-    // ── cycle policy ──────────────────────────────────────────────────────────
-
     /**
-     * LOCALMIN must produce ≤ total add bytes vs CONSTANT on a reverse-block workload.
-     * Both must produce correct output; localmin optimises which copy is broken per cycle.
+     * On blocks in reverse order, LOCALMIN adds no more literal bytes than CONSTANT.
      */
     static void testLocalminPicksSmallest() {
         List<byte[]> blocks = makeBlocks();
@@ -652,8 +626,6 @@ public class TestDelta {
             "localmin (" + addLmin + ") should produce <= add bytes as constant (" + addConst + ")");
     }
 
-    // ── checkpointing ─────────────────────────────────────────────────────────
-
     /** A table of only 7 entries forces heavy checkpointing; output must still be correct. */
     static void testCorrectingCheckpointingTinyTable() {
         byte[] r = repeat(b("ABCDEFGHIJKLMNOP"), 20);  // 320 bytes
@@ -674,7 +646,7 @@ public class TestDelta {
     static void testCorrectingCheckpointingVariousSizes() {
         byte[] r = new byte[2000];
         for (int i = 0; i < 2000; i++) r[i] = (byte) (i & 0xFF);
-        // v = r[0..500] + 0xFF×50 + r[500..], length 2050
+        // v = r[0..500] + fifty 0xFF bytes + r[500..]
         byte[] v = new byte[2050];
         System.arraycopy(r, 0, v, 0, 500);
         Arrays.fill(v, 500, 550, (byte) 0xFF);
@@ -689,18 +661,14 @@ public class TestDelta {
         }
     }
 
-    // ── primality ─────────────────────────────────────────────────────────────
-
     static void testNextPrimeIsPrime() {
         assertTrue(Hash.isPrime(TABLE_SIZE), "TABLE_SIZE should be prime");
         assertTrue(Hash.isPrime(Hash.nextPrime(1048574L)), "nextPrime(1048574) should be prime");
         assertEquals(1048573L, Hash.nextPrime(1048573L), "nextPrime of a prime is itself");
     }
 
-    // ── inplace subcommand path ───────────────────────────────────────────────
-
     /**
-     * encode standard → inplace subcommand → decode → applyDeltaInplace produces V.
+     * A delta converted by the inplace subcommand applies in place to give V.
      */
     static void testInplaceSubcommandRoundtrip() {
         byte[][] rs = {b("ABCDEF"), b("AAABBBCCC"), b("the quick brown fox"),
@@ -721,8 +689,8 @@ public class TestDelta {
     }
 
     /**
-     * If the input to the inplace subcommand is already an inplace delta, it is
-     * detected (is_ip = true) and passed through unchanged.
+     * An in-place delta decodes with the in-place flag set, which is how the
+     * subcommand knows to pass it through.
      */
     static void testInplaceSubcommandIdempotent() {
         byte[] r = b("ABCDEFGHIJ");
@@ -738,10 +706,7 @@ public class TestDelta {
             }
     }
 
-    /**
-     * Direct encode --inplace and encode-then-subcommand must produce byte-identical
-     * output (both call makeInplace on the same reference and commands).
-     */
+    /** {@code encode --inplace} and encode followed by {@code inplace} give the same bytes. */
     static void testInplaceSubcommandEquivDirect() {
         byte[][] rs = {b("ABCDEF"), b("AAABBBCCC"),
                        b("the quick brown fox"), b("ABCDEFGHIJKLMNOP")};
@@ -751,19 +716,15 @@ public class TestDelta {
             byte[] r = rs[i], v = vs[i];
             for (Algorithm algo : ALL_ALGOS)
                 for (CyclePolicy pol : ALL_POLICIES) {
-                    // Direct path: diff → makeInplace → encode(inplace=true)
                     List<Command> cmds = Diff.diff(algo, r, v, opts(2));
                     List<PlacedCommand> ipDirect = Apply.makeInplace(r, cmds, pol);
                     byte[] directBytes = Encoding.encodeDelta(ipDirect, true, v.length, ZERO_HASH, ZERO_HASH);
-                    // Subcommand path: diff → place → encode → decode → unplace → makeInplace → encode
                     byte[] subBytes = viaInplaceSubcommand(algo, r, v, pol, 2);
                     assertArrayEquals(directBytes, subBytes,
                         algo + "/" + pol + " subcommand vs direct case " + i);
                 }
         }
     }
-
-    // ── splay tree ────────────────────────────────────────────────────────────
 
     /** --splay must produce correct output for all three algorithms. */
     static void testSplayRoundtrip() {
@@ -776,8 +737,6 @@ public class TestDelta {
             assertArrayEquals(v, Apply.applyDelta(r, cmds), algo + " splay roundtrip");
         }
     }
-
-    // ── edge cases and boundaries ─────────────────────────────────────────────
 
     static void testSingleByte() {
         byte[] one    = {0x41};
@@ -822,7 +781,7 @@ public class TestDelta {
         }
     }
 
-    /** Sizes at 0, 1, p±1, and byte-width transitions; catches loop-bound off-by-ones. */
+    /** Sizes at 0, 1, p-1, p+1 and powers of two, where loop bounds are off by one if anywhere. */
     static void testSizeSweep() {
         int p = 4;
         int[] sizes = {0, 1, 2, 3, p-1, p, p+1, 2*p-1, 2*p, 2*p+1,
@@ -852,7 +811,7 @@ public class TestDelta {
         }
     }
 
-    /** version_size at byte-sign-extension boundaries (128, 256, 32768, 65536, …). */
+    /** version_size at byte-sign-extension boundaries (128, 256, 32768, 65536, ...). */
     static void testEncodingVersionSizeBoundaries() {
         int[] sizes = {
             0, 1, 127, 128, 255, 256, 257,
@@ -962,8 +921,8 @@ public class TestDelta {
         byte[] r = new byte[64];
         for (int i = 0; i < 64; i++) r[i] = (byte) i;
 
-        byte[] vCopy = {r[32]};           // byte that appears in R → copy
-        byte[] vAdd  = {(byte) 0xAB};     // byte not in R (0xAB = 171 > 63) → add
+        byte[] vCopy = {r[32]};           // in R, so a copy
+        byte[] vAdd  = {(byte) 0xAB};     // not in R, so an add
 
         for (Algorithm algo : ALL_ALGOS)
             for (CyclePolicy pol : ALL_POLICIES) {
@@ -1006,9 +965,6 @@ public class TestDelta {
         }
     }
 
-    // ── main ──────────────────────────────────────────────────────────────────
-
-    // ── CRC-64/XZ check values ────────────────────────────────────────────────
 
     static void testCrc64Empty() {
         // CRC-64/XZ of empty input = 0x0000000000000000.
@@ -1018,8 +974,7 @@ public class TestDelta {
     static void testCrc64CheckValue() {
         // Standard check value: CRC-64/XZ of b"123456789" = 0x995DC9BBDF1939FA.
         byte[] expected = hexToBytes("995dc9bbdf1939fa");
-        byte[] input = "123456789".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
-        assertArrayEquals(expected, Hash.Crc64.hash8(input), "CRC64 check value");
+        assertArrayEquals(expected, Hash.Crc64.hash8(b("123456789")), "CRC64 check value");
     }
 
     static byte[] hexToBytes(String hex) {
@@ -1118,6 +1073,7 @@ public class TestDelta {
         check("large format: MOVE roundtrip",         TestDelta::testLargeMoveRoundtrip);
         check("large format: MOVE command byte",      TestDelta::testLargeMoveCommandByte);
         check("large format: MOVE overlap rejected",  TestDelta::testLargeMoveOverlapRejected);
+        check("large format: MOVE source overflow rejected", TestDelta::testLargeMoveSourceOverflowRejected);
         check("large format: small rejects large cmds", TestDelta::testSmallRejectsLargeCommandBytes);
         check("large format: unknown magic rejected", TestDelta::testUnknownMagicRejected);
         check("large format: encodeDelta rejects Move", TestDelta::testEncodeDeltaRejectsMove);
@@ -1132,25 +1088,21 @@ public class TestDelta {
         if (fail > 0) System.exit(1);
     }
 
-    // ── DLT\x04 large-format tests ───────────────────────────────────────────
-
-    static final byte[] ZH = new byte[DELTA_CRC_SIZE];
-
     static void testLargeHeaderMagic() {
-        byte[] d = Encoding.encodeDeltaLarge(List.of(), false, 0, ZH, ZH, false);
+        byte[] d = Encoding.encodeDeltaLarge(List.of(), false, 0, ZERO_HASH, ZERO_HASH, false);
         assertTrue(d[0] == 'D' && d[1] == 'L' && d[2] == 'T' && d[3] == 0x04,
             "large format magic must be DLT\\x04");
     }
 
     static void testLargeHeaderSize() {
-        byte[] d = Encoding.encodeDeltaLarge(List.of(), false, 0, ZH, ZH, false);
+        byte[] d = Encoding.encodeDeltaLarge(List.of(), false, 0, ZERO_HASH, ZERO_HASH, false);
         // 29-byte header + 1 byte END
         assertEquals(DELTA_HEADER_SIZE_LARGE + 1, d.length, "large header+END size");
     }
 
     static void testLargeVersionSizeU64() {
         int vsIn = 0x01020304;
-        byte[] d = Encoding.encodeDeltaLarge(List.of(), false, vsIn, ZH, ZH, false);
+        byte[] d = Encoding.encodeDeltaLarge(List.of(), false, vsIn, ZERO_HASH, ZERO_HASH, false);
         // version_size at bytes 5..12 (u64 BE)
         long stored = 0;
         for (int i = 0; i < 8; i++) stored = (stored << 8) | (d[5 + i] & 0xFF);
@@ -1158,8 +1110,8 @@ public class TestDelta {
     }
 
     static void testLargeInplaceFlag() {
-        byte[] di = Encoding.encodeDeltaLarge(List.of(), true,  0, ZH, ZH, false);
-        byte[] dn = Encoding.encodeDeltaLarge(List.of(), false, 0, ZH, ZH, false);
+        byte[] di = Encoding.encodeDeltaLarge(List.of(), true,  0, ZERO_HASH, ZERO_HASH, false);
+        byte[] dn = Encoding.encodeDeltaLarge(List.of(), false, 0, ZERO_HASH, ZERO_HASH, false);
         assertTrue((di[4] & DELTA_FLAG_INPLACE) != 0, "inplace flag set");
         assertTrue((dn[4] & DELTA_FLAG_INPLACE) == 0, "inplace flag not set");
     }
@@ -1167,7 +1119,7 @@ public class TestDelta {
     static void testLargeFormatCopyRoundtrip() {
         byte[] r = "hello".getBytes();
         List<PlacedCommand> cmds = List.of(new PlacedCopy(0, 0, r.length));
-        byte[] d = Encoding.encodeDeltaLarge(cmds, false, r.length, ZH, ZH, false);
+        byte[] d = Encoding.encodeDeltaLarge(cmds, false, r.length, ZERO_HASH, ZERO_HASH, false);
         // COPY command byte (not BIGCOPY) since fields fit in u32
         assertEquals(DELTA_CMD_COPY, d[DELTA_HEADER_SIZE_LARGE] & 0xFF, "COPY command byte");
         Encoding.DecodeResult res = Encoding.decodeDelta(d);
@@ -1179,7 +1131,7 @@ public class TestDelta {
     static void testLargeFormatAddRoundtrip() {
         byte[] payload = "world".getBytes();
         List<PlacedCommand> cmds = List.of(new PlacedAdd(0, payload));
-        byte[] d = Encoding.encodeDeltaLarge(cmds, false, payload.length, ZH, ZH, false);
+        byte[] d = Encoding.encodeDeltaLarge(cmds, false, payload.length, ZERO_HASH, ZERO_HASH, false);
         Encoding.DecodeResult res = Encoding.decodeDelta(d);
         byte[] out = new byte[(int) res.versionSize()];
         Apply.applyPlacedTo(new byte[0], res.commands(), out);
@@ -1193,7 +1145,7 @@ public class TestDelta {
             new PlacedAdd(0, hello),
             new PlacedMove(0, 5, hello.length)
         );
-        byte[] d = Encoding.encodeDeltaLarge(cmds, false, 10, ZH, ZH, false);
+        byte[] d = Encoding.encodeDeltaLarge(cmds, false, 10, ZERO_HASH, ZERO_HASH, false);
         Encoding.DecodeResult res = Encoding.decodeDelta(d);
         byte[] out = new byte[(int) res.versionSize()];
         Apply.applyPlacedTo(new byte[0], res.commands(), out);
@@ -1205,7 +1157,7 @@ public class TestDelta {
             new PlacedAdd(0, new byte[]{'x'}),
             new PlacedMove(0, 1, 1)
         );
-        byte[] d = Encoding.encodeDeltaLarge(cmds, false, 2, ZH, ZH, false);
+        byte[] d = Encoding.encodeDeltaLarge(cmds, false, 2, ZERO_HASH, ZERO_HASH, false);
         // After header(29) + ADD type(1) + ADD header(8) + data(1) = 39
         int moveOff = DELTA_HEADER_SIZE_LARGE + 1 + DELTA_ADD_HEADER + 1;
         assertEquals(DELTA_CMD_MOVE, d[moveOff] & 0xFF, "MOVE command byte");
@@ -1220,17 +1172,34 @@ public class TestDelta {
         buf[12] = 10;
         // crcs 0 (bytes 13..28)
         buf[DELTA_HEADER_SIZE_LARGE] = (byte) DELTA_CMD_MOVE;
-        // MOVE: src=5, dst=8, length=4 → src+length=9 > dst=8
-        putU32BETest(buf, DELTA_HEADER_SIZE_LARGE + 1, 5); // src
-        putU32BETest(buf, DELTA_HEADER_SIZE_LARGE + 5, 8); // dst
-        putU32BETest(buf, DELTA_HEADER_SIZE_LARGE + 9, 4); // length
+        // MOVE: src=5, dst=8, length=4, so src+length=9 > dst=8
+        putU32(buf, DELTA_HEADER_SIZE_LARGE + 1, 5); // src
+        putU32(buf, DELTA_HEADER_SIZE_LARGE + 5, 8); // dst
+        putU32(buf, DELTA_HEADER_SIZE_LARGE + 9, 4); // length
         buf[buf.length - 1] = (byte) DELTA_CMD_END;
-        try {
-            Encoding.decodeDelta(buf);
-            throw new AssertionError("expected IllegalArgumentException for overlapping MOVE");
-        } catch (IllegalArgumentException e) {
-            // expected
-        }
+        assertRejects("overlapping MOVE", () -> Encoding.decodeDelta(buf), null);
+    }
+
+    /** src + length overflows a long; the decoder must not take the wrapped sum for a small one. */
+    static void testLargeMoveSourceOverflowRejected() {
+        byte[] buf = new byte[DELTA_HEADER_SIZE_LARGE + DELTA_BIGCOPY_PAYLOAD + 2];
+        buf[0] = 'D'; buf[1] = 'L'; buf[2] = 'T'; buf[3] = 0x04;
+        buf[12] = 10; // version_size
+        int at = DELTA_HEADER_SIZE_LARGE;
+        buf[at] = (byte) DELTA_CMD_BIGMOVE;
+        // src = Long.MAX_VALUE, dst = 8, length = 2
+        buf[at + 1] = 0x7F;
+        for (int i = 2; i <= 8; i++) buf[at + i] = (byte) 0xFF;
+        buf[at + 16] = 8;
+        buf[at + 24] = 2;
+        buf[buf.length - 1] = (byte) DELTA_CMD_END;
+        assertRejects("BIGMOVE with src+length past Long.MAX_VALUE",
+            () -> Encoding.decodeDelta(buf),
+            "BIGMOVE src+length > dst: encoder ordering constraint violated");
+        assertRejects("PlacedMove with src+length past Long.MAX_VALUE",
+            () -> Apply.validatePlacedCommands(
+                List.of(new PlacedMove(Long.MAX_VALUE, 8, 2)), 0, 10, false),
+            "MOVE src+length > dst: encoder ordering constraint violated");
     }
 
     static void testSmallRejectsLargeCommandBytes() {
@@ -1242,32 +1211,19 @@ public class TestDelta {
         // crcs 0 (bytes 9..24)
         buf[DELTA_HEADER_SIZE] = (byte) DELTA_CMD_BIGCOPY; // illegal in small format
         buf[DELTA_HEADER_SIZE + 1] = (byte) DELTA_CMD_END;
-        try {
-            Encoding.decodeDelta(buf);
-            throw new AssertionError("expected IllegalArgumentException for BIGCOPY in small format");
-        } catch (IllegalArgumentException e) {
-            // expected
-        }
+        assertRejects("BIGCOPY in small format", () -> Encoding.decodeDelta(buf), null);
     }
 
     static void testUnknownMagicRejected() {
         byte[] buf = {'X', 'X', 'X', 0x03, 0, 0, 0, 0, 0};
-        try {
-            Encoding.decodeDelta(buf);
-            throw new AssertionError("expected IllegalArgumentException for unknown magic");
-        } catch (IllegalArgumentException e) {
-            // expected
-        }
+        assertRejects("unknown magic", () -> Encoding.decodeDelta(buf), null);
     }
 
     static void testEncodeDeltaRejectsMove() {
         List<PlacedCommand> cmds = List.of(new PlacedMove(0, 5, 3));
-        try {
-            Encoding.encodeDelta(cmds, false, 8, ZH, ZH);
-            throw new AssertionError("expected IllegalArgumentException for PlacedMove in encodeDelta");
-        } catch (IllegalArgumentException e) {
-            // expected
-        }
+        assertRejects("PlacedMove in encodeDelta",
+            () -> Encoding.encodeDelta(cmds, false, 8, ZERO_HASH, ZERO_HASH),
+            null);
     }
 
     static void testLargeU64OverflowRejected() {
@@ -1275,14 +1231,9 @@ public class TestDelta {
         byte[] buf = new byte[DELTA_HEADER_SIZE_LARGE + 1];
         buf[0] = 'D'; buf[1] = 'L'; buf[2] = 'T'; buf[3] = 0x04;
         buf[4] = 0;
-        buf[5] = (byte) 0x80; // version_size top bit set → negative long → rejected
+        buf[5] = (byte) 0x80; // version_size has its top bit set
         buf[DELTA_HEADER_SIZE_LARGE] = (byte) DELTA_CMD_END;
-        try {
-            Encoding.decodeDelta(buf);
-            throw new AssertionError("expected IllegalArgumentException for oversized version_size");
-        } catch (IllegalArgumentException e) {
-            // expected
-        }
+        assertRejects("oversized version_size", () -> Encoding.decodeDelta(buf), null);
     }
 
     static void testLargeAlgoRoundtripGreedy() {
@@ -1300,17 +1251,16 @@ public class TestDelta {
     static void largeAlgoRoundtrip(Algorithm algo, String name) {
         byte[] r = "the quick brown fox".getBytes();
         byte[] v = "the slow brown fox".getBytes();
-        List<Types.Command> cmds = Diff.diff(algo, r, v, opts(4));
+        List<Command> cmds = Diff.diff(algo, r, v, opts(4));
         List<PlacedCommand> placed = Apply.placeCommands(cmds);
-        byte[] d = Encoding.encodeDeltaLarge(placed, false, v.length, ZH, ZH, false);
+        byte[] d = Encoding.encodeDeltaLarge(placed, false, v.length, ZERO_HASH, ZERO_HASH, false);
         Encoding.DecodeResult res = Encoding.decodeDelta(d);
         byte[] out = new byte[(int) res.versionSize()];
         Apply.applyPlacedTo(r, res.commands(), out);
         assertArrayEquals(v, out, name + " large-format roundtrip");
     }
 
-    // helper for hand-crafted test buffers
-    static void putU32BETest(byte[] buf, int off, int val) {
+    static void putU32(byte[] buf, int off, int val) {
         buf[off]     = (byte) (val >>> 24);
         buf[off + 1] = (byte) (val >>> 16);
         buf[off + 2] = (byte) (val >>> 8);

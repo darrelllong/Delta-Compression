@@ -1,121 +1,117 @@
 package delta;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import static delta.Types.*;
 
 /**
- * Greedy algorithm (Section 3.1, Figure 2).
+ * The greedy algorithm (Section 3.1, Figure 2).
  *
- * Finds an optimal delta encoding under the simple cost measure
- * (optimality proof: Section 3.3, Theorem 1).
- * Time: O(|V| * |R|) worst case. Space: O(|R|).
+ * Indexes every seed of R, then at each position of V takes the longest
+ * match that any seed there offers.  The delta is optimal under the simple
+ * cost measure (Section 3.3, Theorem 1).  O(|V| |R|) time in the worst
+ * case, O(|R|) space.
  */
 public final class Greedy {
     private Greedy() {}
 
-    /** Run the greedy algorithm on R and V with the given options. */
+    /** A growable array of offsets into R. */
+    private static final class Offsets {
+        int[] at = new int[4];
+        int n;
+
+        void add(int offset) {
+            if (n == at.length) at = Arrays.copyOf(at, 2 * n);
+            at[n++] = offset;
+        }
+    }
+
+    /** Maps a fingerprint to the offsets in R of the seeds that have it, in increasing order. */
+    private static final class Index {
+        private final HashMap<Long, Offsets> table;
+        private final SplayTree<Offsets> tree;
+
+        Index(boolean useSplay) {
+            table = useSplay ? null : new HashMap<>();
+            tree = useSplay ? new SplayTree<>() : null;
+        }
+
+        void add(long fp, int offset) {
+            Offsets offsets = get(fp);
+            if (offsets == null) {
+                offsets = new Offsets();
+                if (tree != null) tree.insert(fp, offsets);
+                else table.put(fp, offsets);
+            }
+            offsets.add(offset);
+        }
+
+        /** Returns the offsets recorded for fp, or null. */
+        Offsets get(long fp) {
+            return tree != null ? tree.find(fp) : table.get(fp);
+        }
+    }
+
+    /** Returns commands that build v from r. */
     public static List<Command> diff(byte[] r, byte[] v, DiffOptions opts) {
         List<Command> commands = new ArrayList<>();
         if (v.length == 0) return commands;
 
         int p = opts.p;
-        boolean verbose = opts.verbose;
-        boolean useSplay = opts.useSplay;
 
-        // Step (1): build lookup structure for R keyed by full fingerprint.
-        Map<Long, List<Integer>> hrHt = useSplay ? null : new HashMap<>();
-        SplayTree<List<Integer>> hrSp = useSplay ? new SplayTree<>() : null;
-
-        if (r.length >= p) {
+        Index index = new Index(opts.useSplay);
+        int numSeeds = Diff.seedCount(r, p);
+        if (numSeeds > 0) {
             Hash.RollingHash rh = new Hash.RollingHash(r, 0, p);
-            if (useSplay) {
-                List<Integer> list = hrSp.insertOrGet(rh.value(), new ArrayList<>());
-                list.add(0);
-            } else {
-                hrHt.computeIfAbsent(rh.value(), k -> new ArrayList<>()).add(0);
-            }
-            for (int a = 1; a <= r.length - p; a++) {
-                rh.roll(r[a - 1] & 0xFF, r[a + p - 1] & 0xFF);
-                if (useSplay) {
-                    List<Integer> list = hrSp.insertOrGet(rh.value(), new ArrayList<>());
-                    list.add(a);
-                } else {
-                    hrHt.computeIfAbsent(rh.value(), k -> new ArrayList<>()).add(a);
-                }
+            for (int a = 0; a < numSeeds; a++) {
+                index.add(rh.seek(a), a);
             }
         }
 
-        if (verbose) {
+        if (opts.verbose) {
             System.err.printf("greedy: %s, |R|=%d, |V|=%d, seed_len=%d%n",
-                useSplay ? "splay tree" : "hash table", r.length, v.length, p);
+                opts.useSplay ? "splay tree" : "hash table", r.length, v.length, p);
         }
 
-        // Step (2): initialize scan pointers
-        int vC = 0, vS = 0;
-
+        int vC = 0; // scan position in V
+        int vS = 0; // start of the bytes of V not yet encoded
         Hash.RollingHash rhV = v.length >= p ? new Hash.RollingHash(v, 0, p) : null;
-        int rhVPos = 0;
 
         while (vC + p <= v.length) {
-            // Step (3): check for end of V; compute fingerprint
-            long fpV;
-            if (rhV == null) break;
-            if (vC == rhVPos) {
-                fpV = rhV.value();
-            } else if (vC == rhVPos + 1) {
-                rhV.roll(v[vC - 1] & 0xFF, v[vC + p - 1] & 0xFF);
-                rhVPos = vC;
-                fpV = rhV.value();
-            } else {
-                rhV = new Hash.RollingHash(v, vC, p);
-                rhVPos = vC;
-                fpV = rhV.value();
-            }
-
-            // Steps (4)+(5): find the longest matching substring
-            int bestRm = -1;
+            // The first of the longest matches wins, so ties go to the lowest offset in R.
+            int bestOffset = -1;
             int bestLen = 0;
-
-            List<Integer> offsets = useSplay ? hrSp.find(fpV) : hrHt.get(fpV);
-            if (offsets != null) {
-                for (int rCand : offsets) {
-                    if (!Diff.arrayEquals(r, rCand, v, vC, p)) continue;
-                    int ml = p;
-                    while (vC + ml < v.length && rCand + ml < r.length
-                           && v[vC + ml] == r[rCand + ml]) {
-                        ml++;
-                    }
-                    if (ml > bestLen) {
-                        bestLen = ml;
-                        bestRm = rCand;
+            Offsets candidates = index.get(rhV.seek(vC));
+            if (candidates != null) {
+                for (int i = 0; i < candidates.n; i++) {
+                    int rOff = candidates.at[i];
+                    // Equal fingerprints do not imply equal seeds.
+                    if (!Diff.seedsEqual(r, rOff, v, vC, p)) continue;
+                    int len = p + Diff.matchLength(v, vC + p, r, rOff + p);
+                    if (len > bestLen) {
+                        bestLen = len;
+                        bestOffset = rOff;
                     }
                 }
             }
 
-            if (bestLen < p) { vC++; continue; }
-
-            // Step (6): encode
-            if (vS < vC) {
-                commands.add(new AddCmd(Diff.copyRange(v, vS, vC)));
+            if (bestLen < p) {
+                vC++;
+                continue;
             }
-            commands.add(new CopyCmd(bestRm, bestLen));
-            vS = vC + bestLen;
 
-            // Step (7): advance past matched region
+            if (vS < vC) commands.add(Diff.literal(v, vS, vC));
+            commands.add(new CopyCmd(bestOffset, bestLen));
             vC += bestLen;
+            vS = vC;
         }
 
-        // Step (8): trailing add
-        if (vS < v.length) {
-            commands.add(new AddCmd(Diff.copyRange(v, vS, v.length)));
-        }
+        if (vS < v.length) commands.add(Diff.literal(v, vS, v.length));
 
-        if (verbose) Diff.printStats(commands);
+        if (opts.verbose) Diff.printStats(commands);
         return commands;
     }
-
 }

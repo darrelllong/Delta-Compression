@@ -10,38 +10,32 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * Jazzer fuzz target: encode→decode→apply round-trip.
+ * Jazzer target: a greedy diff, encoded, decoded and applied, must give back
+ * the version.
  *
- * Input layout: [split_byte | reference... | version...]
- *   split index = 1 + (split_byte * (len-1)) / 256
+ * The first input byte b splits the rest into reference and version at
+ * index 1 + b * (length - 1) / 256.  Inputs over 4 KiB are skipped, since
+ * greedy is quadratic.
  *
- * Inputs are capped at 4 KiB (diffGreedy is O(|ref|×|ver|)).
- *
- * Invariants:
- *   1. decodeDelta must not throw on our own encoder output.
- *   2. Reconstructed output must equal the original version bytes.
- *
- * Run:
+ * <pre>
  *   fuzz/jazzer --target_class=fuzz.FuzzRoundtrip --cp=out/ --instrumentation_includes=delta.** \
  *       --reproducer_path=fuzz/findings/ -max_total_time=300
+ * </pre>
  */
 public class FuzzRoundtrip {
     public static void fuzzerTestOneInput(byte[] data) {
         if (data.length < 2 || data.length > 4096) return;
 
         int split = 1 + ((data[0] & 0xFF) * (data.length - 1)) / 256;
-        if (split > data.length) split = data.length;
         byte[] ref = Arrays.copyOfRange(data, 1, split);
         byte[] ver = Arrays.copyOfRange(data, split, data.length);
 
-        // Encode
         List<Command> cmds = Diff.diff(Algorithm.GREEDY, ref, ver, new DiffOptions());
         List<PlacedCommand> placed = Apply.placeCommands(cmds);
         byte[] srcCrc = Hash.Crc64.hash8(ref);
         byte[] dstCrc = Hash.Crc64.hash8(ver);
         byte[] encoded = Encoding.encodeDeltaLarge(placed, false, ver.length, srcCrc, dstCrc, false);
 
-        // Decode — must not fail on our own output
         Encoding.DecodeResult result;
         try {
             result = Encoding.decodeDelta(encoded);
@@ -56,7 +50,6 @@ public class FuzzRoundtrip {
         if (result.versionSize() != ver.length)
             throw new AssertionError("version_size did not round-trip");
 
-        // Apply
         byte[] out = new byte[(int) result.versionSize()];
         Apply.applyPlacedTo(ref, result.commands(), out);
         if (!Arrays.equals(out, ver))
