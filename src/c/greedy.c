@@ -1,156 +1,129 @@
-// greedy.c — Greedy differencing algorithm (Section 3.1, Figure 2)
-//
-// Optimal O(n^2) algorithm: fingerprint every position in R, then scan V
-// and find the longest match at each position.
+// The greedy algorithm (Section 3.1, Figure 2): index every seed of R, then
+// at each position of V take the longest match that any seed with the same
+// fingerprint begins.  Optimal, and quadratic in the worst case.
 
-#include "delta.h"
+#include "internal.h"
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#define NIL SIZE_MAX
 
-// ── Chained hash table for greedy: maps fingerprint -> list of offsets ──
+// The index chains the offsets in R whose seeds share a hash bucket, or, in
+// the splay tree, a fingerprint.  Chains run in increasing offset, so among
+// matches of equal length the scan takes the earliest in R.
+typedef struct {
+	uint64_t fp;   // fingerprint of the seed at this offset
+	size_t   next; // the offset after this one in its chain, or NIL
+} seed_t;
 
-typedef struct greedy_entry {
-	uint64_t fp;
-	size_t offset;
-	struct greedy_entry *next;
-} greedy_entry_t;
+// The ends of one fingerprint's chain.
+typedef struct {
+	size_t head;
+	size_t tail;
+} chain_t;
 
 typedef struct {
-	greedy_entry_t **buckets;
-	greedy_entry_t **tails;   /* tail pointers for O(1) append */
-	size_t nbuckets;
-} greedy_htable_t;
+	seed_t *seed;  // indexed by offset in R
+	size_t *head;  // hash table: first offset of each bucket's chain
+	size_t *tail;  //             and last
+	size_t  nbuckets;
+	delta_splay_t tree; // splay tree: fingerprint -> chain_t
+	bool    use_splay;
+} seed_index_t;
 
 static void
-ght_init(greedy_htable_t *ht, size_t nbuckets)
+index_append(seed_index_t *ix, uint64_t fp, size_t a)
 {
-	ht->nbuckets = nbuckets;
-	ht->buckets = delta_calloc(nbuckets, sizeof(*ht->buckets));
-	ht->tails   = delta_calloc(nbuckets, sizeof(*ht->tails));
-}
+	size_t *tail;
 
-/* Append so chains are traversed in insertion (ascending-offset) order,
- * matching the oldest-first traversal used by Rust/C++/Go/JVM impls. */
-static void
-ght_insert(greedy_htable_t *ht, uint64_t fp, size_t offset)
-{
-	size_t idx = (size_t)(fp % (uint64_t)ht->nbuckets);
-	greedy_entry_t *e = delta_malloc(sizeof(*e));
-	if (!e) { return; }
-	e->fp = fp;
-	e->offset = offset;
-	e->next = NULL;
-	if (ht->tails[idx]) {
-		ht->tails[idx]->next = e;
+	ix->seed[a].fp = fp;
+	ix->seed[a].next = NIL;
+	if (ix->use_splay) {
+		chain_t fresh = { a, NIL };
+		chain_t *c = delta_splay_insert_or_get(&ix->tree, fp, &fresh);
+		tail = &c->tail;
 	} else {
-		ht->buckets[idx] = e;
+		size_t b = fp % ix->nbuckets;
+		if (ix->tail[b] == NIL) {
+			ix->head[b] = a;
+		}
+		tail = &ix->tail[b];
 	}
-	ht->tails[idx] = e;
+	if (*tail != NIL) {
+		ix->seed[*tail].next = a;
+	}
+	*tail = a;
 }
 
 static void
-ght_free(greedy_htable_t *ht)
+index_build(seed_index_t *ix, const uint8_t *r, size_t num_seeds, size_t p,
+            bool use_splay)
 {
-	size_t i;
-	for (i = 0; i < ht->nbuckets; i++) {
-		greedy_entry_t *e = ht->buckets[i];
-		while (e) {
-			greedy_entry_t *next = e->next;
-			free(e);
-			e = next;
+	ix->use_splay = use_splay;
+	ix->seed = delta_malloc(num_seeds * sizeof(*ix->seed));
+	ix->head = ix->tail = NULL;
+	if (use_splay) {
+		delta_splay_init(&ix->tree, sizeof(chain_t));
+	} else {
+		ix->nbuckets = delta_next_prime(num_seeds / p + 1);
+		ix->head = delta_malloc(ix->nbuckets * sizeof(*ix->head));
+		ix->tail = delta_malloc(ix->nbuckets * sizeof(*ix->tail));
+		for (size_t b = 0; b < ix->nbuckets; b++) {
+			ix->head[b] = ix->tail[b] = NIL;
 		}
 	}
-	free(ht->buckets);
-	free(ht->tails);
-}
 
-// ── Splay tree value for greedy: dynamic array of offsets ────────────
-
-typedef struct {
-	size_t *offsets;
-	size_t len;
-	size_t cap;
-} offset_vec_t;
-
-static void
-ov_free(void *value)
-{
-	offset_vec_t *ov = value;
-	free(ov->offsets);
-}
-
-static void
-ov_push(offset_vec_t *ov, size_t offset)
-{
-	if (ov->len == ov->cap) {
-		ov->cap = ov->cap ? ov->cap * 2 : 4;
-		ov->offsets = delta_realloc(ov->offsets, ov->cap * sizeof(*ov->offsets));
+	if (num_seeds == 0) {
+		return;
 	}
-	ov->offsets[ov->len++] = offset;
+	delta_rolling_hash_t h;
+	delta_rh_init(&h, r, 0, p);
+	for (size_t a = 0; a < num_seeds; a++) {
+		if (a > 0) {
+			delta_rh_roll(&h, r[a - 1], r[a + p - 1]);
+		}
+		index_append(ix, h.value, a);
+	}
 }
 
-// ── Greedy algorithm ──────────────────────────────────────────────────
+// index_chain returns the first offset of the chain that holds every seed
+// with fingerprint fp.  The chain may hold other fingerprints too.
+static size_t
+index_chain(seed_index_t *ix, uint64_t fp)
+{
+	if (ix->use_splay) {
+		chain_t *c = delta_splay_find(&ix->tree, fp);
+		return c ? c->head : NIL;
+	}
+	return ix->head[fp % ix->nbuckets];
+}
+
+static void
+index_free(seed_index_t *ix)
+{
+	if (ix->use_splay) {
+		delta_splay_free(&ix->tree);
+	}
+	free(ix->seed);
+	free(ix->head);
+	free(ix->tail);
+}
 
 delta_commands_t
 delta_diff_greedy(const uint8_t *r, size_t r_len,
                   const uint8_t *v, size_t v_len,
                   const delta_diff_options_t *opts)
 {
-	delta_commands_t commands;
-	greedy_htable_t ht = {NULL, NULL, 0};
-	delta_splay_t splay;
-	delta_rolling_hash_t rh_r, rh_v;
-	int rh_v_valid = 0;
-	size_t rh_v_pos = 0;
-	size_t v_c, v_s;
-	size_t num_seeds;
-
 	size_t p = opts->p;
 	bool verbose = delta_flag_get(opts->flags, DELTA_OPT_VERBOSE);
 	bool use_splay = delta_flag_get(opts->flags, DELTA_OPT_SPLAY);
 
+	delta_commands_t commands;
 	delta_commands_init(&commands);
-	if (v_len == 0) { return commands; }
-
-	num_seeds = (r_len >= p) ? (r_len - p + 1) : 0;
-
-	// Step (1): Build lookup structure for R
-	if (use_splay) {
-		delta_splay_init(&splay, sizeof(offset_vec_t));
-		splay.value_free = ov_free;
-		if (num_seeds > 0) {
-			size_t a;
-			offset_vec_t empty = {NULL, 0, 0};
-			delta_rh_init(&rh_r, r, 0, p);
-			{
-				offset_vec_t *val = delta_splay_insert_or_get(
-					&splay, rh_r.value, &empty);
-				ov_push(val, 0);
-			}
-			for (a = 1; a < num_seeds; a++) {
-				offset_vec_t *val;
-				delta_rh_roll(&rh_r, r[a - 1], r[a + p - 1]);
-				empty = (offset_vec_t){NULL, 0, 0};
-				val = delta_splay_insert_or_get(
-					&splay, rh_r.value, &empty);
-				ov_push(val, a);
-			}
-		}
-	} else {
-		size_t nbuckets = num_seeds > 0 ? delta_next_prime(num_seeds / p + 1) : 17;
-		ght_init(&ht, nbuckets);
-		if (num_seeds > 0) {
-			size_t a;
-			delta_rh_init(&rh_r, r, 0, p);
-			ght_insert(&ht, rh_r.value, 0);
-			for (a = 1; a < num_seeds; a++) {
-				delta_rh_roll(&rh_r, r[a - 1], r[a + p - 1]);
-				ght_insert(&ht, rh_r.value, a);
-			}
-		}
+	if (v_len == 0) {
+		return commands;
 	}
+
+	seed_index_t ix;
+	index_build(&ix, r, delta_num_seeds(r_len, p), p, use_splay);
 
 	if (verbose) {
 		fprintf(stderr, "greedy: %s, |R|=%zu, |V|=%zu, seed_len=%zu\n",
@@ -158,116 +131,45 @@ delta_diff_greedy(const uint8_t *r, size_t r_len,
 		        r_len, v_len, p);
 	}
 
-	// Step (2): initialize scan pointers
-	v_c = 0;
-	v_s = 0;
-
-	if (v_len >= p) {
-		delta_rh_init(&rh_v, v, 0, p);
-		rh_v_valid = 1;
-		rh_v_pos = 0;
-	}
+	// v_c is the scan position; V before v_s is already encoded.
+	size_t v_c = 0, v_s = 0;
+	seed_hash_t h = {0};
 
 	while (v_c + p <= v_len) {
-		uint64_t fp_v;
-		size_t best_len = 0, best_rm = 0;
+		uint64_t fp = seed_hash_at(&h, v, v_c, p);
+		size_t best_len = 0, best_off = 0;
 
-		// Compute V fingerprint at v_c
-		fp_v = delta_rh_advance(&rh_v, &rh_v_valid, &rh_v_pos,
-		                        v, v_c, p);
-
-		// Steps (4)+(5): find longest match
-		if (use_splay) {
-			offset_vec_t *val = delta_splay_find(&splay, fp_v);
-			if (val) {
-				size_t k;
-				for (k = 0; k < val->len; k++) {
-					size_t r_cand = val->offsets[k];
-					size_t ml;
-					if (memcmp(&r[r_cand], &v[v_c], p) != 0) {
-						continue;
-					}
-					ml = p;
-					while (v_c + ml < v_len &&
-					       r_cand + ml < r_len &&
-					       v[v_c + ml] == r[r_cand + ml]) {
-						ml++;
-					}
-					if (ml > best_len) {
-						best_len = ml;
-						best_rm = r_cand;
-					}
-				}
+		for (size_t a = index_chain(&ix, fp); a != NIL;
+		     a = ix.seed[a].next) {
+			if (ix.seed[a].fp != fp ||
+			    memcmp(&r[a], &v[v_c], p) != 0) {
+				continue;
 			}
-		} else {
-			size_t idx = (size_t)(fp_v % (uint64_t)ht.nbuckets);
-			greedy_entry_t *e;
-			for (e = ht.buckets[idx]; e; e = e->next) {
-				size_t ml;
-				if (e->fp != fp_v) { continue; }
-				if (memcmp(&r[e->offset], &v[v_c], p) != 0) {
-					continue;
-				}
-				ml = p;
-				while (v_c + ml < v_len &&
-				       e->offset + ml < r_len &&
-				       v[v_c + ml] == r[e->offset + ml]) {
-					ml++;
-				}
-				if (ml > best_len) {
-					best_len = ml;
-					best_rm = e->offset;
-				}
+			size_t len = delta_extend(r, r_len, a, v, v_len, v_c, p);
+			if (len > best_len) {
+				best_len = len;
+				best_off = a;
 			}
 		}
-
-		if (best_len < p) {
+		if (best_len == 0) {
 			v_c++;
 			continue;
 		}
 
-		// Step (6): encode
 		if (v_s < v_c) {
-			delta_command_t cmd;
-			cmd.tag = CMD_ADD;
-			cmd.add.length = v_c - v_s;
-			cmd.add.data = delta_malloc(cmd.add.length);
-			memcpy(cmd.add.data, &v[v_s], cmd.add.length);
-			delta_commands_push(&commands, cmd);
+			delta_push_add(&commands, &v[v_s], v_c - v_s);
 		}
-		{
-			delta_command_t cmd;
-			cmd.tag = CMD_COPY;
-			cmd.copy.offset = best_rm;
-			cmd.copy.length = best_len;
-			delta_commands_push(&commands, cmd);
-		}
-		v_s = v_c + best_len;
-
-		// Step (7): advance past matched region
+		delta_push_copy(&commands, best_off, best_len);
 		v_c += best_len;
+		v_s = v_c;
 	}
-
-	// Step (8): trailing add
 	if (v_s < v_len) {
-		delta_command_t cmd;
-		cmd.tag = CMD_ADD;
-		cmd.add.length = v_len - v_s;
-		cmd.add.data = delta_malloc(cmd.add.length);
-		memcpy(cmd.add.data, &v[v_s], cmd.add.length);
-		delta_commands_push(&commands, cmd);
+		delta_push_add(&commands, &v[v_s], v_len - v_s);
 	}
 
 	if (verbose) {
 		delta_print_command_stats(&commands);
 	}
-
-	// Cleanup
-	if (use_splay) {
-		delta_splay_free(&splay);
-	} else {
-		ght_free(&ht);
-	}
-
+	index_free(&ix);
 	return commands;
 }

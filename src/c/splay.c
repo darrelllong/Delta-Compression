@@ -1,23 +1,11 @@
-// splay.c — Tarjan-Sleator splay tree keyed on uint64_t fingerprints
-//
-// Self-adjusting binary search tree: every access splays the accessed
-// node to the root via zig/zig-zig/zig-zag rotations.  Amortized
-// O(log n) per operation.
-//
-// Reference: Sleator & Tarjan, "Self-Adjusting Binary Search Trees",
-// JACM 32(3), 1985.
-//
-// Values are fixed-size, stored inline via flexible array member.
+// Top-down splay tree (Sleator and Tarjan, JACM 32(3), 1985, Section 4).
+// Every access brings the key it sought, or a neighbour of it, to the root,
+// in O(log n) amortised time.
 
-#include "delta.h"
-
-#include <stdlib.h>
-#include <string.h>
-
-// ── Node allocation ───────────────────────────────────────────────────
+#include "internal.h"
 
 static delta_splay_node_t *
-node_alloc(uint64_t key, const void *value, size_t value_size)
+node_new(uint64_t key, const void *value, size_t value_size)
 {
 	delta_splay_node_t *n = delta_malloc(sizeof(*n) + value_size);
 	n->key = key;
@@ -27,62 +15,87 @@ node_alloc(uint64_t key, const void *value, size_t value_size)
 	return n;
 }
 
-// ── Top-down splay (Sleator & Tarjan 1985) ────────────────────────────
-
+// splay brings the node with the given key to the root; if there is none, the
+// last node on the search path.  The tree must not be empty.
+//
+// The nodes passed on the way down are hung on two trees, l of keys less than
+// the key sought and r of keys greater, which grow at their inner edges.
+// header's right and left fields are the roots of l and r.
 static void
 splay(delta_splay_t *t, uint64_t key)
 {
-	delta_splay_node_t header, *l, *r, *tp, *y;
-
-	if (!t->root) { return; }
-
-	memset(&header, 0, sizeof(header));
-	l = r = &header;
-	tp = t->root;
+	delta_splay_node_t header = { .left = NULL, .right = NULL };
+	delta_splay_node_t *l = &header, *r = &header;
+	delta_splay_node_t *x = t->root;
 
 	for (;;) {
-		if (key < tp->key) {
-			if (!tp->left) { break; }
-			if (key < tp->left->key) {
-				// Zig-zig: rotate right
-				y = tp->left;
-				tp->left = y->right;
-				y->right = tp;
-				tp = y;
-				if (!tp->left) { break; }
+		if (key < x->key) {
+			if (!x->left) {
+				break;
 			}
-			// Link right
-			r->left = tp;
-			r = tp;
-			tp = tp->left;
-		} else if (key > tp->key) {
-			if (!tp->right) { break; }
-			if (key > tp->right->key) {
-				// Zig-zig: rotate left
-				y = tp->right;
-				tp->right = y->left;
-				y->left = tp;
-				tp = y;
-				if (!tp->right) { break; }
+			if (key < x->left->key) {
+				delta_splay_node_t *y = x->left; // rotate right
+				x->left = y->right;
+				y->right = x;
+				x = y;
+				if (!x->left) {
+					break;
+				}
 			}
-			// Link left
-			l->right = tp;
-			l = tp;
-			tp = tp->right;
+			r->left = x;
+			r = x;
+			x = x->left;
+		} else if (key > x->key) {
+			if (!x->right) {
+				break;
+			}
+			if (key > x->right->key) {
+				delta_splay_node_t *y = x->right; // rotate left
+				x->right = y->left;
+				y->left = x;
+				x = y;
+				if (!x->right) {
+					break;
+				}
+			}
+			l->right = x;
+			l = x;
+			x = x->right;
 		} else {
 			break;
 		}
 	}
 
-	// Assemble
-	l->right = tp->left;
-	r->left = tp->right;
-	tp->left = header.right;
-	tp->right = header.left;
-	t->root = tp;
+	l->right = x->left;
+	r->left = x->right;
+	x->left = header.right;
+	x->right = header.left;
+	t->root = x;
 }
 
-// ── Public API ────────────────────────────────────────────────────────
+// insert_at_root adds a key that is not in the tree, which has just been
+// splayed about that key: the root is the key's neighbour.
+static void *
+insert_at_root(delta_splay_t *t, uint64_t key, const void *value)
+{
+	delta_splay_node_t *n = node_new(key, value, t->value_size);
+	delta_splay_node_t *root = t->root;
+
+	if (root) {
+		if (key < root->key) {
+			n->left = root->left;
+			n->right = root;
+			root->left = NULL;
+		} else {
+			n->right = root->right;
+			n->left = root;
+			root->right = NULL;
+		}
+	}
+	t->root = n;
+	t->size++;
+	return n->value;
+}
 
 void
 delta_splay_init(delta_splay_t *t, size_t value_size)
@@ -96,89 +109,61 @@ delta_splay_init(delta_splay_t *t, size_t value_size)
 void *
 delta_splay_find(delta_splay_t *t, uint64_t key)
 {
-	if (!t->root) { return NULL; }
+	if (!t->root) {
+		return NULL;
+	}
 	splay(t, key);
-	return (t->root->key == key) ? t->root->value : NULL;
+	return t->root->key == key ? t->root->value : NULL;
 }
 
 void *
 delta_splay_insert_or_get(delta_splay_t *t, uint64_t key, const void *value)
 {
-	delta_splay_node_t *n;
-
-	if (!t->root) {
-		t->root = node_alloc(key, value, t->value_size);
-		t->size++;
-		return t->root->value;
+	if (t->root) {
+		splay(t, key);
+		if (t->root->key == key) {
+			return t->root->value;
+		}
 	}
-
-	splay(t, key);
-	if (t->root->key == key) {
-		return t->root->value;  // retain existing
-	}
-
-	n = node_alloc(key, value, t->value_size);
-	t->size++;
-	if (key < t->root->key) {
-		n->left = t->root->left;
-		n->right = t->root;
-		t->root->left = NULL;
-	} else {
-		n->right = t->root->right;
-		n->left = t->root;
-		t->root->right = NULL;
-	}
-	t->root = n;
-	return t->root->value;
+	return insert_at_root(t, key, value);
 }
 
 void
 delta_splay_insert(delta_splay_t *t, uint64_t key, const void *value)
 {
-	delta_splay_node_t *n;
-
-	if (!t->root) {
-		t->root = node_alloc(key, value, t->value_size);
-		t->size++;
-		return;
+	if (t->root) {
+		splay(t, key);
+		if (t->root->key == key) {
+			memcpy(t->root->value, value, t->value_size);
+			return;
+		}
 	}
-
-	splay(t, key);
-	if (t->root->key == key) {
-		memcpy(t->root->value, value, t->value_size);
-		return;
-	}
-
-	n = node_alloc(key, value, t->value_size);
-	t->size++;
-	if (key < t->root->key) {
-		n->left = t->root->left;
-		n->right = t->root;
-		t->root->left = NULL;
-	} else {
-		n->right = t->root->right;
-		n->left = t->root;
-		t->root->right = NULL;
-	}
-	t->root = n;
+	insert_at_root(t, key, value);
 }
 
-static void
-destroy(delta_splay_node_t *n, void (*value_free)(void *))
-{
-	if (!n) { return; }
-	destroy(n->left, value_free);
-	destroy(n->right, value_free);
-	if (value_free) {
-		value_free(n->value);
-	}
-	free(n);
-}
-
+// A splay tree can be a path as long as the tree is large, so this must not
+// recurse.  It rotates left children up until the root has none, then frees
+// the root and continues with its right subtree.
 void
 delta_splay_clear(delta_splay_t *t)
 {
-	destroy(t->root, t->value_free);
+	delta_splay_node_t *n = t->root;
+
+	while (n) {
+		delta_splay_node_t *l = n->left;
+		if (l) {
+			n->left = l->right;
+			l->right = n;
+			n = l;
+			continue;
+		}
+		delta_splay_node_t *next = n->right;
+		if (t->value_free) {
+			t->value_free(n->value);
+		}
+		free(n);
+		n = next;
+	}
 	t->root = NULL;
 	t->size = 0;
 }
