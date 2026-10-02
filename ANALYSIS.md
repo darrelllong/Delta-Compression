@@ -421,81 +421,75 @@ xychart-beta
 Shakespeare's complete works (~5.4 MB ref, 5% byte mutations as version),
 measured with `tests/bench_all.sh` (pilot-bench, `quick` preset, 95%
 confidence). Metric: MiB/s (reference file size ÷ elapsed encode time,
-including process start-up). The CI width columns are the full width of the
-95% confidence interval; tables before 2026-09-28 printed the same number as
-`±CI`.
+including process start-up). The mean is the harmonic mean, the total work
+over the total time; the CI width is the full width of the 95% confidence
+interval, found from the reciprocals of the readings, and is not symmetric
+about the mean.
 
-- **M4 (Dyson), M1 Max (Wigner), i5-8259U (DMZ):** March 2026, Pilot before
-  `f01eec4`, with the code and implementations of that time. The interval is
-  given for Dyson only. These means are arithmetic means of the rates Pilot
-  read, which Pilot before `475063f` used for every performance index; the
-  arithmetic mean of rates is never less than the harmonic mean, and so
-  overstates the rate.
-- **Cortex-X925 (baase):** 2026-09-28, NVIDIA GB10, Ubuntu 24.04, Pilot
-  `475063f`, code at `1b38241`. The mean is the harmonic mean, the total work
-  over the total time, and the interval, found from the reciprocals of the
-  readings, is not symmetric about it. Rust, C and C++ ran pinned to one
-  Cortex-X925 core, Java and Go to the ten Cortex-X925 cores. Raw output and
-  toolchains are in [bench/2026-09-28-baase](bench/2026-09-28-baase/README.md).
+All four columns were measured on 2026-10-02 with Pilot `a6e6e77` and the
+code at `a10ab04`, the same input files on each machine. On baase Rust, C
+and C++ ran pinned to one Cortex-X925 core and Java and Go to the ten
+Cortex-X925 cores; on dmz, to CPU 2 and to all eight; the Macs are not
+pinned. dmz was idle. baase had its resident vLLM/Ray service, serving
+nothing, on about a fifth of a core. wigner and dyson were desktops in use,
+with Spotlight indexing on both and mail on dyson, which had a load average
+near 7: ten of its fifteen sessions needed more than the minimum 30 rounds
+to reach the interval, and its intervals are the widest. Raw output,
+toolchains and the script are in
+[bench/2026-10-02-four-machines](bench/2026-10-02-four-machines/README.md).
 
 **onepass**
 
-| Language | M4 (Dyson) | CI width (95%) | M1 Max (Wigner) | i5-8259U (DMZ) | Cortex-X925 (baase) | CI width (95%) |
-|----------|----------:|----------:|----------------:|---------------:|----------------:|----------:|
-| Rust | 49.33 | 4.75 | 42.53 | 17.66 | 33.28 | 0.3692 |
-| Go | 44.49 | 4.14 | 32.30 | 11.97 | 27.46 | 0.6513 |
-| C | 34.19 | 2.18 | 25.17 | 15.23 | 26.49 | 0.1313 |
-| C++ | 30.87 | 2.21 | 23.47 | 15.14 | 27.61 | 0.2038 |
-| Java | 25.35 | 0.93 | 18.33 | 10.39 | 19.16 | 0.6099 |
+| Language | M4 Pro (dyson) | CI width | M1 Max (wigner) | CI width | i5-8259U (dmz) | CI width | Cortex-X925 (baase) | CI width |
+|----------|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|
+| Go | 55.76 | 1.913 | 39.89 | 0.6746 | 13.54 | 0.1731 | 27.5 | 1.389 |
+| Rust | 52.08 | 1.318 | 46.08 | 0.7897 | 16.88 | 0.2091 | 33.01 | 0.7002 |
+| C | 44.46 | 0.5101 | 39.12 | 0.6372 | 15.89 | 0.6695 | 25.28 | 0.3982 |
+| C++ | 40.79 | 0.9494 | 36.6 | 0.4941 | 17.6 | 0.7083 | 31.05 | 0.06846 |
+| Java | 25.8 | 0.7844 | 20.6 | 0.3119 | 10.44 | 0.07431 | 19.28 | 0.7673 |
 
 **correcting**
 
-| Language | M4 (Dyson) | CI width (95%) | M1 Max (Wigner) | i5-8259U (DMZ) | Cortex-X925 (baase) | CI width (95%) |
-|----------|----------:|----------:|----------------:|---------------:|----------------:|----------:|
-| Rust | 54.56 | 2.13 | 42.22 | 19.71 | 37.84 | 0.3335 |
-| Go | 37.12 | 0.52 | 28.18 | 10.74 | 29.27 | 0.9807 |
-| C | 30.54 | 0.55 | 21.28 | 15.92 | 38.49 | 0.3049 |
-| C++ | 29.09 | 0.87 | 20.66 | 13.81 | 36.44 | 0.06968 |
-| Java | 23.99 | 0.46 | 18.47 | 9.80 | 21.08 | 0.6303 |
+| Language | M4 Pro (dyson) | CI width | M1 Max (wigner) | CI width | i5-8259U (dmz) | CI width | Cortex-X925 (baase) | CI width |
+|----------|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|
+| Rust | 58.66 | 0.5418 | 43.78 | 0.3789 | 17.08 | 0.1512 | 35.21 | 0.3151 |
+| C++ | 48.08 | 0.8691 | 36.25 | 0.2107 | 15.55 | 0.1459 | 37.07 | 0.2188 |
+| Go | 39.41 | 0.8778 | 29.77 | 1.143 | 13.51 | 0.1432 | 30.72 | 0.8752 |
+| C | 36.3 | 0.9065 | 27.19 | 0.3764 | 14.14 | 0.1588 | 37.69 | 1.18 |
+| Java | 25.45 | 0.7985 | 19.95 | 0.6738 | 9.286 | 0.3585 | 22.18 | 0.8498 |
 
-On the small Shakespeare workload (5.4 MB, no I/O bottleneck), the ranking
-on the M4 shifts vs. the 871 MB kernel tarball: Rust leads by a wide margin
-and Go sits second.  The M4 and M1 Max deliver similar throughput (Rust within
-~15%, others within ~20%); the i5-8259U is 2.5–3× slower on native code but
-the JVM gap narrows to ~2×.
-
-The Cortex-X925 ranks the languages differently. On onepass Rust leads
-(33.28 MiB/s), C++, Go and C follow within 5% of each other (27.61, 27.46
-and 26.49), and Java is last (19.16). On correcting C is fastest (38.49),
-ahead of Rust (37.84) and C++ (36.44), with Go (29.27) and Java (21.08)
-behind; on the M4, Rust led correcting by 47% over Go. Each Cortex-X925
-interval is under 3.4% of its mean, so these orderings are outside the
-intervals except Go against C++ on onepass. The machines, the code and
-Pilot's averaging all differ between these columns, so the differences are
-not attributable to the machine alone.
+No implementation leads everywhere. Rust leads correcting on dyson, wigner
+and dmz and onepass on wigner and baase; Go leads onepass on the M4 Pro and
+C++ on the i5-8259U; on the Cortex-X925, C and C++ lead correcting with
+Rust 7% behind. C is otherwise in the slower half. Java is last everywhere.
+The i5-8259U runs the native implementations at between a quarter and a
+half of the Apple M-series rates, and Java at between a third and a half.
+On the small Shakespeare workload the ranking shifts from the 871 MB kernel
+tarball, where the checksums and I/O of a 1.7 GB pair weigh on every
+implementation alike.
 
 ![Onepass throughput by machine, radar chart](assets/shakespeare-onepass-multimachine-radar.svg)
 
 ![Correcting throughput by machine, radar chart](assets/shakespeare-correcting-multimachine-radar.svg)
 
-The charts below are the M4 alone.
+The charts below are the M4 Pro alone.
 
 ```mermaid
 xychart-beta
-    title "Onepass throughput (MiB/s) — Shakespeare, Dyson M4, Pilot before f01eec4"
-    x-axis ["Rust", "Go", "C", "C++", "Java"]
-    y-axis "MiB/s" 0 --> 55
-    bar [49.33, 44.49, 34.19, 30.87, 25.35]
+    title "Onepass throughput (MiB/s) — Shakespeare, dyson M4 Pro, 2026-10-02"
+    x-axis ["Go", "Rust", "C", "C++", "Java"]
+    y-axis "MiB/s" 0 --> 60
+    bar [55.76, 52.08, 44.46, 40.79, 25.80]
 ```
 
 ![Onepass throughput radar chart](assets/shakespeare-onepass-throughput-radar.svg)
 
 ```mermaid
 xychart-beta
-    title "Correcting throughput (MiB/s) — Shakespeare, Dyson M4, Pilot before f01eec4"
-    x-axis ["Rust", "Go", "C", "C++", "Java"]
+    title "Correcting throughput (MiB/s) — Shakespeare, dyson M4 Pro, 2026-10-02"
+    x-axis ["Rust", "C++", "Go", "C", "Java"]
     y-axis "MiB/s" 0 --> 60
-    bar [54.56, 37.12, 30.54, 29.09, 23.99]
+    bar [58.66, 48.08, 39.41, 36.30, 25.45]
 ```
 
 ![Correcting throughput radar chart](assets/shakespeare-correcting-throughput-radar.svg)
@@ -504,9 +498,9 @@ xychart-beta
 
 | Machine | CPU | RAM | Storage |
 |---------|-----|-----|---------|
-| Dyson (local) | Apple M4 | 64 GB | Internal NVMe SSD |
-| Wigner | Apple M1 Max | 64 GB | QNAP RAID-5 HDD array |
-| DMZ | Intel Core i5-8259U @ 2.30 GHz | 32 GB | Internal SSD / `/archive` HDD |
+| dyson (local) | Apple M4 Pro | 64 GB | Internal NVMe SSD |
+| wigner | Apple M1 Max | 64 GB | QNAP RAID-5 HDD array |
+| dmz | Intel Core i5-8259U @ 2.30 GHz | 32 GB | Internal SSD / `/archive` HDD |
 | baase | NVIDIA GB10, Arm Cortex-X925 @ 3.9 GHz (10 of its 20 cores) | 128 GB | Internal NVMe SSD |
 
 #### Rust micro-benchmarks (bench_rust.sh, 1 MiB in-memory, MiB/s)
@@ -514,23 +508,23 @@ xychart-beta
 Operations use 1 MiB of LCG-generated data with ~5% single-byte mutations.
 No disk I/O — results are pure CPU performance.
 
-| Operation | M4 (Dyson) | CI width | M1 Max (Wigner) | CI width | i5-8259U (DMZ) | CI width | Cortex-X925 (baase) | CI width |
-|-----------|----------:|----:|----------------:|----:|---------------:|----:|----------------:|----:|
-| encode_greedy_1m | 10.87 | 0.12 | 9.38 | 0.02 | 2.42 | 0.02 | 3.168 | 0.008224 |
-| encode_onepass_1m | 60.93 | 0.66 | 63.60 | 0.19 | 14.42 | 0.06 | 30.06 | 0.08313 |
-| encode_correcting_1m | 32.49 | 1.51 | 29.44 | 0.05 | 14.25 | 0.32 | 26.41 | 0.04793 |
-| decode_1m | 1046 | 12.2 | 739.4 | 0.84 | 614.9 | 6.3 | 1638 | 2.381 |
-| inplace_1m | 387.2 | 4.67 | 286.4 | 0.37 | 167.7 | 4.1 | 308.3 | 0.7248 |
+| Operation | M4 Pro (dyson) | CI width | M1 Max (wigner) | CI width | i5-8259U (dmz) | CI width | Cortex-X925 (baase) | CI width |
+|-----------|----------:|----------:|----------:|----------:|----------:|----------:|----------:|----------:|
+| encode_greedy_1m | 12.41 | 0.2303 | 8.842 | 0.08766 | 2.916 | 0.06623 | 3.1 | 0.009072 |
+| encode_onepass_1m | 72.31 | 1.769 | 66.19 | 1.018 | 14.73 | 0.2993 | 29.38 | 0.0783 |
+| encode_correcting_1m | 38.47 | 0.9613 | 30.01 | 0.1852 | 14.48 | 0.04351 | 25.63 | 0.06219 |
+| decode_1m | 1017 | 78.63 | 769.9 | 2.12 | 626.9 | 5.165 | 1635 | 4.429 |
+| inplace_1m | 495.9 | 45.86 | 384.2 | 1.442 | 223.4 | 13.87 | 373.5 | 1.349 |
 
-The M4 and M1 Max are within ~4% on onepass but diverge on correcting (~10%)
-and decode (~29%).  The Intel i5-8259U is 4–5× slower than Apple Silicon
-on compute-intensive paths.  The Cortex-X925 column (2026-09-28, Pilot
-`475063f`, harmonic means, code at `1b38241`, pinned to one core) is 1.57×
-the M4 on decode and below it on every encode: 0.29× on greedy, 0.49× on
-onepass, 0.81× on correcting and 0.80× on inplace. The other three columns
-are from March 2026, measured with Pilot before `f01eec4` (arithmetic means
-of rates) on the code of that time, so these ratios are of the two
-measurements, not of the two machines alone.
+Measured with the other four columns above, 2026-10-02, Pilot `a6e6e77`,
+code at `a10ab04`, one core on the Linux machines. The M1 Max is within
+10% of the M4 Pro on onepass but 22% behind on correcting and 24% on
+decode. The i5-8259U is 4–5× slower than the M4 Pro on greedy and onepass
+and 2.7× on correcting. The Cortex-X925 is 1.61× the M4 Pro on decode and below it on every encode:
+0.25× on greedy, 0.41× on onepass, 0.67× on correcting and 0.75× on
+inplace. The dyson intervals on decode and inplace are 8–9% of the mean,
+the machine being in use; the others are under 1%, except dmz on inplace
+at 6%.
 
 #### CPU-bound vs I/O-bound: kernel tarball SSD vs HDD on wigner
 

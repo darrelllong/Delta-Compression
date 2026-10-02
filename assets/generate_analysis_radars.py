@@ -119,7 +119,7 @@ def radar_svg(
         [
             "",
             f'  <text class="label" x="20" y="{HEIGHT - 84}">{html.escape(title)}</text>',
-            f'  <text class="small" x="20" y="{HEIGHT - 64}">Axes are categorical (languages); polygon edges connect axis values only.{" * Pilot before f01eec4." if any("*" in n for n, *_ in series) else ""}</text>',
+            f'  <text class="small" x="20" y="{HEIGHT - 64}">Axes are categorical (languages); polygon edges connect axis values only.</text>',
         ]
     )
 
@@ -178,46 +178,46 @@ def main() -> None:
     )
     write_chart(
         "shakespeare-onepass-throughput-radar.svg",
-        "Onepass throughput profile (MiB/s) - Shakespeare, Dyson M4, Pilot before f01eec4",
-        "Onepass throughput by language for Shakespeare pilot-bench workload on Dyson M4.",
-        ["Rust", "Go", "C", "C++", "Java"],
-        [("Throughput", "#0f766e", 0.22, [49.33, 44.49, 34.19, 30.87, 25.35])],
-        55.0,
-        [11, 22, 33, 44, 55],
+        "Onepass throughput profile (MiB/s) - Shakespeare, dyson M4 Pro, 2026-10-02",
+        "Onepass throughput by language for Shakespeare pilot-bench workload on dyson M4 Pro.",
+        ["Go", "Rust", "C", "C++", "Java"],
+        [("Throughput", "#0f766e", 0.22, [55.76, 52.08, 44.46, 40.79, 25.80])],
+        60.0,
+        [12, 24, 36, 48, 60],
     )
     write_chart(
         "shakespeare-correcting-throughput-radar.svg",
-        "Correcting throughput profile (MiB/s) - Shakespeare, Dyson M4, Pilot before f01eec4",
-        "Correcting throughput by language for Shakespeare pilot-bench workload on Dyson M4.",
-        ["Rust", "Go", "C", "C++", "Java"],
-        [("Throughput", "#2563eb", 0.22, [54.56, 37.12, 30.54, 29.09, 23.99])],
+        "Correcting throughput profile (MiB/s) - Shakespeare, dyson M4 Pro, 2026-10-02",
+        "Correcting throughput by language for Shakespeare pilot-bench workload on dyson M4 Pro.",
+        ["Rust", "C++", "Go", "C", "Java"],
+        [("Throughput", "#2563eb", 0.22, [58.66, 48.08, 39.41, 36.30, 25.45])],
         60.0,
         [12, 24, 36, 48, 60],
     )
     write_chart(
         "shakespeare-onepass-multimachine-radar.svg",
         "Onepass throughput by machine (MiB/s) - Shakespeare",
-        "Onepass throughput by language across Dyson M4, Wigner M1 Max and DMZ i5 (March 2026, Pilot before f01eec4) and baase Cortex-X925 (2026-09-28, Pilot 475063f).",
+        "Onepass throughput by language on dyson M4 Pro, wigner M1 Max, dmz i5-8259U and baase Cortex-X925, 2026-10-02, Pilot a6e6e77.",
         ["Rust", "Go", "C", "C++", "Java"],
         [
-            ("Dyson M4 *", "#0f766e", 0.18, [49.33, 44.49, 34.19, 30.87, 25.35]),
-            ("Wigner M1 Max *", "#b45309", 0.16, [42.53, 32.30, 25.17, 23.47, 18.33]),
-            ("DMZ i5 *", "#1d4ed8", 0.14, [17.66, 11.97, 15.23, 15.14, 10.39]),
-            ("baase X925", "#be123c", 0.14, [33.28, 27.46, 26.49, 27.61, 19.16]),
+            ("dyson M4 Pro", "#0f766e", 0.18, [52.08, 55.76, 44.46, 40.79, 25.80]),
+            ("wigner M1 Max", "#b45309", 0.16, [46.08, 39.89, 39.12, 36.60, 20.60]),
+            ("dmz i5", "#1d4ed8", 0.14, [16.88, 13.54, 15.89, 17.60, 10.44]),
+            ("baase X925", "#be123c", 0.14, [33.01, 27.50, 25.28, 31.05, 19.28]),
         ],
-        55.0,
-        [11, 22, 33, 44, 55],
+        60.0,
+        [12, 24, 36, 48, 60],
     )
     write_chart(
         "shakespeare-correcting-multimachine-radar.svg",
         "Correcting throughput by machine (MiB/s) - Shakespeare",
-        "Correcting throughput by language across Dyson M4, Wigner M1 Max and DMZ i5 (March 2026, Pilot before f01eec4) and baase Cortex-X925 (2026-09-28, Pilot 475063f).",
+        "Correcting throughput by language on dyson M4 Pro, wigner M1 Max, dmz i5-8259U and baase Cortex-X925, 2026-10-02, Pilot a6e6e77.",
         ["Rust", "Go", "C", "C++", "Java"],
         [
-            ("Dyson M4 *", "#2563eb", 0.18, [54.56, 37.12, 30.54, 29.09, 23.99]),
-            ("Wigner M1 Max *", "#b45309", 0.16, [42.22, 28.18, 21.28, 20.66, 18.47]),
-            ("DMZ i5 *", "#0f766e", 0.14, [19.71, 10.74, 15.92, 13.81, 9.80]),
-            ("baase X925", "#be123c", 0.14, [37.84, 29.27, 38.49, 36.44, 21.08]),
+            ("dyson M4 Pro", "#2563eb", 0.18, [58.66, 39.41, 36.30, 48.08, 25.45]),
+            ("wigner M1 Max", "#b45309", 0.16, [43.78, 29.77, 27.19, 36.25, 19.95]),
+            ("dmz i5", "#0f766e", 0.14, [17.08, 13.51, 14.14, 15.55, 9.29]),
+            ("baase X925", "#be123c", 0.14, [35.21, 30.72, 37.69, 37.07, 22.18]),
         ],
         60.0,
         [12, 24, 36, 48, 60],

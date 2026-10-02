@@ -1,0 +1,25 @@
+== uname
+Linux dmz 7.0.0-31-generic #31-Ubuntu SMP PREEMPT_DYNAMIC Sat Aug  1 04:26:38 UTC 2026 x86_64 GNU/Linux
+== cpu
+CPU(s):                                  8
+Model name:                              Intel(R) Core(TM) i5-8259U CPU @ 2.30GHz
+CPU(s) scaling MHz:                      98%
+CPU max MHz:                             3800.0000
+CPU min MHz:                             400.0000
+== memory
+Mem:            30Gi       2.7Gi       7.4Gi       1.0Gi        22Gi        28Gi
+== os
+PRETTY_NAME="Ubuntu 26.04.1 LTS"
+== compilers
+cc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+c++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+rustc 1.93.1 (01f6ddf75 2026-02-11)
+openjdk version "25.0.4.1" 2026-08-18
+javac 25.0.4.1
+go version go1.26.0 linux/amd64
+Python 3.14.4
+cmake version 4.2.3
+== pilot-bench
+a6e6e77
+== governor
+powersave
