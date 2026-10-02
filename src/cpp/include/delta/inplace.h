@@ -1,18 +1,16 @@
 #pragma once
 
-/// In-place delta conversion (Burns, Long, Stockmeyer — IEEE TKDE 2003).
+/// In-place reconstruction (Burns, Long and Stockmeyer, "In-Place
+/// Reconstruction of Version Differences", IEEE TKDE 15(4), 2003).
 ///
-/// A CRWI (Copy-Read/Write-Intersection) digraph is built over the copy
-/// commands: edge i→j means copy i reads from a region that copy j will
-/// overwrite, so i must execute before j.  When the digraph is acyclic, a
-/// topological order provides a valid serial schedule with no conversion
-/// needed.  A cycle i₁→i₂→…→iₖ→i₁ represents a circular dependency with
-/// no valid schedule; breaking it materializes one copy as a literal add
-/// (reading its bytes from R before the buffer is modified).
-/// Kahn's topological sort + iterative-DFS cycle detection + per-cycle
-/// minimum-length copy conversion.
+/// A delta applied in the buffer that holds R must not overwrite bytes that
+/// a later copy still has to read.  Copy i must therefore run before copy j
+/// whenever i reads what j writes.  These constraints form a digraph (the
+/// CRWI digraph of the paper); a topological order of it is a safe schedule.
+/// Where the constraints are circular there is none, and a copy on the cycle
+/// is replaced by an add of the bytes it would have copied, which reads
+/// nothing.  Adds run last.
 
-#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -21,10 +19,10 @@
 
 namespace delta {
 
-/// Convert standard delta commands to in-place executable commands.
-///
-/// The returned commands can be applied to a buffer initialized with R
-/// to reconstruct V in-place, without a separate output buffer.
+/// Turns the output of a differencing algorithm into commands that rebuild V
+/// in a buffer that initially holds R.  The result is deterministic: among
+/// the copies that may run next, the shortest goes first, and of equals the
+/// earliest in V.
 std::vector<PlacedCommand> make_inplace(
     std::span<const uint8_t> r,
     const std::vector<Command>& commands,

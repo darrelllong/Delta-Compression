@@ -1,410 +1,302 @@
 #include "delta/algorithm.h"
-#include "delta/hash.h"
 #include "delta/splay.h"
+#include "scan.h"
 
 #include <algorithm>
 #include <cstdio>
-#include <cstring>
 #include <deque>
 #include <optional>
 
 namespace delta {
 
-/// One entry in the correction lookback buffer (Section 5.2).
-///
-/// The correcting algorithm may discover that a newly found match overlaps
-/// commands already emitted. The buffer holds the most recent buf_cap tentative
-/// commands so they can be trimmed or cancelled (tail correction) when a better
-/// match is found. Commands are flushed to the output list as they age out.
-struct BufEntry {
-    size_t v_start; ///< First V byte covered by this entry.
-    size_t v_end;   ///< One past the last V byte covered.
-    Command cmd;    ///< The tentative command (CopyCmd or AddCmd).
-    bool dummy;     ///< Reserved; always false in the current implementation.
+namespace {
+
+/// Checkpointing (Section 8.1): fingerprints are reduced to the range
+/// [0, f_size), and only those in one residue class mod m, the checkpoints,
+/// are stored or looked up.  A checkpoint f has table slot f / m, so the
+/// table needs f_size / m slots however long R is.
+struct Checkpoints {
+    size_t cap;      ///< |C|, the table capacity.
+    uint64_t f_size; ///< |F|.
+    uint64_t m;      ///< ceil(|F| / |C|).
+    uint64_t k;      ///< The residue class that passes.
+
+    Checkpoints(std::span<const uint8_t> r, std::span<const uint8_t> v,
+                const DiffOptions& opts) {
+        const size_t p = opts.p;
+        const size_t seeds = detail::seed_count(r.size(), p);
+        cap = next_prime(std::min(opts.max_table, std::max(opts.q, 2 * seeds / p)));
+        f_size = seeds > 0 ? next_prime(2 * seeds) : 1;
+        m = (f_size + cap - 1) / cap;
+        // k is taken from a seed in the middle of V, so that at least that
+        // seed is a checkpoint and, if V resembles R, so are its copies in R
+        // (p. 348).
+        k = 0;
+        if (v.size() >= p) {
+            size_t mid = std::min(v.size() / 2, v.size() - p);
+            k = fingerprint(v, mid, p) % f_size % m;
+        }
+    }
 };
 
-/// Correcting 1.5-Pass algorithm (Section 7, Figure 8) with
-/// fingerprint-based checkpointing (Section 8).
+/// The checkpoint seeds of R: fingerprint to offset.  Of several seeds with
+/// one fingerprint the first stored is kept.
+class SeedTable {
+public:
+    SeedTable(size_t cap, bool use_splay) : use_splay_(use_splay) {
+        if (!use_splay) { slots_.assign(cap, Slot{}); }
+    }
+
+    /// Stores offset under fp unless fp is present or the table is full.
+    /// home is the slot where probing starts.
+    void insert(uint64_t fp, size_t home, size_t offset) {
+        if (use_splay_) {
+            const size_t before = tree_.size();
+            tree_.insert_or_get(fp, offset);
+            if (tree_.size() > before) {
+                ++stored_;
+            } else {
+                ++extra_probes_;
+            }
+            return;
+        }
+        size_t i = home;
+        while (slots_[i].fp != EMPTY) {
+            if (slots_[i].fp == fp) { return; }
+            if (++i == slots_.size()) { i = 0; }
+            ++extra_probes_;
+            if (i == home) { return; }
+        }
+        slots_[i] = Slot{fp, offset};
+        ++stored_;
+    }
+
+    /// The offset stored under fp.  Whole fingerprints are compared, so a hit
+    /// can be wrong only if two different seeds have the same fingerprint.
+    std::optional<size_t> find(uint64_t fp, size_t home) {
+        if (use_splay_) {
+            const size_t* offset = tree_.find(fp);
+            return offset ? std::optional<size_t>(*offset) : std::nullopt;
+        }
+        size_t i = home;
+        while (slots_[i].fp != EMPTY) {
+            if (slots_[i].fp == fp) { return slots_[i].offset; }
+            if (++i == slots_.size()) { i = 0; }
+            if (i == home) { break; }
+        }
+        return std::nullopt;
+    }
+
+    size_t stored() const { return stored_; }
+
+    /// Slots examined beyond the first by insert; for the splay tree, the
+    /// number of seeds rejected as duplicates.
+    size_t extra_probes() const { return extra_probes_; }
+
+private:
+    static constexpr uint64_t EMPTY = UINT64_MAX; // not a fingerprint: those are below 2^61
+
+    struct Slot {
+        uint64_t fp = EMPTY;
+        size_t offset = 0;
+    };
+
+    bool use_splay_;
+    std::vector<Slot> slots_;
+    SplayTree<size_t> tree_;
+    size_t stored_ = 0;
+    size_t extra_probes_ = 0;
+};
+
+/// The most recent commands, held back so that a match that extends
+/// backwards over them can still replace them (Sections 5.1 and 5.2).
+/// Older commands are final and go to the output.
+class Lookback {
+public:
+    Lookback(std::span<const uint8_t> v, size_t capacity, std::vector<Command>& out)
+        : v_(v), capacity_(capacity), out_(out) {}
+
+    void push_add(size_t v_begin, size_t v_end) { push({v_begin, v_end, false, 0}); }
+
+    void push_copy(size_t v_begin, size_t v_end, size_t r_offset) {
+        push({v_begin, v_end, true, r_offset});
+    }
+
+    /// Makes way for a match that begins at v_m, before the end of the last
+    /// pending command.  Commands that begin at or after v_m are dropped, and
+    /// an add that straddles v_m is cut off there.  A copy that straddles v_m
+    /// is left whole.  Returns the position from which V is then unencoded,
+    /// given that it was encoded up to v_s before.
+    size_t reclaim(size_t v_m, size_t v_s) {
+        size_t start = v_s;
+        while (!pending_.empty()) {
+            Pending& last = pending_.back();
+            if (last.v_begin >= v_m) {
+                start = last.v_begin;
+                pending_.pop_back();
+                continue;
+            }
+            if (last.v_end > v_m && !last.is_copy) {
+                last.v_end = v_m;
+                start = v_m;
+            }
+            break;
+        }
+        return start;
+    }
+
+    void flush() {
+        for (const Pending& c : pending_) { emit(c); }
+        pending_.clear();
+    }
+
+private:
+    /// Encodes V[v_begin, v_end): as a copy from R at r_offset, or as an add.
+    struct Pending {
+        size_t v_begin;
+        size_t v_end;
+        bool is_copy;
+        size_t r_offset;
+    };
+
+    void push(Pending c) {
+        if (pending_.size() >= capacity_ && !pending_.empty()) {
+            emit(pending_.front());
+            pending_.pop_front();
+        }
+        pending_.push_back(c);
+    }
+
+    void emit(const Pending& c) {
+        if (c.is_copy) {
+            out_.emplace_back(CopyCmd{c.r_offset, c.v_end - c.v_begin});
+        } else {
+            detail::append_add(out_, v_, c.v_begin, c.v_end);
+        }
+    }
+
+    std::span<const uint8_t> v_;
+    size_t capacity_;
+    std::vector<Command>& out_;
+    std::deque<Pending> pending_;
+};
+
+} // namespace
+
 std::vector<Command> diff_correcting(
     std::span<const uint8_t> r,
     std::span<const uint8_t> v,
     const DiffOptions& opts) {
 
-    auto p = opts.p;
-    auto q = opts.q;
-    size_t buf_cap = opts.buf_cap;
-    bool verbose = opts.verbose;
-    bool use_splay = opts.use_splay;
+    using namespace detail;
+    using ull = unsigned long long;
 
     std::vector<Command> commands;
     if (v.empty()) { return commands; }
+    const size_t p = opts.p;
+    const size_t r_seed_count = seed_count(r.size(), p);
+    const Checkpoints cp(r, v, opts);
 
-    // ── Checkpointing parameters (Section 8.1, pp. 347-348) ─────────
-    size_t num_seeds = (r.size() >= p) ? (r.size() - p + 1) : 0;
-    size_t max_table = opts.max_table;
-    // Auto-size: 2x factor for correcting's |F|=2L convention.
-    // Capped at max_table to prevent runaway allocation on huge inputs.
-    size_t cap = (num_seeds > 0)
-        ? next_prime(std::min(max_table, std::max(q, 2 * num_seeds / p)))
-        : next_prime(std::min(q, max_table)); // |C|
-    uint64_t f_size = (num_seeds > 0)
-        ? static_cast<uint64_t>(next_prime(2 * num_seeds))
-        : 1; // |F|
-    uint64_t m = (f_size <= static_cast<uint64_t>(cap))
-        ? 1
-        : (f_size + static_cast<uint64_t>(cap) - 1) / static_cast<uint64_t>(cap); // ceil(|F| / |C|)
-    // Biased k (p. 348).
-    uint64_t k = 0;
-    if (v.size() >= p) {
-        uint64_t fp_k = fingerprint(v, std::min(v.size() / 2, v.size() - p), p);
-        k = fp_k % f_size % m;
-    }
-
-    if (verbose) {
-        uint64_t expected = (m > 0) ? static_cast<uint64_t>(num_seeds) / m : 0;
-        uint64_t occ_est = (cap > 0) ? expected * 100 / static_cast<uint64_t>(cap) : 0;
+    if (opts.verbose) {
+        uint64_t expected = r_seed_count / cp.m;
         std::fprintf(stderr,
             "correcting: %s, |C|=%zu |F|=%llu m=%llu k=%llu\n"
             "  checkpoint gap=%llu bytes, expected fill ~%llu (~%llu%% table occupancy)\n"
             "  table memory ~%zu MB\n",
-            use_splay ? "splay tree" : "hash table",
-            cap, (unsigned long long)f_size, (unsigned long long)m,
-            (unsigned long long)k, (unsigned long long)m,
-            (unsigned long long)expected, (unsigned long long)occ_est,
-            cap * 16 / 1048576);
+            lookup_name(opts), cp.cap, ull{cp.f_size}, ull{cp.m}, ull{cp.k},
+            ull{cp.m}, ull{expected}, ull{expected * 100 / cp.cap},
+            cp.cap * 16 / 1048576);
     }
 
-    // Debug counters
-    size_t dbg_build_passed = 0, dbg_build_stored = 0, dbg_build_probes = 0;
-    size_t dbg_scan_checkpoints = 0, dbg_scan_match = 0;
-    size_t dbg_scan_fp_mismatch = 0, dbg_scan_byte_mismatch = 0;
-
-    // Step (1): Build lookup structure for R (first-found policy)
-    struct CSlot { uint64_t fp; size_t offset; };
-    static constexpr uint64_t EMPTY_FP = UINT64_MAX;
-    std::vector<CSlot> h_r_ht;
-    SplayTree<std::pair<uint64_t, size_t>> h_r_sp; // (full_fp, offset)
-
-    if (!use_splay) {
-        h_r_ht.assign(cap, CSlot{EMPTY_FP, 0});
+    SeedTable table(cp.cap, opts.use_splay);
+    size_t build_passed = 0;
+    SeedScanner r_seeds(r, p);
+    for (size_t a = 0; a < r_seed_count; ++a) {
+        const uint64_t fp = r_seeds.at(a);
+        const uint64_t f = fp % cp.f_size;
+        if (f % cp.m != cp.k) { continue; }
+        ++build_passed;
+        table.insert(fp, f / cp.m, a);
     }
 
-    std::optional<RollingHash> rh_build;
-    if (num_seeds > 0) { rh_build.emplace(r, 0, p); }
-    for (size_t a = 0; a < num_seeds; ++a) {
-        uint64_t fp;
-        if (a == 0) {
-            fp = rh_build->value();
-        } else {
-            rh_build->roll(r[a - 1], r[a + p - 1]);
-            fp = rh_build->value();
-        }
-        uint64_t f = fp % f_size;
-        if (f % m != k) { continue; } // not a checkpoint seed
-        ++dbg_build_passed;
-
-        if (use_splay) {
-            // insert_or_get implements first-found policy
-            auto& val = h_r_sp.insert_or_get(fp, std::make_pair(fp, a));
-            if (val.second == a) { ++dbg_build_stored; } else { ++dbg_build_probes; }
-        } else {
-            size_t i = static_cast<size_t>(f / m);
-            const size_t i0 = i;
-            bool store = true;
-            while (h_r_ht[i].fp != EMPTY_FP) {
-                if (h_r_ht[i].fp == fp) { store = false; break; }   // dup fp — skip
-                if (++i == cap) { i = 0; }
-                ++dbg_build_probes;
-                if (i == i0) { store = false; break; }              // table full
-            }
-            if (store) {
-                h_r_ht[i] = CSlot{fp, a}; // linear probing (Section 7 Step 1)
-                ++dbg_build_stored;
-            }
-        }
-    }
-
-    if (verbose) {
-        double passed_pct = (num_seeds > 0)
-            ? static_cast<double>(dbg_build_passed) / num_seeds * 100.0 : 0.0;
-        size_t stored_count = use_splay ? h_r_sp.size() : dbg_build_stored;
-        double occ_pct = (cap > 0)
-            ? static_cast<double>(stored_count) / cap * 100.0 : 0.0;
+    if (opts.verbose) {
         std::fprintf(stderr,
             "  build: %zu seeds, %zu passed checkpoint (%.2f%%), "
             "%zu stored, %zu extra probes\n"
             "  build: table occupancy %zu/%zu (%.1f%%)\n",
-            num_seeds, dbg_build_passed, passed_pct,
-            dbg_build_stored, dbg_build_probes,
-            stored_count, cap, occ_pct);
+            r_seed_count, build_passed, percent(build_passed, r_seed_count),
+            table.stored(), table.extra_probes(),
+            table.stored(), cp.cap, percent(table.stored(), cp.cap));
     }
 
-    // Lookup helper: returns (full_fp, offset) pair if found, nullopt otherwise.
-    // Linear probing mirrors the build chain exactly.
-    auto lookup_r = [&](uint64_t fp_v, uint64_t f_v)
-        -> std::optional<std::pair<uint64_t, size_t>> {
-        if (use_splay) {
-            auto* val = h_r_sp.find(fp_v);
-            if (val) { return *val; }
-            return std::nullopt;
-        } else {
-            size_t i = static_cast<size_t>(f_v / m);
-            const size_t i0 = i;
-            while (h_r_ht[i].fp != EMPTY_FP) {
-                if (h_r_ht[i].fp == fp_v) {
-                    return std::make_pair(h_r_ht[i].fp, h_r_ht[i].offset);
-                }
-                if (++i == cap) { i = 0; }
-                if (i == i0) { return std::nullopt; }               // full table
-            }
-            return std::nullopt;
-        }
-    };
-
-    // ── Encoding lookback buffer (Section 5.2) ───────────────────────
-    std::deque<BufEntry> buf;
-
-    auto flush_buf = [&]() {
-        for (auto& entry : buf) {
-            if (!entry.dummy) {
-                commands.push_back(std::move(entry.cmd));
-            }
-        }
-        buf.clear();
-    };
-
-    // Step (2): initialize scan pointers
-    size_t v_c = 0;
-    size_t v_s = 0;
-
-    // Rolling hash for O(1) per-position V fingerprinting.
-    std::optional<RollingHash> rh_v_scan;
-    size_t rh_v_pos = 0;
-    if (v.size() >= p) { rh_v_scan.emplace(v, 0, p); rh_v_pos = 0; }
+    Lookback lookback(v, opts.buf_cap, commands);
+    SeedScanner v_seeds(v, p);
+    size_t v_c = 0; // the seed being looked up
+    size_t v_s = 0; // start of the part of V not yet encoded
+    size_t checkpoints = 0, matches = 0, byte_mismatches = 0;
 
     while (v_c + p <= v.size()) {
-        // Step (3): check for end of V (condition in while header)
-
-        // Step (4): generate footprint at v_c, apply checkpoint test.
-        uint64_t fp_v;
-        if (v_c == rh_v_pos) {
-            fp_v = rh_v_scan->value();
-        } else if (v_c == rh_v_pos + 1) {
-            rh_v_scan->roll(v[v_c - 1], v[v_c + p - 1]);
-            rh_v_pos = v_c;
-            fp_v = rh_v_scan->value();
-        } else {
-            rh_v_scan.emplace(v, v_c, p);
-            rh_v_pos = v_c;
-            fp_v = rh_v_scan->value();
-        }
-        uint64_t f_v = fp_v % f_size;
-        if (f_v % m != k) {
-            ++v_c;
-            continue; // not a checkpoint — skip
-        }
-
-        // Checkpoint passed — look up R.
-        ++dbg_scan_checkpoints;
-
-        auto entry = lookup_r(fp_v, f_v);
-        size_t r_offset;
-
-        if (entry.has_value()) {
-            auto& [stored_fp, offset] = *entry;
-            if (stored_fp == fp_v) {
-                // Full fingerprint matches — verify bytes.
-                if (std::memcmp(&r[offset], &v[v_c], p) != 0) {
-                    ++dbg_scan_byte_mismatch;
-                    ++v_c;
-                    continue;
-                }
-                ++dbg_scan_match;
-                r_offset = offset;
-            } else {
-                ++dbg_scan_fp_mismatch;
-                ++v_c;
-                continue;
-            }
-        } else {
+        const uint64_t fp = v_seeds.at(v_c);
+        const uint64_t f = fp % cp.f_size;
+        if (f % cp.m != cp.k) {
             ++v_c;
             continue;
         }
+        ++checkpoints;
 
-        // Step (5): extend match forwards and backwards
-        size_t fwd = p;
-        while (v_c + fwd < v.size() && r_offset + fwd < r.size()
-               && v[v_c + fwd] == r[r_offset + fwd]) {
-            ++fwd;
+        const auto r_hit = table.find(fp, f / cp.m);
+        if (!r_hit) {
+            ++v_c;
+            continue;
         }
+        if (!seeds_equal(r, *r_hit, v, v_c, p)) {
+            ++byte_mismatches;
+            ++v_c;
+            continue;
+        }
+        ++matches;
 
+        // The match is the seed extended as far as it goes in both
+        // directions: V[v_m, match_end) equals R[r_m, ...).
+        const size_t fwd = extend_forward(r, *r_hit, v, v_c, p);
         size_t bwd = 0;
-        while (v_c >= bwd + 1 && r_offset >= bwd + 1
-               && v[v_c - bwd - 1] == r[r_offset - bwd - 1]) {
+        while (bwd < v_c && bwd < *r_hit && v[v_c - bwd - 1] == r[*r_hit - bwd - 1]) {
             ++bwd;
         }
+        const size_t v_m = v_c - bwd;
+        const size_t r_m = *r_hit - bwd;
+        const size_t match_end = v_c + fwd;
 
-        size_t v_m = v_c - bwd;
-        size_t r_m = r_offset - bwd;
-        size_t ml = bwd + fwd;
-        size_t match_end = v_m + ml;
-
-        // Step (6): encode with correction
         if (v_s <= v_m) {
-            // (6a) match is entirely in unencoded suffix (Section 7)
-            if (v_s < v_m) {
-                if (buf.size() >= buf_cap) {
-                    auto oldest = std::move(buf.front());
-                    buf.pop_front();
-                    if (!oldest.dummy) { commands.push_back(std::move(oldest.cmd)); }
-                }
-                buf.push_back(BufEntry{
-                    v_s, v_m,
-                    AddCmd{std::vector<uint8_t>(v.begin() + v_s, v.begin() + v_m)},
-                    false});
-            }
-            if (buf.size() >= buf_cap) {
-                auto oldest = std::move(buf.front());
-                buf.pop_front();
-                if (!oldest.dummy) { commands.push_back(std::move(oldest.cmd)); }
-            }
-            buf.push_back(BufEntry{
-                v_m, match_end,
-                CopyCmd{r_m, ml},
-                false});
-            v_s = match_end;
+            // The match lies wholly in the unencoded part of V.
+            if (v_s < v_m) { lookback.push_add(v_s, v_m); }
+            lookback.push_copy(v_m, match_end, r_m);
         } else {
-            // (6b) match extends backward into encoded prefix —
-            // tail correction (Section 5.1, p. 339)
-            size_t effective_start = v_s;
-
-            while (!buf.empty()) {
-                auto& tail = buf.back();
-                if (tail.dummy) {
-                    buf.pop_back();
-                    continue;
-                }
-
-                if (tail.v_start >= v_m && tail.v_end <= match_end) {
-                    // Wholly within new match — absorb
-                    effective_start = std::min(effective_start, tail.v_start);
-                    buf.pop_back();
-                    continue;
-                }
-
-                if (tail.v_end > v_m && tail.v_start < v_m) {
-                    if (std::holds_alternative<AddCmd>(tail.cmd)) {
-                        // Partial add — trim to [v_start, v_m)
-                        size_t keep = v_m - tail.v_start;
-                        if (keep > 0) {
-                            tail.cmd = AddCmd{std::vector<uint8_t>(
-                                v.begin() + tail.v_start,
-                                v.begin() + v_m)};
-                            tail.v_end = v_m;
-                        } else {
-                            buf.pop_back();
-                        }
-                        effective_start = std::min(effective_start, v_m);
-                    }
-                    // Partial copy — don't reclaim (Section 5.1)
-                    break;
-                }
-
-                // No overlap with match
-                break;
-            }
-
-            size_t adj = effective_start - v_m;
-            size_t new_len = match_end - effective_start;
-            if (new_len > 0) {
-                if (buf.size() >= buf_cap) {
-                    auto oldest = std::move(buf.front());
-                    buf.pop_front();
-                    if (!oldest.dummy) { commands.push_back(std::move(oldest.cmd)); }
-                }
-                buf.push_back(BufEntry{
-                    effective_start, match_end,
-                    CopyCmd{r_m + adj, new_len},
-                    false});
-            }
-            v_s = match_end;
+            // The match reaches back into the encoded part: tail correction
+            // (Section 5.1, p. 339).  Take back what the match covers and
+            // copy from wherever that leaves off.
+            const size_t start = lookback.reclaim(v_m, v_s);
+            lookback.push_copy(start, match_end, r_m + (start - v_m));
         }
-
-        // Step (7): advance past matched region
-        v_c = match_end;
+        v_c = v_s = match_end;
     }
 
-    // Step (8): flush buffer and trailing add
-    flush_buf();
-    if (v_s < v.size()) {
-        commands.emplace_back(AddCmd{
-            std::vector<uint8_t>(v.begin() + v_s, v.end())});
-    }
+    lookback.flush();
+    append_add(commands, v, v_s, v.size());
 
-    if (verbose) {
-        size_t v_seeds = (v.size() >= p) ? (v.size() - p + 1) : 0;
-        double cp_pct = (v_seeds > 0)
-            ? static_cast<double>(dbg_scan_checkpoints) / v_seeds * 100.0 : 0.0;
-        double hit_pct = (dbg_scan_checkpoints > 0)
-            ? static_cast<double>(dbg_scan_match) / dbg_scan_checkpoints * 100.0 : 0.0;
+    if (opts.verbose) {
+        const size_t v_seed_count = seed_count(v.size(), p);
+        // A hit in the table compares whole fingerprints, so there are no
+        // collisions between table slots to count; the field is always 0.
         std::fprintf(stderr,
             "  scan: %zu V positions, %zu checkpoints (%.3f%%), %zu matches\n"
             "  scan: hit rate %.1f%% (of checkpoints), "
             "fp collisions %zu, byte mismatches %zu\n",
-            v_seeds, dbg_scan_checkpoints, cp_pct, dbg_scan_match,
-            hit_pct, dbg_scan_fp_mismatch, dbg_scan_byte_mismatch);
+            v_seed_count, checkpoints, percent(checkpoints, v_seed_count), matches,
+            percent(matches, checkpoints), size_t{0}, byte_mismatches);
         print_command_stats(commands);
     }
-
     return commands;
-}
-
-/// Dispatcher
-std::vector<Command> diff(
-    Algorithm algo,
-    std::span<const uint8_t> r,
-    std::span<const uint8_t> v,
-    const DiffOptions& opts) {
-
-    switch (algo) {
-    case Algorithm::Greedy:
-        return diff_greedy(r, v, opts);
-    case Algorithm::Onepass:
-        return diff_onepass(r, v, opts);
-    case Algorithm::Correcting:
-        return diff_correcting(r, v, opts);
-    }
-    throw DeltaError("unknown algorithm");
-}
-
-/// Shared verbose stats: result summary + copy length distribution.
-void print_command_stats(const std::vector<Command>& commands) {
-    std::vector<size_t> copy_lens;
-    size_t total_copy = 0, total_add = 0, num_copies = 0, num_adds = 0;
-    for (const auto& cmd : commands) {
-        if (auto* c = std::get_if<CopyCmd>(&cmd)) {
-            total_copy += c->length; ++num_copies;
-            copy_lens.push_back(c->length);
-        } else if (auto* a = std::get_if<AddCmd>(&cmd)) {
-            total_add += a->data.size(); ++num_adds;
-        }
-    }
-    size_t total_out = total_copy + total_add;
-    double copy_pct = total_out > 0
-        ? static_cast<double>(total_copy) / total_out * 100.0 : 0.0;
-    std::fprintf(stderr,
-        "  result: %zu copies (%zu bytes), %zu adds (%zu bytes)\n"
-        "  result: copy coverage %.1f%%, output %zu bytes\n",
-        num_copies, total_copy, num_adds, total_add, copy_pct, total_out);
-    if (!copy_lens.empty()) {
-        std::sort(copy_lens.begin(), copy_lens.end());
-        double mean = static_cast<double>(total_copy) / copy_lens.size();
-        size_t median = copy_lens[copy_lens.size() / 2];
-        std::fprintf(stderr,
-            "  copies: %zu regions, min=%zu max=%zu mean=%.1f median=%zu bytes\n",
-            copy_lens.size(), copy_lens.front(), copy_lens.back(),
-            mean, median);
-    }
 }
 
 } // namespace delta

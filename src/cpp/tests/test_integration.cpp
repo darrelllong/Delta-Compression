@@ -11,8 +11,6 @@
 
 using namespace delta;
 
-// ── helpers ──────────────────────────────────────────────────────────────
-
 using DiffFn = std::vector<Command>(*)(
     std::span<const uint8_t>, std::span<const uint8_t>,
     const DiffOptions&);
@@ -82,7 +80,7 @@ static std::vector<uint8_t> repeat(std::span<const uint8_t> base, size_t count) 
     return out;
 }
 
-// ── standard differencing ────────────────────────────────────────────────
+// Standard differencing.
 
 TEST_CASE("paper example (Section 2.1.1)", "[integration]") {
     std::vector<uint8_t> r = {'A','B','C','D','E','F','G','H',
@@ -221,8 +219,6 @@ TEST_CASE("validate placed commands rejects source overflow", "[integration]") {
         DeltaError);
 }
 
-// ── Regression tests for bugs found in adversarial review ────────────────────
-
 TEST_CASE("encode_delta rejects version_size exceeding UINT32_MAX", "[integration]") {
     std::array<uint8_t, DELTA_CRC_SIZE> zh{};
     size_t too_large = static_cast<size_t>(UINT32_MAX) + 1;
@@ -254,18 +250,11 @@ TEST_CASE("encode_delta rejects add dst offset exceeding UINT32_MAX", "[integrat
 }
 
 TEST_CASE("crc64 wrong reference is detectable", "[integration]") {
-    // Encode a delta from r1 -> v. Verify that applying it to r2 (different
-    // reference) is detectable via src_crc mismatch before any data is touched.
+    // A decoder compares the CRC of its reference with the src_crc in the
+    // delta, so a different reference must have a different CRC.
     std::vector<uint8_t> r1 = {1, 2, 3, 4, 5};
-    std::vector<uint8_t> r2 = {9, 8, 7, 6, 5}; // different reference
-    std::vector<uint8_t> v  = {1, 2, 3, 4, 5};
-
-    auto src_crc = crc64_xz(r1.data(), r1.size());
-    auto dst_crc = crc64_xz(v.data(),  v.size());
-    auto wrong_ref_crc = crc64_xz(r2.data(), r2.size());
-
-    // src_crc was computed from r1; r2 must not match it
-    CHECK(src_crc != wrong_ref_crc);
+    std::vector<uint8_t> r2 = {9, 8, 7, 6, 5};
+    CHECK(crc64_xz(r1.data(), r1.size()) != crc64_xz(r2.data(), r2.size()));
 }
 
 TEST_CASE("real data roundtrip", "[integration]") {
@@ -386,7 +375,7 @@ TEST_CASE("scattered modifications", "[integration]") {
     }
 }
 
-// ── in-place basics ──────────────────────────────────────────────────────
+// In-place basics.
 
 TEST_CASE("inplace paper example", "[inplace]") {
     std::vector<uint8_t> r = {'A','B','C','D','E','F','G','H',
@@ -530,7 +519,7 @@ TEST_CASE("inplace detected", "[inplace]") {
     CHECK(is_inplace_delta(delta_bytes));
 }
 
-// ── variable-length block tests ──────────────────────────────────────────
+// Variable-length block tests.
 
 static std::vector<std::vector<uint8_t>> make_blocks() {
     std::vector<size_t> sizes = {200, 500, 1234, 3000, 800, 4999, 1500, 2750};
@@ -715,7 +704,7 @@ TEST_CASE("localmin picks smallest", "[inplace]") {
     CHECK(add_lmin <= add_const);
 }
 
-// ── checkpointing tests ─────────────────────────────────────────────────
+// Checkpointing tests.
 
 TEST_CASE("correcting checkpointing tiny table", "[correcting]") {
     std::vector<uint8_t> base = {'A','B','C','D','E','F','G','H',
@@ -754,7 +743,7 @@ TEST_CASE("next_prime is prime", "[hash]") {
     CHECK(next_prime(1048573) == 1048573);
 }
 
-// ── edge cases and boundaries ─────────────────────────────────────────────
+// Edge cases and boundaries.
 
 TEST_CASE("single byte ref/ver", "[edge]") {
     std::vector<uint8_t> one  = {0x41};
@@ -796,7 +785,7 @@ TEST_CASE("ref shorter than seed", "[edge]") {
     }
 }
 
-// Sizes at 0, 1, p±1, and byte-width transitions; catches loop-bound off-by-ones.
+// Sizes at 0, 1, p-1, p+1 and around powers of two, where loop bounds go wrong.
 TEST_CASE("size sweep", "[edge]") {
     const size_t p = 4;
     const size_t sizes[] = {0, 1, 2, 3, 4, 5, 7, 8, 9,
@@ -821,7 +810,7 @@ TEST_CASE("size sweep", "[edge]") {
     }
 }
 
-// version_size at byte-sign-extension boundaries (128, 256, 32768, 65536, …).
+// version_size where a byte or a sign bit is crossed.
 TEST_CASE("encoding version-size boundaries", "[edge]") {
     std::array<uint8_t, DELTA_CRC_SIZE> zh{};
     for (size_t sz : {size_t{0},       size_t{1},       size_t{127},     size_t{128},
@@ -919,8 +908,8 @@ TEST_CASE("inplace |V|=|R| same-size swap", "[edge]") {
 TEST_CASE("inplace v=1 byte", "[edge]") {
     std::vector<uint8_t> r(64);
     std::iota(r.begin(), r.end(), 0);
-    std::vector<uint8_t> v_copy = {r[32]};  // byte in R → copy
-    std::vector<uint8_t> v_add  = {0xAB};   // 0xAB = 171 > 63, not in R → add
+    std::vector<uint8_t> v_copy = {r[32]};  // in R: a copy
+    std::vector<uint8_t> v_add  = {0xAB};   // not in R: an add
     for (auto& [name, algo] : all_algos())
         for (auto pol : all_policies()) {
             REQUIRE(inplace_roundtrip(algo, r, v_copy, pol, 2) == v_copy);
@@ -952,7 +941,7 @@ TEST_CASE("seed length boundaries", "[edge]") {
     }
 }
 
-// ── DLT\x04 large-format tests ───────────────────────────────────────────
+// DLT\x04 large-format tests.
 
 static const std::array<uint8_t, DELTA_CRC_SIZE> zh{};
 
@@ -1075,7 +1064,7 @@ TEST_CASE("large format MOVE overlap rejected on decode", "[large]") {
     for (int i = 7; i >= 0; --i) buf.push_back(i == 0 ? 10 : 0);
     for (int i = 0; i < 16; ++i) buf.push_back(0); // crcs
     buf.push_back(DELTA_CMD_MOVE);
-    // MOVE: src=5, dst=8, length=4  → src+length=9 > dst=8
+    // MOVE: src=5, dst=8, length=4, so src+length=9 > dst=8
     auto pu32 = [&](uint32_t v) {
         buf.push_back(v >> 24); buf.push_back(v >> 16);
         buf.push_back(v >> 8);  buf.push_back(v);
@@ -1143,4 +1132,59 @@ TEST_CASE("large format algo roundtrip correcting", "[large]") {
     std::vector<uint8_t> out(v.size(), 0);
     apply_placed_to(r, placed2, out);
     CHECK(out == v);
+}
+
+// Hostile deltas.
+
+TEST_CASE("validate rejects a move whose src+length wraps around", "[large]") {
+    std::vector<PlacedCommand> cmds = {PlacedMove{SIZE_MAX - 1, 4, 4}};
+    CHECK_THROWS_AS(validate_placed_commands(cmds, 0, 8, false), DeltaError);
+}
+
+TEST_CASE("decode rejects a BIGMOVE whose src+length wraps around", "[large]") {
+    std::vector<uint8_t> buf(DELTA_MAGIC_LARGE, DELTA_MAGIC_LARGE + DELTA_MAGIC_SIZE);
+    auto put_u64 = [&](uint64_t x) {
+        for (int shift = 56; shift >= 0; shift -= 8) buf.push_back(static_cast<uint8_t>(x >> shift));
+    };
+    buf.push_back(0);  // flags
+    put_u64(8);        // version_size
+    buf.insert(buf.end(), 2 * DELTA_CRC_SIZE, 0);
+    buf.push_back(DELTA_CMD_BIGMOVE);
+    put_u64(UINT64_MAX - 1);  // src
+    put_u64(4);               // dst
+    put_u64(4);               // length
+    buf.push_back(DELTA_CMD_END);
+    CHECK_THROWS_AS(decode_delta(buf), DeltaError);
+}
+
+// The splay tree in place of the hash table.
+
+TEST_CASE("splay lookup roundtrip", "[splay]") {
+    auto blocks = make_blocks();
+    auto r = blocks_ref(blocks);
+    std::vector<uint8_t> v;
+    for (size_t i : {5u, 2u, 7u, 0u, 3u, 6u, 1u, 4u})
+        v.insert(v.end(), blocks[i].begin(), blocks[i].end());
+    DiffOptions o = opts(4);
+    o.use_splay = true;
+    for (auto& [name, algo] : all_algos()) {
+        INFO(name);
+        auto cmds = algo(r, v, o);
+        REQUIRE(apply_delta(r, cmds) == v);
+        for (auto pol : all_policies())
+            REQUIRE(apply_delta_inplace(r, make_inplace(r, cmds, pol), v.size()) == v);
+    }
+}
+
+TEST_CASE("correcting with a lookback buffer of zero or one", "[correcting]") {
+    auto blocks = make_blocks();
+    auto r = blocks_ref(blocks);
+    std::vector<uint8_t> v;
+    for (size_t i : {7u, 6u, 5u, 4u, 3u, 2u, 1u, 0u})
+        v.insert(v.end(), blocks[i].begin(), blocks[i].end());
+    for (size_t cap : {0u, 1u}) {
+        DiffOptions o = opts(4);
+        o.buf_cap = cap;
+        REQUIRE(apply_delta(r, diff_correcting(r, v, o)) == v);
+    }
 }

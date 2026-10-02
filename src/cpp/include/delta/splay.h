@@ -1,17 +1,13 @@
 #pragma once
 
-/// Tarjan-Sleator splay tree keyed on uint64_t fingerprints.
+/// A top-down splay tree keyed on fingerprints (Sleator and Tarjan,
+/// "Self-Adjusting Binary Search Trees", JACM 32(3), 1985).
 ///
-/// A self-adjusting binary search tree: every access (find/insert)
-/// splays the accessed node to the root via zig/zig-zig/zig-zag
-/// rotations.  Amortized O(log n) per operation.
-///
-/// Reference: Sleator & Tarjan, "Self-Adjusting Binary Search Trees",
-/// JACM 32(3), 1985.
+/// Every find and insert moves the node it touches to the root, so the keys
+/// used most often stay near the top.  Operations are O(log n) amortized.
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <utility>
 
 namespace delta {
@@ -20,102 +16,68 @@ template <typename V>
 class SplayTree {
 public:
     SplayTree() = default;
-
     ~SplayTree() { clear(); }
 
-    // Non-copyable, movable.
     SplayTree(const SplayTree&) = delete;
     SplayTree& operator=(const SplayTree&) = delete;
 
     SplayTree(SplayTree&& o) noexcept
-        : root_(o.root_), size_(o.size_) {
-        o.root_ = nullptr;
-        o.size_ = 0;
-    }
+        : root_(std::exchange(o.root_, nullptr)), size_(std::exchange(o.size_, 0)) {}
 
     SplayTree& operator=(SplayTree&& o) noexcept {
         if (this != &o) {
             clear();
-            root_ = o.root_;
-            size_ = o.size_;
-            o.root_ = nullptr;
-            o.size_ = 0;
+            root_ = std::exchange(o.root_, nullptr);
+            size_ = std::exchange(o.size_, 0);
         }
         return *this;
     }
 
-    /// Find key; returns pointer to value or nullptr.
-    /// Splays the found node (or last visited) to root.
+    /// The value stored under key, or nullptr.  The pointer is valid until
+    /// the entry is overwritten or the tree is cleared or destroyed.
     V* find(uint64_t key) {
         if (!root_) { return nullptr; }
         splay(key);
-        return (root_->key == key) ? &root_->value : nullptr;
+        return root_->key == key ? &root_->value : nullptr;
     }
 
-    /// Insert key with value if absent; returns reference to
-    /// the (possibly pre-existing) value.  Splays to root.
+    /// The value stored under key, after storing value there if the key was
+    /// absent.  An existing value is kept.
     V& insert_or_get(uint64_t key, V value) {
-        if (!root_) {
-            root_ = new Node{key, std::move(value), nullptr, nullptr};
-            ++size_;
-            return root_->value;
+        if (root_) {
+            splay(key);
+            if (root_->key == key) { return root_->value; }
         }
-
-        splay(key);
-
-        if (root_->key == key) {
-            return root_->value; // already present — retain existing
-        }
-
-        auto* n = new Node{key, std::move(value), nullptr, nullptr};
-        ++size_;
-
-        if (key < root_->key) {
-            n->left = root_->left;
-            n->right = root_;
-            root_->left = nullptr;
-        } else {
-            n->right = root_->right;
-            n->left = root_;
-            root_->right = nullptr;
-        }
-        root_ = n;
+        add_root(key, std::move(value));
         return root_->value;
     }
 
-    /// Insert key with value, overwriting any existing entry.
+    /// Stores value under key, replacing any existing value.
     void insert(uint64_t key, V value) {
-        if (!root_) {
-            root_ = new Node{key, std::move(value), nullptr, nullptr};
-            ++size_;
-            return;
+        if (root_) {
+            splay(key);
+            if (root_->key == key) {
+                root_->value = std::move(value);
+                return;
+            }
         }
-
-        splay(key);
-
-        if (root_->key == key) {
-            root_->value = std::move(value);
-            return;
-        }
-
-        auto* n = new Node{key, std::move(value), nullptr, nullptr};
-        ++size_;
-
-        if (key < root_->key) {
-            n->left = root_->left;
-            n->right = root_;
-            root_->left = nullptr;
-        } else {
-            n->right = root_->right;
-            n->left = root_;
-            root_->right = nullptr;
-        }
-        root_ = n;
+        add_root(key, std::move(value));
     }
 
-    /// Deallocate all nodes.
     void clear() {
-        destroy(root_);
+        // Rotating each left child up turns the tree into a list as it is
+        // freed, so no stack is needed however deep the tree is.
+        for (Node* n = root_; n;) {
+            if (Node* l = n->left) {
+                n->left = l->right;
+                l->right = n;
+                n = l;
+            } else {
+                Node* r = n->right;
+                delete n;
+                n = r;
+            }
+        }
         root_ = nullptr;
         size_ = 0;
     }
@@ -134,69 +96,70 @@ private:
     Node* root_ = nullptr;
     size_t size_ = 0;
 
-    /// Top-down splay (Sleator & Tarjan 1985).
-    ///
-    /// Restructures the tree so that the node with the given key
-    /// (or the last node on the search path) becomes the root.
+    /// Moves the node with the given key to the root; if there is none, the
+    /// last node on the search path.  The tree must not be empty.
     void splay(uint64_t key) {
-        if (!root_) { return; }
-
-        // Sentinel header node; left/right trees accumulate in l/r.
-        Node header{0, V{}, nullptr, nullptr};
-        Node* l = &header;
-        Node* r = &header;
+        // The nodes passed on the way down are collected into two trees:
+        // those smaller than key and those larger.  Each tail points at the
+        // link where the next such node belongs.
+        Node* smaller = nullptr;
+        Node* larger = nullptr;
+        Node** smaller_tail = &smaller;
+        Node** larger_tail = &larger;
         Node* t = root_;
 
         for (;;) {
             if (key < t->key) {
                 if (!t->left) { break; }
                 if (key < t->left->key) {
-                    // Zig-zig: rotate right
-                    Node* y = t->left;
+                    Node* y = t->left; // zig-zig: rotate right
                     t->left = y->right;
                     y->right = t;
                     t = y;
                     if (!t->left) { break; }
                 }
-                // Link right
-                r->left = t;
-                r = t;
+                *larger_tail = t;
+                larger_tail = &t->left;
                 t = t->left;
             } else if (key > t->key) {
                 if (!t->right) { break; }
                 if (key > t->right->key) {
-                    // Zig-zig: rotate left
-                    Node* y = t->right;
+                    Node* y = t->right; // zig-zig: rotate left
                     t->right = y->left;
                     y->left = t;
                     t = y;
                     if (!t->right) { break; }
                 }
-                // Link left
-                l->right = t;
-                l = t;
+                *smaller_tail = t;
+                smaller_tail = &t->right;
                 t = t->right;
             } else {
-                break; // found
+                break;
             }
         }
 
-        // Assemble
-        l->right = t->left;
-        r->left = t->right;
-        t->left = header.right;
-        t->right = header.left;
+        *smaller_tail = t->left;
+        *larger_tail = t->right;
+        t->left = smaller;
+        t->right = larger;
         root_ = t;
     }
 
-    /// Recursively destroy subtree (iterative stack would be safer
-    /// for very deep trees, but fingerprints are well-distributed
-    /// and splay keeps depth reasonable).
-    void destroy(Node* n) {
-        if (!n) { return; }
-        destroy(n->left);
-        destroy(n->right);
-        delete n;
+    /// Makes a new node the root.  If the tree is not empty it must just have
+    /// been splayed on key, and key must be absent.
+    void add_root(uint64_t key, V value) {
+        Node* n = new Node{key, std::move(value), nullptr, nullptr};
+        if (root_) {
+            if (key < root_->key) {
+                n->left = std::exchange(root_->left, nullptr);
+                n->right = root_;
+            } else {
+                n->right = std::exchange(root_->right, nullptr);
+                n->left = root_;
+            }
+        }
+        root_ = n;
+        ++size_;
     }
 };
 

@@ -1,18 +1,12 @@
-# Fuzz targets — libFuzzer, requires Clang.
+# libFuzzer targets.  They need Clang.
 #
-# Enable with:
-#   cmake -DENABLE_FUZZING=ON -DCMAKE_CXX_COMPILER=clang++ \
-#         -DCMAKE_BUILD_TYPE=RelWithDebInfo -B build-fuzz ..
+#   cmake -B build-fuzz -DENABLE_FUZZING=ON -DCMAKE_CXX_COMPILER=clang++ \
+#         -DCMAKE_BUILD_TYPE=RelWithDebInfo
 #   cmake --build build-fuzz
-#
-# Run decode fuzzer:
-#   mkdir -p fuzz/corpus fuzz/crashes
-#   # Seed corpus (one valid V3 and one valid V4 delta for empty→empty):
 #   bash fuzz/gen_corpus.sh fuzz/corpus
+#   mkdir -p fuzz/crashes
 #   ./build-fuzz/fuzz/fuzz_decode fuzz/corpus/ -max_total_time=300 \
 #       -artifact_prefix=fuzz/crashes/ -jobs=$(nproc)
-#
-# Run roundtrip fuzzer:
 #   ./build-fuzz/fuzz/fuzz_roundtrip fuzz/corpus/ -max_total_time=300 \
 #       -artifact_prefix=fuzz/crashes/ -jobs=$(nproc)
 

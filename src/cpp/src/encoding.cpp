@@ -1,131 +1,152 @@
 #include "delta/encoding.h"
+#include "overloaded.h"
 
-#include <array>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <string>
 
 namespace delta {
 
-static void validate_placed_range(size_t dst, size_t length, size_t version_size, const char* kind) {
-    if (dst > version_size || length > version_size - dst) {
-        throw DeltaError(std::string(kind) + " command exceeds version size");
+using detail::overloaded;
+using Crc = std::array<uint8_t, DELTA_CRC_SIZE>;
+
+namespace {
+
+bool has_magic(std::span<const uint8_t> data, const uint8_t* magic) {
+    return data.size() >= DELTA_MAGIC_SIZE
+        && std::memcmp(data.data(), magic, DELTA_MAGIC_SIZE) == 0;
+}
+
+void put_u32(std::vector<uint8_t>& out, uint32_t val) {
+    for (int shift = 24; shift >= 0; shift -= 8) {
+        out.push_back(static_cast<uint8_t>(val >> shift));
     }
 }
 
-static void check_u32(size_t val, const char* field) {
+void put_u64(std::vector<uint8_t>& out, uint64_t val) {
+    for (int shift = 56; shift >= 0; shift -= 8) {
+        out.push_back(static_cast<uint8_t>(val >> shift));
+    }
+}
+
+void put_bytes(std::vector<uint8_t>& out, std::span<const uint8_t> bytes) {
+    out.insert(out.end(), bytes.begin(), bytes.end());
+}
+
+uint32_t to_u32(size_t val, const char* field) {
     if (val > UINT32_MAX) {
         throw DeltaError(std::string(field) + " exceeds 4 GiB (32-bit format limit)");
     }
+    return static_cast<uint32_t>(val);
 }
 
-// Guard against uint64_t → size_t truncation on 32-bit platforms.
-static size_t check_u64_fits(uint64_t val, const char* field) {
-    if (val > std::numeric_limits<size_t>::max()) {
-        throw DeltaError(std::string(field) + " overflows size_t on this platform");
+bool fits_u32(std::initializer_list<size_t> fields) {
+    for (size_t f : fields) {
+        if (f > UINT32_MAX) { return false; }
     }
-    return static_cast<size_t>(val);
+    return true;
 }
 
-// ── Big-endian I/O helpers ────────────────────────────────────────────────
-
-static inline void write_u32_be(std::vector<uint8_t>& out, uint32_t val) {
-    out.push_back(static_cast<uint8_t>(val >> 24));
-    out.push_back(static_cast<uint8_t>(val >> 16));
-    out.push_back(static_cast<uint8_t>(val >>  8));
-    out.push_back(static_cast<uint8_t>(val));
+/// Appends a DLT\x04 command: the opcode of its 32-bit or 64-bit form, then
+/// the fields at that width.
+void put_command(std::vector<uint8_t>& out, uint8_t op, uint8_t big_op,
+                 bool force_large, std::initializer_list<size_t> fields) {
+    if (!force_large && fits_u32(fields)) {
+        out.push_back(op);
+        for (size_t f : fields) { put_u32(out, static_cast<uint32_t>(f)); }
+    } else {
+        out.push_back(big_op);
+        for (size_t f : fields) { put_u64(out, f); }
+    }
 }
 
-static inline void write_u64_be(std::vector<uint8_t>& out, uint64_t val) {
-    out.push_back(static_cast<uint8_t>(val >> 56));
-    out.push_back(static_cast<uint8_t>(val >> 48));
-    out.push_back(static_cast<uint8_t>(val >> 40));
-    out.push_back(static_cast<uint8_t>(val >> 32));
-    out.push_back(static_cast<uint8_t>(val >> 24));
-    out.push_back(static_cast<uint8_t>(val >> 16));
-    out.push_back(static_cast<uint8_t>(val >>  8));
-    out.push_back(static_cast<uint8_t>(val));
+/// Reads big-endian fields from a delta, throwing DeltaError at its end.
+class Reader {
+public:
+    explicit Reader(std::span<const uint8_t> data) : data_(data) {}
+
+    bool at_end() const { return pos_ == data_.size(); }
+
+    std::span<const uint8_t> take(size_t n) {
+        if (n > data_.size() - pos_) {
+            throw DeltaError("unexpected end of delta data");
+        }
+        pos_ += n;
+        return data_.subspan(pos_ - n, n);
+    }
+
+    uint8_t u8() { return take(1)[0]; }
+
+    /// A u64 field if wide, else a u32 field.
+    size_t field(bool wide) {
+        uint64_t val = 0;
+        for (uint8_t byte : take(wide ? DELTA_U64_SIZE : DELTA_U32_SIZE)) {
+            val = val << 8 | byte;
+        }
+        if (val > std::numeric_limits<size_t>::max()) {
+            throw DeltaError("field overflows size_t on this platform");
+        }
+        return static_cast<size_t>(val);
+    }
+
+    Crc crc() {
+        Crc c;
+        std::memcpy(c.data(), take(DELTA_CRC_SIZE).data(), DELTA_CRC_SIZE);
+        return c;
+    }
+
+private:
+    std::span<const uint8_t> data_;
+    size_t pos_ = 0;
+};
+
+const char* command_name(uint8_t op) {
+    switch (op) {
+    case DELTA_CMD_COPY:    return "copy";
+    case DELTA_CMD_ADD:     return "add";
+    case DELTA_CMD_BIGCOPY: return "bigcopy";
+    case DELTA_CMD_BIGADD:  return "bigadd";
+    case DELTA_CMD_MOVE:    return "move";
+    case DELTA_CMD_BIGMOVE: return "bigmove";
+    default:                return nullptr;
+    }
 }
 
-static inline uint32_t read_u32_be(const uint8_t* p) {
-    return (static_cast<uint32_t>(p[0]) << 24)
-         | (static_cast<uint32_t>(p[1]) << 16)
-         | (static_cast<uint32_t>(p[2]) <<  8)
-         |  static_cast<uint32_t>(p[3]);
-}
-
-static inline uint64_t read_u64_be(const uint8_t* p) {
-    return (static_cast<uint64_t>(p[0]) << 56)
-         | (static_cast<uint64_t>(p[1]) << 48)
-         | (static_cast<uint64_t>(p[2]) << 40)
-         | (static_cast<uint64_t>(p[3]) << 32)
-         | (static_cast<uint64_t>(p[4]) << 24)
-         | (static_cast<uint64_t>(p[5]) << 16)
-         | (static_cast<uint64_t>(p[6]) <<  8)
-         |  static_cast<uint64_t>(p[7]);
-}
-
-// ── Shared u32 command parsers (used by both decoders) ───────────────────
-
-static PlacedCopy parse_copy(std::span<const uint8_t> data, size_t& pos, size_t version_size) {
-    if (pos + DELTA_COPY_PAYLOAD > data.size())
-        throw DeltaError("unexpected end of delta data");
-    size_t src    = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-    size_t dst    = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-    size_t length = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-    validate_placed_range(dst, length, version_size, "copy");
-    return {src, dst, length};
-}
-
-static PlacedAdd parse_add(std::span<const uint8_t> data, size_t& pos, size_t version_size) {
-    if (pos + DELTA_ADD_HEADER > data.size())
-        throw DeltaError("unexpected end of delta data");
-    size_t dst    = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-    size_t length = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-    if (length > data.size() - pos)
-        throw DeltaError("unexpected end of delta data");
-    validate_placed_range(dst, length, version_size, "add");
-    std::vector<uint8_t> payload(data.begin() + pos, data.begin() + pos + length);
-    pos += length;
-    return {dst, std::move(payload)};
-}
-
-// ── Encode ────────────────────────────────────────────────────────────────
+} // namespace
 
 std::vector<uint8_t> encode_delta(
     const std::vector<PlacedCommand>& commands,
     bool inplace,
     size_t version_size,
-    const std::array<uint8_t, DELTA_CRC_SIZE>& src_crc,
-    const std::array<uint8_t, DELTA_CRC_SIZE>& dst_crc) {
+    const Crc& src_crc,
+    const Crc& dst_crc) {
 
     std::vector<uint8_t> out;
-    out.insert(out.end(), DELTA_MAGIC, DELTA_MAGIC + DELTA_MAGIC_SIZE);
+    put_bytes(out, DELTA_MAGIC);
     out.push_back(inplace ? DELTA_FLAG_INPLACE : 0);
-    check_u32(version_size, "version_size");
-    write_u32_be(out, static_cast<uint32_t>(version_size));
-    out.insert(out.end(), src_crc.begin(), src_crc.end());
-    out.insert(out.end(), dst_crc.begin(), dst_crc.end());
+    put_u32(out, to_u32(version_size, "version_size"));
+    put_bytes(out, src_crc);
+    put_bytes(out, dst_crc);
 
     for (const auto& cmd : commands) {
-        if (auto* c = std::get_if<PlacedCopy>(&cmd)) {
-            check_u32(c->src,    "copy src offset");
-            check_u32(c->dst,    "copy dst offset");
-            check_u32(c->length, "copy length");
-            out.push_back(DELTA_CMD_COPY);
-            write_u32_be(out, static_cast<uint32_t>(c->src));
-            write_u32_be(out, static_cast<uint32_t>(c->dst));
-            write_u32_be(out, static_cast<uint32_t>(c->length));
-        } else if (auto* a = std::get_if<PlacedAdd>(&cmd)) {
-            check_u32(a->dst,        "add dst offset");
-            check_u32(a->data.size(), "add length");
-            out.push_back(DELTA_CMD_ADD);
-            write_u32_be(out, static_cast<uint32_t>(a->dst));
-            write_u32_be(out, static_cast<uint32_t>(a->data.size()));
-            out.insert(out.end(), a->data.begin(), a->data.end());
-        } else if (std::get_if<PlacedMove>(&cmd)) {
-            throw DeltaError("PlacedMove requires DLT\\x04 format; use encode_delta_large");
-        }
+        std::visit(overloaded{
+            [&](const PlacedCopy& c) {
+                out.push_back(DELTA_CMD_COPY);
+                put_u32(out, to_u32(c.src, "copy src offset"));
+                put_u32(out, to_u32(c.dst, "copy dst offset"));
+                put_u32(out, to_u32(c.length, "copy length"));
+            },
+            [&](const PlacedAdd& a) {
+                out.push_back(DELTA_CMD_ADD);
+                put_u32(out, to_u32(a.dst, "add dst offset"));
+                put_u32(out, to_u32(a.data.size(), "add length"));
+                put_bytes(out, a.data);
+            },
+            [&](const PlacedMove&) {
+                throw DeltaError("PlacedMove requires DLT\\x04 format; use encode_delta_large");
+            },
+        }, cmd);
     }
 
     out.push_back(DELTA_CMD_END);
@@ -136,216 +157,106 @@ std::vector<uint8_t> encode_delta_large(
     const std::vector<PlacedCommand>& commands,
     bool inplace,
     size_t version_size,
-    const std::array<uint8_t, DELTA_CRC_SIZE>& src_crc,
-    const std::array<uint8_t, DELTA_CRC_SIZE>& dst_crc,
+    const Crc& src_crc,
+    const Crc& dst_crc,
     bool force_large) {
 
     std::vector<uint8_t> out;
-    out.insert(out.end(), DELTA_MAGIC_LARGE, DELTA_MAGIC_LARGE + DELTA_MAGIC_SIZE);
+    put_bytes(out, DELTA_MAGIC_LARGE);
     out.push_back(inplace ? DELTA_FLAG_INPLACE : 0);
-    write_u64_be(out, static_cast<uint64_t>(version_size));
-    out.insert(out.end(), src_crc.begin(), src_crc.end());
-    out.insert(out.end(), dst_crc.begin(), dst_crc.end());
+    put_u64(out, version_size);
+    put_bytes(out, src_crc);
+    put_bytes(out, dst_crc);
 
     for (const auto& cmd : commands) {
-        if (auto* c = std::get_if<PlacedCopy>(&cmd)) {
-            if (!force_large && c->src <= UINT32_MAX && c->dst <= UINT32_MAX && c->length <= UINT32_MAX) {
-                out.push_back(DELTA_CMD_COPY);
-                write_u32_be(out, static_cast<uint32_t>(c->src));
-                write_u32_be(out, static_cast<uint32_t>(c->dst));
-                write_u32_be(out, static_cast<uint32_t>(c->length));
-            } else {
-                out.push_back(DELTA_CMD_BIGCOPY);
-                write_u64_be(out, static_cast<uint64_t>(c->src));
-                write_u64_be(out, static_cast<uint64_t>(c->dst));
-                write_u64_be(out, static_cast<uint64_t>(c->length));
-            }
-        } else if (auto* a = std::get_if<PlacedAdd>(&cmd)) {
-            if (!force_large && a->dst <= UINT32_MAX && a->data.size() <= UINT32_MAX) {
-                out.push_back(DELTA_CMD_ADD);
-                write_u32_be(out, static_cast<uint32_t>(a->dst));
-                write_u32_be(out, static_cast<uint32_t>(a->data.size()));
-            } else {
-                out.push_back(DELTA_CMD_BIGADD);
-                write_u64_be(out, static_cast<uint64_t>(a->dst));
-                write_u64_be(out, static_cast<uint64_t>(a->data.size()));
-            }
-            out.insert(out.end(), a->data.begin(), a->data.end());
-        } else if (auto* m = std::get_if<PlacedMove>(&cmd)) {
-            if (!force_large && m->src <= UINT32_MAX && m->dst <= UINT32_MAX && m->length <= UINT32_MAX) {
-                out.push_back(DELTA_CMD_MOVE);
-                write_u32_be(out, static_cast<uint32_t>(m->src));
-                write_u32_be(out, static_cast<uint32_t>(m->dst));
-                write_u32_be(out, static_cast<uint32_t>(m->length));
-            } else {
-                out.push_back(DELTA_CMD_BIGMOVE);
-                write_u64_be(out, static_cast<uint64_t>(m->src));
-                write_u64_be(out, static_cast<uint64_t>(m->dst));
-                write_u64_be(out, static_cast<uint64_t>(m->length));
-            }
-        }
+        std::visit(overloaded{
+            [&](const PlacedCopy& c) {
+                put_command(out, DELTA_CMD_COPY, DELTA_CMD_BIGCOPY, force_large,
+                            {c.src, c.dst, c.length});
+            },
+            [&](const PlacedAdd& a) {
+                put_command(out, DELTA_CMD_ADD, DELTA_CMD_BIGADD, force_large,
+                            {a.dst, a.data.size()});
+                put_bytes(out, a.data);
+            },
+            [&](const PlacedMove& m) {
+                put_command(out, DELTA_CMD_MOVE, DELTA_CMD_BIGMOVE, force_large,
+                            {m.src, m.dst, m.length});
+            },
+        }, cmd);
     }
 
     out.push_back(DELTA_CMD_END);
     return out;
 }
 
-// ── Decode ────────────────────────────────────────────────────────────────
+std::tuple<std::vector<PlacedCommand>, bool, size_t, Crc, Crc> decode_delta(
+    std::span<const uint8_t> data) {
 
-using DecodeResult = std::tuple<std::vector<PlacedCommand>, bool, size_t,
-                                std::array<uint8_t, DELTA_CRC_SIZE>,
-                                std::array<uint8_t, DELTA_CRC_SIZE>>;
-
-static DecodeResult decode_delta_small(std::span<const uint8_t> data) {
-    if (data.size() < DELTA_HEADER_SIZE)
+    const bool large = has_magic(data, DELTA_MAGIC_LARGE);
+    if (!large && !has_magic(data, DELTA_MAGIC)) {
         throw DeltaError("not a delta file");
-
-    bool inplace = (data[DELTA_MAGIC_SIZE] & DELTA_FLAG_INPLACE) != 0;
-    size_t version_size = read_u32_be(&data[DELTA_MAGIC_SIZE + 1]);
-
-    const size_t crc_offset = DELTA_MAGIC_SIZE + 1 + DELTA_U32_SIZE;
-    std::array<uint8_t, DELTA_CRC_SIZE> src_crc{}, dst_crc{};
-    std::memcpy(src_crc.data(), &data[crc_offset], DELTA_CRC_SIZE);
-    std::memcpy(dst_crc.data(), &data[crc_offset + DELTA_CRC_SIZE], DELTA_CRC_SIZE);
-
-    size_t pos = DELTA_HEADER_SIZE;
-    std::vector<PlacedCommand> commands;
-    bool saw_end = false;
-
-    while (pos < data.size()) {
-        uint8_t t = data[pos++];
-        switch (t) {
-        case DELTA_CMD_END:
-            saw_end = true;
-            break;
-        case DELTA_CMD_COPY:
-            commands.emplace_back(parse_copy(data, pos, version_size));
-            break;
-        case DELTA_CMD_ADD:
-            commands.emplace_back(parse_add(data, pos, version_size));
-            break;
-        case DELTA_CMD_BIGCOPY:
-        case DELTA_CMD_BIGADD:
-        case DELTA_CMD_MOVE:
-        case DELTA_CMD_BIGMOVE:
-            throw DeltaError("command type " + std::to_string(t) + " requires DLT\\x04 format");
-        default:
-            throw DeltaError("unknown command type: " + std::to_string(t));
-        }
-        if (saw_end) break;
+    }
+    if (data.size() < (large ? DELTA_HEADER_SIZE_LARGE : DELTA_HEADER_SIZE)) {
+        throw DeltaError("not a delta file");
     }
 
-    if (!saw_end)
-        throw DeltaError("missing END command");
-    if (pos != data.size())
-        throw DeltaError("trailing data after END");
-    return {std::move(commands), inplace, version_size, src_crc, dst_crc};
-}
+    Reader in(data);
+    in.take(DELTA_MAGIC_SIZE);
+    const bool inplace = (in.u8() & DELTA_FLAG_INPLACE) != 0;
+    const size_t version_size = in.field(large);
+    const Crc src_crc = in.crc();
+    const Crc dst_crc = in.crc();
 
-static DecodeResult decode_delta_large(std::span<const uint8_t> data) {
-    if (data.size() < DELTA_HEADER_SIZE_LARGE)
-        throw DeltaError("not a delta file");
-
-    bool inplace = (data[DELTA_MAGIC_SIZE] & DELTA_FLAG_INPLACE) != 0;
-    size_t version_size = check_u64_fits(read_u64_be(&data[DELTA_MAGIC_SIZE + 1]), "version_size");
-
-    const size_t crc_offset = DELTA_MAGIC_SIZE + 1 + DELTA_U64_SIZE;
-    std::array<uint8_t, DELTA_CRC_SIZE> src_crc{}, dst_crc{};
-    std::memcpy(src_crc.data(), &data[crc_offset], DELTA_CRC_SIZE);
-    std::memcpy(dst_crc.data(), &data[crc_offset + DELTA_CRC_SIZE], DELTA_CRC_SIZE);
-
-    size_t pos = DELTA_HEADER_SIZE_LARGE;
     std::vector<PlacedCommand> commands;
-    bool saw_end = false;
+    for (;;) {
+        if (in.at_end()) { throw DeltaError("missing END command"); }
+        const uint8_t op = in.u8();
+        if (op == DELTA_CMD_END) { break; }
 
-    while (pos < data.size()) {
-        uint8_t t = data[pos++];
-        switch (t) {
-        case DELTA_CMD_END:
-            saw_end = true;
-            break;
-        case DELTA_CMD_COPY:
-            commands.emplace_back(parse_copy(data, pos, version_size));
-            break;
-        case DELTA_CMD_ADD:
-            commands.emplace_back(parse_add(data, pos, version_size));
-            break;
-        case DELTA_CMD_BIGCOPY: {
-            if (pos + DELTA_BIGCOPY_PAYLOAD > data.size())
-                throw DeltaError("unexpected end of delta data");
-            size_t src    = check_u64_fits(read_u64_be(&data[pos]), "bigcopy src");    pos += DELTA_U64_SIZE;
-            size_t dst    = check_u64_fits(read_u64_be(&data[pos]), "bigcopy dst");    pos += DELTA_U64_SIZE;
-            size_t length = check_u64_fits(read_u64_be(&data[pos]), "bigcopy length"); pos += DELTA_U64_SIZE;
-            validate_placed_range(dst, length, version_size, "bigcopy");
+        const char* name = command_name(op);
+        if (!name) {
+            throw DeltaError("unknown command type: " + std::to_string(op));
+        }
+        if (!large && op != DELTA_CMD_COPY && op != DELTA_CMD_ADD) {
+            throw DeltaError("command type " + std::to_string(op) + " requires DLT\\x04 format");
+        }
+        const bool wide = op == DELTA_CMD_BIGCOPY || op == DELTA_CMD_BIGADD
+                       || op == DELTA_CMD_BIGMOVE;
+        const bool is_add = op == DELTA_CMD_ADD || op == DELTA_CMD_BIGADD;
+        const bool is_move = op == DELTA_CMD_MOVE || op == DELTA_CMD_BIGMOVE;
+
+        const size_t src = is_add ? 0 : in.field(wide);
+        const size_t dst = in.field(wide);
+        const size_t length = in.field(wide);
+        std::span<const uint8_t> literal;
+        if (is_add) { literal = in.take(length); }
+
+        if (dst > version_size || length > version_size - dst) {
+            throw DeltaError(std::string(name) + " command exceeds version size");
+        }
+        if (is_add) {
+            commands.emplace_back(PlacedAdd{dst, {literal.begin(), literal.end()}});
+        } else if (is_move) {
+            // Written so that src + length cannot wrap around.
+            if (src > dst || length > dst - src) {
+                throw DeltaError(std::string(name)
+                    + " src+length > dst: encoder ordering constraint violated");
+            }
+            commands.emplace_back(PlacedMove{src, dst, length});
+        } else {
             commands.emplace_back(PlacedCopy{src, dst, length});
-            break;
         }
-        case DELTA_CMD_BIGADD: {
-            if (pos + DELTA_BIGADD_HEADER > data.size())
-                throw DeltaError("unexpected end of delta data");
-            size_t dst    = check_u64_fits(read_u64_be(&data[pos]), "bigadd dst");    pos += DELTA_U64_SIZE;
-            size_t length = check_u64_fits(read_u64_be(&data[pos]), "bigadd length"); pos += DELTA_U64_SIZE;
-            if (length > data.size() - pos)
-                throw DeltaError("unexpected end of delta data");
-            validate_placed_range(dst, length, version_size, "bigadd");
-            std::vector<uint8_t> payload(data.begin() + pos, data.begin() + pos + length);
-            pos += length;
-            commands.emplace_back(PlacedAdd{dst, std::move(payload)});
-            break;
-        }
-        case DELTA_CMD_MOVE: {
-            if (pos + DELTA_COPY_PAYLOAD > data.size())
-                throw DeltaError("unexpected end of delta data");
-            size_t src    = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-            size_t dst    = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-            size_t length = read_u32_be(&data[pos]); pos += DELTA_U32_SIZE;
-            validate_placed_range(dst, length, version_size, "move");
-            if (src + length > dst)
-                throw DeltaError("move src+length > dst: encoder ordering constraint violated");
-            commands.emplace_back(PlacedMove{src, dst, length});
-            break;
-        }
-        case DELTA_CMD_BIGMOVE: {
-            if (pos + DELTA_BIGCOPY_PAYLOAD > data.size())
-                throw DeltaError("unexpected end of delta data");
-            size_t src    = check_u64_fits(read_u64_be(&data[pos]), "bigmove src");    pos += DELTA_U64_SIZE;
-            size_t dst    = check_u64_fits(read_u64_be(&data[pos]), "bigmove dst");    pos += DELTA_U64_SIZE;
-            size_t length = check_u64_fits(read_u64_be(&data[pos]), "bigmove length"); pos += DELTA_U64_SIZE;
-            validate_placed_range(dst, length, version_size, "bigmove");
-            if (src + length > dst)
-                throw DeltaError("bigmove src+length > dst: encoder ordering constraint violated");
-            commands.emplace_back(PlacedMove{src, dst, length});
-            break;
-        }
-        default:
-            throw DeltaError("unknown command type: " + std::to_string(t));
-        }
-        if (saw_end) break;
     }
+    if (!in.at_end()) { throw DeltaError("trailing data after END"); }
 
-    if (!saw_end)
-        throw DeltaError("missing END command");
-    if (pos != data.size())
-        throw DeltaError("trailing data after END");
     return {std::move(commands), inplace, version_size, src_crc, dst_crc};
-}
-
-DecodeResult decode_delta(std::span<const uint8_t> data) {
-    if (data.size() < DELTA_MAGIC_SIZE)
-        throw DeltaError("not a delta file");
-    if (std::memcmp(data.data(), DELTA_MAGIC, DELTA_MAGIC_SIZE) == 0)
-        return decode_delta_small(data);
-    if (std::memcmp(data.data(), DELTA_MAGIC_LARGE, DELTA_MAGIC_SIZE) == 0)
-        return decode_delta_large(data);
-    throw DeltaError("not a delta file");
 }
 
 bool is_inplace_delta(std::span<const uint8_t> data) {
-    if (data.size() < DELTA_MAGIC_SIZE + 1)
-        return false;
-    bool small_magic = std::memcmp(data.data(), DELTA_MAGIC,       DELTA_MAGIC_SIZE) == 0;
-    bool large_magic = std::memcmp(data.data(), DELTA_MAGIC_LARGE, DELTA_MAGIC_SIZE) == 0;
-    return (small_magic || large_magic) && (data[DELTA_MAGIC_SIZE] & DELTA_FLAG_INPLACE) != 0;
+    return data.size() > DELTA_MAGIC_SIZE
+        && (has_magic(data, DELTA_MAGIC) || has_magic(data, DELTA_MAGIC_LARGE))
+        && (data[DELTA_MAGIC_SIZE] & DELTA_FLAG_INPLACE) != 0;
 }
 
 } // namespace delta

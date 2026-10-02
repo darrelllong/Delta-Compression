@@ -1,6 +1,6 @@
 #pragma once
 
-/// Command placement and application.
+/// Placing commands at output offsets, and carrying them out.
 
 #include <cstddef>
 #include <cstdint>
@@ -11,42 +11,48 @@
 
 namespace delta {
 
-/// Compute the total output size of algorithm commands.
+/// The number of bytes the commands write.
 size_t output_size(const std::vector<Command>& commands);
 
-/// Convert algorithm output to placed commands with sequential destinations.
+/// Gives each command its destination: the commands write the output front
+/// to back, in order.
 std::vector<PlacedCommand> place_commands(const std::vector<Command>& commands);
 
-/// Convert placed commands back to algorithm commands (strip destinations).
-/// Commands are sorted by destination offset to recover original sequential order.
+/// The inverse of place_commands: the commands in order of destination,
+/// without the destinations.  Throws DeltaError if there is a PlacedMove,
+/// which has no unplaced form.
 std::vector<Command> unplace_commands(const std::vector<PlacedCommand>& placed);
 
-/// Apply placed commands in standard mode: read from R, write to out.
-/// Returns the number of bytes written.
-size_t apply_placed_to(
-    std::span<const uint8_t> r,
-    const std::vector<PlacedCommand>& commands,
-    std::span<uint8_t> out);
-
-/// Apply placed commands in-place within a single buffer.
-/// Uses memmove so overlapping src/dst is safe.
-void apply_placed_inplace_to(
-    const std::vector<PlacedCommand>& commands,
-    std::span<uint8_t> buf);
-
-/// Validate placed commands before apply so malformed deltas fail cleanly.
+/// Throws DeltaError unless every command stays within its bounds: writes
+/// within version_size, and reads within reference_size, or for an in-place
+/// delta within the working buffer of max(reference_size, version_size)
+/// bytes.  The apply functions below do not check; call this first on
+/// commands from an untrusted delta.
 void validate_placed_commands(
     const std::vector<PlacedCommand>& commands,
     size_t reference_size,
     size_t version_size,
     bool inplace);
 
-/// Reconstruct the version from reference + algorithm commands.
+/// Carries out a standard delta: reads from r, writes to out, which must not
+/// overlap r.  Returns one past the highest offset written.
+size_t apply_placed_to(
+    std::span<const uint8_t> r,
+    const std::vector<PlacedCommand>& commands,
+    std::span<uint8_t> out);
+
+/// Carries out an in-place delta in buf, which holds R on entry and must be
+/// at least as long as the longer of R and V.
+void apply_placed_inplace_to(
+    const std::vector<PlacedCommand>& commands,
+    std::span<uint8_t> buf);
+
+/// Returns V, given R and the commands of a differencing algorithm.
 std::vector<uint8_t> apply_delta(
     std::span<const uint8_t> r,
     const std::vector<Command>& commands);
 
-/// Apply placed in-place commands to a buffer initialized with R.
+/// Returns V, given R and the commands of an in-place delta.
 std::vector<uint8_t> apply_delta_inplace(
     std::span<const uint8_t> r,
     const std::vector<PlacedCommand>& commands,

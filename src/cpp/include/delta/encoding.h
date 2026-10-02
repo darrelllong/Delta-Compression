@@ -1,14 +1,20 @@
 #pragma once
 
-/// Binary delta format encode/decode (DLT\x03 small and DLT\x04 large).
+/// The binary delta format.  All integers are big-endian.
 ///
-/// DLT\x03 (small) — 25-byte header, u32 fields, COPY/ADD only.
-///   magic(4)+flags(1)+version_size(u32 BE)+src_crc(8)+dst_crc(8)
-///   Commands: END=0  COPY=1(src:u32,dst:u32,len:u32)  ADD=2(dst:u32,len:u32,data)
+///   header:   magic(4) flags(1) version_size src_crc(8) dst_crc(8)
+///   commands: END     0
+///             COPY    1 src dst len
+///             ADD     2 dst len data
+///             BIGCOPY 3 src dst len      u64 fields
+///             BIGADD  4 dst len data     u64 fields
+///             MOVE    5 src dst len
+///             BIGMOVE 6 src dst len      u64 fields
 ///
-/// DLT\x04 (large) — 29-byte header, u64 fields, adds BIGCOPY/BIGADD/MOVE/BIGMOVE.
-///   magic(4)+flags(1)+version_size(u64 BE)+src_crc(8)+dst_crc(8)
-///   Commands: additionally BIGCOPY=3, BIGADD=4, MOVE=5, BIGMOVE=6
+/// DLT\x03 has a u32 version_size and only END, COPY and ADD.  DLT\x04 has a
+/// u64 version_size and all seven.  Fields are u32 unless marked.  Bit 0 of
+/// flags marks an in-place delta.  The CRCs are the CRC-64/XZ of the
+/// reference and of the version.
 
 #include <array>
 #include <cstddef>
@@ -21,9 +27,8 @@
 
 namespace delta {
 
-/// Encode placed commands to DLT\x03 format (u32 fields, max 4 GiB).
-/// Throws DeltaError if any field exceeds UINT32_MAX or if a PlacedMove is present.
-/// Use encode_delta_large for DLT\x04 (u64 fields, PlacedMove commands).
+/// Encodes as DLT\x03.  Throws DeltaError if a field does not fit in 32 bits
+/// or if there is a PlacedMove.
 std::vector<uint8_t> encode_delta(
     const std::vector<PlacedCommand>& commands,
     bool inplace,
@@ -31,9 +36,8 @@ std::vector<uint8_t> encode_delta(
     const std::array<uint8_t, DELTA_CRC_SIZE>& src_crc,
     const std::array<uint8_t, DELTA_CRC_SIZE>& dst_crc);
 
-/// Encode placed commands to DLT\x04 format (u64 fields, PlacedMove support).
-/// Per-command size selection: small (u32) or big (u64) fields based on value.
-/// When force_large is true the 64-bit variant is always emitted.
+/// Encodes as DLT\x04.  Each command takes its 32-bit form if its fields
+/// fit, unless force_large asks for the 64-bit form throughout.
 std::vector<uint8_t> encode_delta_large(
     const std::vector<PlacedCommand>& commands,
     bool inplace,
@@ -42,15 +46,17 @@ std::vector<uint8_t> encode_delta_large(
     const std::array<uint8_t, DELTA_CRC_SIZE>& dst_crc,
     bool force_large = false);
 
-/// Decode DLT\x03 or DLT\x04 format. Dispatches on magic bytes.
-/// Returns (commands, inplace, version_size, src_crc, dst_crc).
-/// CRC validation is the caller's responsibility.
+/// Decodes either format.  Returns (commands, inplace, version_size, src_crc,
+/// dst_crc).  Throws DeltaError if the data is malformed or a command writes
+/// outside the version.  Sources of copies are not checked, since the size
+/// of the reference is not known here, and neither are the CRCs: see
+/// validate_placed_commands and crc64_xz.
 std::tuple<std::vector<PlacedCommand>, bool, size_t,
            std::array<uint8_t, DELTA_CRC_SIZE>,
            std::array<uint8_t, DELTA_CRC_SIZE>> decode_delta(
     std::span<const uint8_t> data);
 
-/// Check if binary data is an in-place delta (DLT\x03 or DLT\x04).
+/// Reports whether data begins with the header of an in-place delta.
 bool is_inplace_delta(std::span<const uint8_t> data);
 
 } // namespace delta

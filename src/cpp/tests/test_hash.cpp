@@ -11,16 +11,12 @@
 
 using namespace delta;
 
-// ── mod_mersenne ─────────────────────────────────────────────────────────
-
 TEST_CASE("mod_mersenne basic values", "[hash]") {
     CHECK(mod_mersenne(0) == 0);
     CHECK(mod_mersenne(HASH_MOD) == 0);
     CHECK(mod_mersenne(static_cast<__uint128_t>(HASH_MOD) + 1) == 1);
     CHECK(mod_mersenne(42) == 42);
 }
-
-// ── fingerprint ──────────────────────────────────────────────────────────
 
 TEST_CASE("fingerprint is deterministic", "[hash]") {
     std::vector<uint8_t> data = {'A','B','C','D','E','F','G','H',
@@ -29,8 +25,6 @@ TEST_CASE("fingerprint is deterministic", "[hash]") {
     CHECK(fp != 0);
     CHECK(fp == fingerprint(data, 0, 16));
 }
-
-// ── rolling hash ─────────────────────────────────────────────────────────
 
 TEST_CASE("rolling hash matches fingerprint at every offset", "[hash]") {
     std::vector<uint8_t> data = {'T','h','e',' ','q','u','i','c','k',' ',
@@ -46,8 +40,6 @@ TEST_CASE("rolling hash matches fingerprint at every offset", "[hash]") {
         REQUIRE(rh.value() == fingerprint(data, i, p));
     }
 }
-
-// ── primality testing ────────────────────────────────────────────────────
 
 TEST_CASE("known primes", "[hash]") {
     std::vector<size_t> primes = {
@@ -108,8 +100,6 @@ TEST_CASE("next_prime consecutive range produces valid primes", "[hash]") {
 TEST_CASE("TABLE_SIZE is prime", "[hash]") {
     CHECK(is_prime(TABLE_SIZE));
 }
-
-// ── CRC-64/XZ check values ────────────────────────────────────────────────
 
 static std::string to_hex(const std::array<uint8_t, DELTA_CRC_SIZE>& h) {
     std::string s;
