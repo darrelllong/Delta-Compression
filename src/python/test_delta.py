@@ -5,6 +5,10 @@ Run:  python3 test_delta.py [-v]
 """
 
 import random
+import struct
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -14,15 +18,13 @@ from delta import (
     PlacedCopy, PlacedAdd, PlacedMove,
     diff_greedy, diff_onepass, diff_correcting,
     place_commands, encode_delta, encode_delta_large, decode_delta,
-    apply_delta, apply_placed, apply_placed_inplace,
+    apply_delta, apply_placed, apply_placed_to, apply_placed_inplace,
     is_inplace_delta,
     make_inplace,
     _crc64_xz,
     _is_prime, _next_prime, _witness, _get_d_r,
 )
 
-
-# ── helpers ──────────────────────────────────────────────────────────────
 
 def roundtrip(algo_fn, R, V, p=2, q=TABLE_SIZE):
     """Standard encode → binary → decode → apply, return recovered bytes."""
@@ -58,8 +60,6 @@ def inplace_binary_roundtrip(algo_fn, R, V, policy='localmin', p=4):
     assert dst_c == _crc64_xz(V)
     return apply_placed_inplace(R, ip2, vs)
 
-
-# ── standard differencing ────────────────────────────────────────────────
 
 class TestPaperExample(unittest.TestCase):
     """Section 2.1.1 of Ajtai et al. 2002."""
@@ -191,6 +191,7 @@ class TestBinaryEncoding(unittest.TestCase):
         # header (25) + END byte (1)
         self.assertEqual(len(delta), 26)
 
+
 class TestBinaryEncodingErrors(unittest.TestCase):
 
     _src = b"\x00" * 8
@@ -303,8 +304,6 @@ class TestScatteredModifications(unittest.TestCase):
     def test_correcting(self): self._run(diff_correcting)
 
 
-# ── in-place basics ──────────────────────────────────────────────────────
-
 class TestInPlacePaperExample(unittest.TestCase):
 
     R = b"ABCDEFGHIJKLMNOP"
@@ -414,6 +413,44 @@ class TestInPlaceEmptyVersion(unittest.TestCase):
     def test_correcting(self): self._run(diff_correcting)
 
 
+class TestInPlaceNoCopies(unittest.TestCase):
+    """make_inplace honours return_stats when there is nothing to schedule."""
+
+    def test_empty_commands(self):
+        self.assertEqual(make_inplace(b"hello", []), [])
+        self.assertEqual(make_inplace(b"hello", [], return_stats=True),
+                         ([], {'cycles_broken': 0}))
+
+    def test_adds_only(self):
+        cmds = [AddCmd(data=b"abc"), AddCmd(data=b"de")]
+        want = [PlacedAdd(dst=0, data=b"abc"), PlacedAdd(dst=3, data=b"de")]
+        for pol in ['localmin', 'constant']:
+            self.assertEqual(make_inplace(b"", cmds, policy=pol), want)
+            self.assertEqual(
+                make_inplace(b"", cmds, policy=pol, return_stats=True),
+                (want, {'cycles_broken': 0}))
+
+    def test_cli_encode_inplace(self):
+        """encode --inplace works when the delta has no copies."""
+        script = Path(__file__).with_name("delta.py")
+        cases = [(b"", b"hello world"),            # empty reference
+                 (b"hello world", b""),            # empty version
+                 (bytes(range(64)), b"\xff" * 9),  # version shorter than a seed
+                 (bytes(64), b"\xff" * 64)]        # nothing in common
+        with tempfile.TemporaryDirectory() as tmp:
+            ref, ver, dlt, out = (Path(tmp) / n for n in "rvdo")
+            for R, V in cases:
+                ref.write_bytes(R)
+                ver.write_bytes(V)
+                for cmd in (["encode", "onepass", ref, ver, dlt, "--inplace"],
+                            ["decode", ref, dlt, out]):
+                    proc = subprocess.run([sys.executable, script, *cmd],
+                                          capture_output=True, text=True)
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertTrue(is_inplace_delta(dlt.read_bytes()))
+                self.assertEqual(out.read_bytes(), V)
+
+
 class TestInPlaceScattered(unittest.TestCase):
 
     @classmethod
@@ -455,8 +492,6 @@ class TestInPlaceFormatDetection(unittest.TestCase):
                              src_crc=_crc64_xz(R), dst_crc=_crc64_xz(V))
         self.assertTrue(is_inplace_delta(delta))
 
-
-# ── in-place: variable-length transpositions ─────────────────────────────
 
 def _make_blocks():
     """8 blocks with distinct byte patterns and varying sizes (200–5000)."""
@@ -516,7 +551,8 @@ class TestInPlaceVarlenJunk(unittest.TestCase):
         cls.blocks = _make_blocks()
         cls.R = b''.join(cls.blocks)
         rng = random.Random(2003)
-        # consume same state as Permutation test so seeds stay independent
+        # Draw what the Permutation test draws, so the permutation below
+        # differs from that test's.
         _skip = list(range(8)); rng.shuffle(_skip)
         junk = bytes(rng.getrandbits(8) for _ in range(300))
         perm = list(range(8))
@@ -669,8 +705,6 @@ class TestInPlaceVarlenRandomTrials(unittest.TestCase):
     def test_correcting_lmin(self):  self._run_all(diff_correcting, 'localmin')
 
 
-# ── in-place: controlled transpositions (cycle-heavy workloads) ───────────
-
 def generate_transposed(num_blocks, block_size, num_transpositions, seed=42):
     """Generate reference and version data with controlled transpositions.
 
@@ -807,8 +841,6 @@ class TestBothPoliciesCorrectOnTranspositions(unittest.TestCase):
             self.V)
 
 
-# ── in-place: localmin actually picks the smaller victim ─────────────────
-
 class TestLocalminPicksSmallest(unittest.TestCase):
     """When blocks have different sizes, localmin should convert fewer bytes
     than constant (or at worst the same)."""
@@ -827,8 +859,6 @@ class TestLocalminPicksSmallest(unittest.TestCase):
         add_lmin  = sum(len(c.data) for c in ip_lmin  if isinstance(c, PlacedAdd))
         self.assertLessEqual(add_lmin, add_const)
 
-
-# ── Miller-Rabin primality testing ─────────────────────────────────────────
 
 class TestGetDR(unittest.TestCase):
     """Factor n into d * 2^r."""
@@ -863,7 +893,7 @@ class TestWitness(unittest.TestCase):
 
 
 class TestIsPrime(unittest.TestCase):
-    """Miller-Rabin probabilistic primality with random witnesses."""
+    """Deterministic Miller-Rabin primality."""
 
     # First 50 primes
     KNOWN_PRIMES = [
@@ -892,8 +922,8 @@ class TestIsPrime(unittest.TestCase):
         self.assertTrue(_is_prime(104729))     # 10000th prime
 
     def test_carmichael_numbers(self):
-        # Carmichael numbers pass the Fermat test for all bases
-        # but Miller-Rabin with random witnesses catches them.
+        # Carmichael numbers pass the Fermat test for every coprime base;
+        # Miller-Rabin does not share the weakness.
         carmichaels = [561, 1105, 1729, 2465, 2821, 6601, 8911]
         for c in carmichaels:
             self.assertFalse(_is_prime(c), f"Carmichael number {c} should be composite")
@@ -985,8 +1015,6 @@ class TestCheckpointing(unittest.TestCase):
         self.assertEqual(recovered, V)
 
 
-# ── CRC-64/XZ checksum tests ──────────────────────────────────────────────
-
 class TestCrc64(unittest.TestCase):
     """CRC-64/XZ helper correctness and check values."""
 
@@ -1040,9 +1068,6 @@ class TestCrcEmbeddedInDelta(unittest.TestCase):
 
     def test_crc_size_constant(self):
         self.assertEqual(DELTA_CRC_SIZE, 8)
-
-
-# ── edge-case tests ──────────────────────────────────────────────────────────
 
 
 class TestSingleByte(unittest.TestCase):
@@ -1120,7 +1145,7 @@ class TestSizeSweep(unittest.TestCase):
 
 
 class TestEncodingVersionSizeBoundaries(unittest.TestCase):
-    """version_size at LEB128 encoding boundaries round-trips intact."""
+    """version_size at byte and power-of-two boundaries round-trips intact."""
 
     _z = b'\x00' * 8
 
@@ -1285,8 +1310,6 @@ class TestRealDataRoundTrip(unittest.TestCase):
     def test_correcting(self): self._run(diff_correcting)
 
 
-# ── DLT\x04 format tests ─────────────────────────────────────────────────────
-
 def _zero_crc():
     return b'\x00' * DELTA_CRC_SIZE
 
@@ -1299,7 +1322,6 @@ def _roundtrip_large(commands, version_size, R=b''):
     assert vs == version_size
     assert delta[:4] == DELTA_MAGIC_LARGE
     buf = bytearray(version_size)
-    from delta import apply_placed_to
     apply_placed_to(R, cmds2, buf)
     return bytes(buf)
 
@@ -1359,7 +1381,6 @@ class TestDltLargeCopy(unittest.TestCase):
 
     def test_bigcopy_roundtrip_decode(self):
         # Decode a hand-crafted BIGCOPY and verify fields
-        import struct
         header = DELTA_MAGIC_LARGE + bytes([0]) + struct.pack('>Q', 100)
         header += _zero_crc() + _zero_crc()
         big_src = 2**32 + 7
@@ -1416,9 +1437,12 @@ class TestDltLargeMove(unittest.TestCase):
                                    src_crc=_zero_crc(), dst_crc=_zero_crc())
         self.assertEqual(delta[29], 6)  # DELTA_CMD_BIGMOVE = 6
 
+    def test_apply_placed_sizes_moves(self):
+        cmds = [PlacedAdd(dst=0, data=b'ABC'), PlacedMove(src=0, dst=3, length=3)]
+        self.assertEqual(apply_placed(b'', cmds), b'ABCABC')
+
     def test_move_overlap_rejected(self):
         # src + length > dst: decoder must reject
-        import struct
         header = DELTA_MAGIC_LARGE + bytes([0]) + struct.pack('>Q', 10)
         header += _zero_crc() + _zero_crc()
         # MOVE src=5 dst=7 length=4 → src+length=9 > dst=7
@@ -1449,7 +1473,6 @@ class TestDltLargeRejected(unittest.TestCase):
 
     def test_bigcopy_in_v3_stream_rejected(self):
         # Hand-craft a DLT\x03 file with a BIGCOPY byte — must be rejected
-        import struct
         header = DELTA_MAGIC + bytes([0]) + struct.pack('>I', 10)
         header += _zero_crc() + _zero_crc()
         body = bytes([3]) + struct.pack('>QQQ', 0, 0, 5) + bytes([0])
@@ -1457,7 +1480,6 @@ class TestDltLargeRejected(unittest.TestCase):
             decode_delta(header + body)
 
     def test_unknown_magic_rejected(self):
-        import struct
         bad = b'DLT\x99' + bytes([0]) + struct.pack('>I', 0)
         bad += _zero_crc() + _zero_crc() + bytes([0])
         with self.assertRaises(ValueError):
