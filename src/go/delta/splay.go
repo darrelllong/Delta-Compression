@@ -1,118 +1,89 @@
 package delta
 
-// SplayTree is a self-adjusting binary search tree keyed on int64 (fingerprint).
-//
-// Every access splays the accessed node to the root via top-down splay.
-// Amortized O(log n) per operation.
-//
-// Reference: Sleator & Tarjan, "Self-Adjusting Binary Search Trees",
-// JACM 32(3), 1985.
+// SplayTree is a self-adjusting binary search tree keyed on fingerprints
+// (Sleator and Tarjan, "Self-Adjusting Binary Search Trees", JACM 32(3),
+// 1985). Every operation splays the node it touches to the root, so
+// operations take O(log n) amortized time and recently used keys are cheap
+// to reach again. The zero value is an empty tree.
 type SplayTree[V any] struct {
 	root *splayNode[V]
 	size int
 }
 
 type splayNode[V any] struct {
-	key         int64
+	key         uint64
 	value       V
 	left, right *splayNode[V]
 }
 
-// Len returns the number of entries in the tree.
+// Len returns the number of keys in the tree.
 func (t *SplayTree[V]) Len() int { return t.size }
 
-// Find returns the value for key and true, or the zero value and false.
-// The found node is splayed to the root.
-func (t *SplayTree[V]) Find(key int64) (V, bool) {
-	if t.root == nil {
-		var zero V
-		return zero, false
-	}
-	t.splay(key)
-	if t.root.key == key {
+// Find returns the value stored at key and whether the key is present.
+func (t *SplayTree[V]) Find(key uint64) (V, bool) {
+	if t.splay(key) {
 		return t.root.value, true
 	}
 	var zero V
 	return zero, false
 }
 
-// Insert stores value at key, overwriting any existing entry.
-func (t *SplayTree[V]) Insert(key int64, value V) {
-	if t.root == nil {
-		t.root = &splayNode[V]{key: key, value: value}
-		t.size++
-		return
-	}
-	t.splay(key)
-	if t.root.key == key {
-		t.root.value = value
-		return
-	}
-	node := &splayNode[V]{key: key, value: value}
-	t.size++
-	if key < t.root.key {
-		node.left = t.root.left
-		node.right = t.root
-		t.root.left = nil
-	} else {
-		node.right = t.root.right
-		node.left = t.root
-		t.root.right = nil
-	}
-	t.root = node
-}
-
-// InsertOrGet inserts key with value if absent and returns (storedValue, inserted).
-// If key already exists, the existing value is returned unchanged.
-func (t *SplayTree[V]) InsertOrGet(key int64, value V) (V, bool) {
-	if t.root == nil {
-		t.root = &splayNode[V]{key: key, value: value}
-		t.size++
-		return t.root.value, true
-	}
-	t.splay(key)
-	if t.root.key == key {
+// InsertOrGet stores value at key if the key is absent. It returns the value
+// now at key and whether it was inserted.
+func (t *SplayTree[V]) InsertOrGet(key uint64, value V) (V, bool) {
+	if t.splay(key) {
 		return t.root.value, false
 	}
-	node := &splayNode[V]{key: key, value: value}
+	t.insertRoot(key, value)
+	return value, true
+}
+
+// At returns a pointer to the value stored at key, first storing the zero
+// value there if the key is absent.
+func (t *SplayTree[V]) At(key uint64) *V {
+	if !t.splay(key) {
+		var zero V
+		t.insertRoot(key, zero)
+	}
+	return &t.root.value
+}
+
+// insertRoot makes key the new root. The tree must have just been splayed
+// on key and must not contain it, so the old root is key's predecessor or
+// successor.
+func (t *SplayTree[V]) insertRoot(key uint64, value V) {
+	n := &splayNode[V]{key: key, value: value}
+	if old := t.root; old != nil {
+		if key < old.key {
+			n.left, n.right = old.left, old
+			old.left = nil
+		} else {
+			n.left, n.right = old, old.right
+			old.right = nil
+		}
+	}
+	t.root = n
 	t.size++
-	if key < t.root.key {
-		node.left = t.root.left
-		node.right = t.root
-		t.root.left = nil
-	} else {
-		node.right = t.root.right
-		node.left = t.root
-		t.root.right = nil
-	}
-	t.root = node
-	return t.root.value, true
 }
 
-// SetValue updates the value of the root node (after Find or Insert).
-func (t *SplayTree[V]) SetValue(value V) {
-	if t.root != nil {
-		t.root.value = value
-	}
-}
-
-// splay performs top-down splay (Sleator & Tarjan 1985).
-func (t *SplayTree[V]) splay(key int64) {
-	if t.root == nil {
-		return
-	}
-	var header splayNode[V] // sentinel; only left/right used
-	l := &header
-	r := &header
+// splay moves the node with the given key to the root and reports whether
+// it exists. If it does not, the last node on the search path becomes the
+// root. This is the top-down splay of Sleator and Tarjan, Section 4.
+func (t *SplayTree[V]) splay(key uint64) bool {
 	cur := t.root
-
-	for {
+	if cur == nil {
+		return false
+	}
+	// header.right and header.left collect the trees of keys less than and
+	// greater than key; l and r are where the next such subtree is hung.
+	var header splayNode[V]
+	l, r := &header, &header
+	for key != cur.key {
 		if key < cur.key {
 			if cur.left == nil {
 				break
 			}
-			if key < cur.left.key {
-				// Zig-zig: rotate right.
+			if key < cur.left.key { // zig-zig: rotate right
 				y := cur.left
 				cur.left = y.right
 				y.right = cur
@@ -121,16 +92,14 @@ func (t *SplayTree[V]) splay(key int64) {
 					break
 				}
 			}
-			// Link right.
-			r.left = cur
+			r.left = cur // link right
 			r = cur
 			cur = cur.left
-		} else if key > cur.key {
+		} else {
 			if cur.right == nil {
 				break
 			}
-			if key > cur.right.key {
-				// Zig-zig: rotate left.
+			if key > cur.right.key { // zig-zig: rotate left
 				y := cur.right
 				cur.right = y.left
 				y.left = cur
@@ -139,19 +108,15 @@ func (t *SplayTree[V]) splay(key int64) {
 					break
 				}
 			}
-			// Link left.
-			l.right = cur
+			l.right = cur // link left
 			l = cur
 			cur = cur.right
-		} else {
-			break // found
 		}
 	}
-
-	// Assemble.
 	l.right = cur.left
 	r.left = cur.right
 	cur.left = header.right
 	cur.right = header.left
 	t.root = cur
+	return cur.key == key
 }

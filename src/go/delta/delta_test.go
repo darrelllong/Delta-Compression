@@ -8,15 +8,15 @@ import (
 	"testing"
 )
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// Helpers.
 
 var allAlgos = []Algorithm{AlgorithmGreedy, AlgorithmOnepass, AlgorithmCorrecting}
 var allPolicies = []CyclePolicy{CyclePolicyLocalmin, CyclePolicyConstant}
 
 var zeroHash [8]byte
 
-// mustEncode calls EncodeDelta and panics on error. Test inputs are always
-// well below the 4 GiB format limit, so errors here indicate a code bug.
+// mustEncode calls EncodeDelta and fails the test on error. Test inputs are
+// far below the format's 4 GiB limit.
 func mustEncode(t *testing.T, commands []PlacedCommand, inplace bool, versionSize int, srcCrc, dstCrc [8]byte) []byte {
 	t.Helper()
 	out, err := EncodeDelta(commands, inplace, versionSize, srcCrc, dstCrc)
@@ -54,7 +54,8 @@ func repeat(data []byte, n int) []byte {
 
 func b(s string) []byte { return []byte(s) }
 
-// roundtrip: diff → place → encode → decode → applyPlacedTo.
+// roundtrip runs Diff, PlaceCommands, EncodeDelta, DecodeDelta and
+// ApplyPlacedTo, and returns the reconstructed version.
 func roundtrip(t *testing.T, algo Algorithm, r, v []byte, p int) []byte {
 	t.Helper()
 	cmds := Diff(algo, r, v, opts(p))
@@ -69,7 +70,8 @@ func roundtrip(t *testing.T, algo Algorithm, r, v []byte, p int) []byte {
 	return out
 }
 
-// inplaceRoundtrip: diff → makeInplace → applyDeltaInplace (no binary I/O).
+// inplaceRoundtrip runs Diff, MakeInplace and ApplyDeltaInplace, without
+// encoding the delta.
 func inplaceRoundtrip(t *testing.T, algo Algorithm, r, v []byte, pol CyclePolicy, p int) []byte {
 	t.Helper()
 	cmds := Diff(algo, r, v, opts(p))
@@ -77,7 +79,8 @@ func inplaceRoundtrip(t *testing.T, algo Algorithm, r, v []byte, pol CyclePolicy
 	return ApplyDeltaInplace(r, ip, len(v))
 }
 
-// inplaceBinaryRoundtrip: diff → makeInplace → encode → decode → applyDeltaInplace.
+// inplaceBinaryRoundtrip is inplaceRoundtrip with the delta encoded and
+// decoded before it is applied.
 func inplaceBinaryRoundtrip(t *testing.T, algo Algorithm, r, v []byte, pol CyclePolicy, p int) []byte {
 	t.Helper()
 	cmds := Diff(algo, r, v, opts(p))
@@ -90,7 +93,8 @@ func inplaceBinaryRoundtrip(t *testing.T, algo Algorithm, r, v []byte, pol Cycle
 	return ApplyDeltaInplace(r, res.Commands, res.VersionSize)
 }
 
-// viaInplaceSubcommand: encode standard → decode → unplace → makeInplace → encode(inplace).
+// viaInplaceSubcommand returns the in-place delta made the way the inplace
+// subcommand makes it: from a decoded standard delta.
 func viaInplaceSubcommand(t *testing.T, algo Algorithm, r, v []byte, pol CyclePolicy, p int) []byte {
 	t.Helper()
 	cmds := Diff(algo, r, v, opts(p))
@@ -115,7 +119,7 @@ func makeBlocks() [][]byte {
 	for i, sz := range sizes {
 		blk := make([]byte, sz)
 		for j := 0; j < sz; j++ {
-			blk[j] = byte((i*37 + j) & 0xFF)
+			blk[j] = byte(i*37 + j)
 		}
 		blocks[i] = blk
 	}
@@ -131,7 +135,7 @@ func shuffle(arr []int, rng *rand.Rand) {
 	}
 }
 
-// ── standard differencing ─────────────────────────────────────────────────
+// Standard differencing.
 
 func TestPaperExample(t *testing.T) {
 	r := b("ABCDEFGHIJKLMNOP")
@@ -169,8 +173,8 @@ func TestCompletelyDifferent(t *testing.T) {
 	r := make([]byte, 512)
 	v := make([]byte, 512)
 	for i := 0; i < 512; i++ {
-		r[i] = byte(i & 0xFF)
-		v[i] = byte((255 - (i & 0xFF)) & 0xFF)
+		r[i] = byte(i)
+		v[i] = byte(255 - i)
 	}
 	for _, algo := range allAlgos {
 		t.Run(algo.String(), func(t *testing.T) {
@@ -354,7 +358,7 @@ func TestBigPayloadCopyRoundtrip(t *testing.T) {
 func TestBigPayloadAddRoundtrip(t *testing.T) {
 	bigData := make([]byte, 256*4)
 	for i := range bigData {
-		bigData[i] = byte(i & 0xFF)
+		bigData[i] = byte(i)
 	}
 	placed := []PlacedCommand{PlacedAdd{DstOff: 0, Data: bigData}}
 	encoded := mustEncode(t, placed, false, len(bigData), zeroHash, zeroHash)
@@ -416,7 +420,7 @@ func TestScatteredModifications(t *testing.T) {
 	}
 }
 
-// ── in-place basics ──────────────────────────────────────────────────────────
+// In-place basics.
 
 func TestInplacePaperExample(t *testing.T) {
 	r := b("ABCDEFGHIJKLMNOP")
@@ -566,7 +570,7 @@ func TestInplaceDetected(t *testing.T) {
 	}
 }
 
-// ── in-place variable-length blocks ──────────────────────────────────────────
+// In-place variable-length blocks.
 
 func TestInplaceVarlenPermutation(t *testing.T) {
 	blocks := makeBlocks()
@@ -774,7 +778,7 @@ func TestInplaceVarlenRandomTrials(t *testing.T) {
 	}
 }
 
-// ── cycle policy ──────────────────────────────────────────────────────────────
+// Cycle policy.
 
 func TestLocalminPicksSmallest(t *testing.T) {
 	blocks := makeBlocks()
@@ -804,7 +808,7 @@ func TestLocalminPicksSmallest(t *testing.T) {
 	}
 }
 
-// ── checkpointing ─────────────────────────────────────────────────────────────
+// Checkpointing.
 
 func TestCorrectingCheckpointingTinyTable(t *testing.T) {
 	r := repeat(b("ABCDEFGHIJKLMNOP"), 20)
@@ -822,7 +826,7 @@ func TestCorrectingCheckpointingTinyTable(t *testing.T) {
 func TestCorrectingCheckpointingVariousSizes(t *testing.T) {
 	r := make([]byte, 2000)
 	for i := range r {
-		r[i] = byte(i & 0xFF)
+		r[i] = byte(i)
 	}
 	v := make([]byte, 2050)
 	copy(v, r[:500])
@@ -856,7 +860,7 @@ func itoa(n int) string {
 	return string(buf)
 }
 
-// ── CRC-64/XZ ────────────────────────────────────────────────────────────────
+// CRC-64/XZ.
 
 func TestCrc64Empty(t *testing.T) {
 	got := Crc64XZ(nil)
@@ -874,7 +878,7 @@ func TestCrc64CheckValue(t *testing.T) {
 	}
 }
 
-// ── primality ────────────────────────────────────────────────────────────────
+// Primality.
 
 func TestNextPrimeIsPrime(t *testing.T) {
 	if !IsPrime(TableSize) {
@@ -888,7 +892,7 @@ func TestNextPrimeIsPrime(t *testing.T) {
 	}
 }
 
-// ── inplace subcommand path ───────────────────────────────────────────────────
+// Inplace subcommand path.
 
 func TestInplaceSubcommandRoundtrip(t *testing.T) {
 	rs := [][]byte{b("ABCDEF"), b("AAABBBCCC"), b("the quick brown fox"),
@@ -958,7 +962,7 @@ func TestInplaceSubcommandEquivDirect(t *testing.T) {
 	}
 }
 
-// ── splay tree ────────────────────────────────────────────────────────────────
+// Splay tree.
 
 func TestSplayRoundtrip(t *testing.T) {
 	r := repeat(b("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), 100)
@@ -976,7 +980,7 @@ func TestSplayRoundtrip(t *testing.T) {
 	}
 }
 
-// ── edge cases and boundaries ─────────────────────────────────────────────────
+// Edge cases and boundaries.
 
 func TestSingleByte(t *testing.T) {
 	one := []byte{0x41}
@@ -1058,7 +1062,7 @@ func TestSizeSweep(t *testing.T) {
 		63, 64, 65, 127, 128, 129, 255, 256, 257, 511, 512, 513}
 	bigRef := make([]byte, 600)
 	for i := range bigRef {
-		bigRef[i] = byte(i * 3 & 0xFF)
+		bigRef[i] = byte(i * 3)
 	}
 	for _, vLen := range sizes {
 		for _, algo := range allAlgos {
@@ -1068,7 +1072,7 @@ func TestSizeSweep(t *testing.T) {
 			}
 			vNew := make([]byte, vLen)
 			for i := range vNew {
-				vNew[i] = byte(i*7 + 1&0xFF)
+				vNew[i] = byte(i*7 + 1)
 			}
 			if got := roundtrip(t, algo, bigRef, vNew, p); !bytes.Equal(vNew, got) {
 				t.Fatalf("%s vLen=%d all-new ver failed", algo, vLen)
@@ -1147,7 +1151,7 @@ func TestInplaceVersionOneLargerTight(t *testing.T) {
 	for _, n := range []int{1, 2, 3, 4, 7, 8, 15, 16, 17, 31, 32, 63, 64} {
 		r := make([]byte, n)
 		for i := range r {
-			r[i] = byte(i & 0xFF)
+			r[i] = byte(i)
 		}
 		v := append(make([]byte, n), 0x5A)
 		copy(v, r)
@@ -1167,7 +1171,7 @@ func TestInplaceVersionOneSmallerTight(t *testing.T) {
 	for _, n := range []int{2, 3, 4, 5, 8, 9, 15, 16, 17, 31, 32, 65} {
 		r := make([]byte, n)
 		for i := range r {
-			r[i] = byte(i & 0xFF)
+			r[i] = byte(i)
 		}
 		v := r[:n-1]
 		for _, algo := range allAlgos {
@@ -1185,7 +1189,7 @@ func TestInplaceVersionSameSizeTight(t *testing.T) {
 	for _, n := range []int{2, 4, 8, 16, 32, 64, 128, 256} {
 		r := make([]byte, n)
 		for i := range r {
-			r[i] = byte(i & 0xFF)
+			r[i] = byte(i)
 		}
 		half := n / 2
 		v := make([]byte, n)
@@ -1285,7 +1289,7 @@ func TestEncodeDeltaRejectsAddDstOverflow(t *testing.T) {
 	}
 }
 
-// ── DLT\x04 (large format) tests ─────────────────────────────────────────────
+// DLT\x04 (large format) tests.
 
 func TestLargeHeaderMagic(t *testing.T) {
 	out := EncodeDeltaLarge(nil, false, 0, zeroHash, zeroHash, false)
@@ -1374,7 +1378,7 @@ func TestLargeBigAddCommandByte(t *testing.T) {
 }
 
 func TestLargeMoveRoundtrip(t *testing.T) {
-	// ADD "ABC" at 0, MOVE src=0 dst=3 len=3 → "ABCABC"
+	// ADD "ABC" at 0, MOVE src=0 dst=3 len=3 gives "ABCABC"
 	cmds := []PlacedCommand{
 		PlacedAdd{DstOff: 0, Data: b("ABC")},
 		PlacedMove{Src: 0, DstOff: 3, Length: 3},
@@ -1409,11 +1413,11 @@ func TestLargeBigMoveCommandByte(t *testing.T) {
 }
 
 func TestLargeMoveOverlapRejected(t *testing.T) {
-	// Construct a hand-crafted delta with MOVE src+length > dst — must be rejected.
+	// Construct a hand-crafted delta with MOVE src+length > dst; must be rejected.
 	import_struct := func(vsz, src, dst, length int) []byte {
 		hdr := append([]byte(DeltaMagicLarge), 0)
 		hdr = append(hdr, 0, 0, 0, 0, 0, 0, 0, byte(vsz)) // u64 BE version_size
-		hdr = append(hdr, make([]byte, 16)...)              // crcs
+		hdr = append(hdr, make([]byte, 16)...)            // crcs
 		// MOVE src dst len (u32)
 		body := []byte{DeltaCmdMove,
 			byte(src >> 24), byte(src >> 16), byte(src >> 8), byte(src),
@@ -1431,7 +1435,7 @@ func TestLargeMoveOverlapRejected(t *testing.T) {
 }
 
 func TestSmallRejectsLargeCommandBytes(t *testing.T) {
-	// Hand-craft a DLT\x03 file containing a BIGCOPY byte — must be rejected.
+	// Hand-craft a DLT\x03 file containing a BIGCOPY byte; must be rejected.
 	hdr := append([]byte(DeltaMagic), 0)
 	hdr = append(hdr, 0, 0, 0, 10) // u32 BE version_size = 10
 	hdr = append(hdr, make([]byte, 16)...)
@@ -1508,9 +1512,7 @@ func TestLargeAlgoRoundtripCorrecting(t *testing.T) {
 }
 
 // TestLargeU64TruncationGuard crafts a DLT\x04 stream whose version_size
-// field is 2^63 (top bit set). On a 64-bit platform this value exceeds
-// math.MaxInt64 so getU64BE rejects it; on a 32-bit platform it would be
-// caught even earlier. Either way, DecodeDelta must return a non-nil error.
+// field is 2^63, which no int can hold. DecodeDelta must return an error.
 func TestLargeU64TruncationGuard(t *testing.T) {
 	buf := make([]byte, DeltaHeaderSizeLarge+1)
 	copy(buf, DeltaMagicLarge)

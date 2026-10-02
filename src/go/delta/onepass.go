@@ -1,253 +1,156 @@
 package delta
 
-import "fmt"
-import "os"
+import (
+	"bytes"
+	"fmt"
+	"os"
+)
 
-// diffOnepass implements the One-Pass algorithm (Section 4.1, Figure 3).
+// A onepassTable maps a fingerprint to the offset of the first seed stored
+// with it since the table was last emptied. Each entry records the version
+// at which it was stored and only entries of the current version count, so
+// advancing the version empties the table in constant time.
 //
-// Scans R and V concurrently with two hash tables (one per string).
-// Each slot stores at most one offset per fingerprint (retain-existing
-// policy: first entry wins, later collisions are discarded).
-// Hash tables are logically flushed after each match via version counter.
-// Time: O(np + q), space: O(q).
+// The hash table has one slot for each residue of the fingerprint modulo the
+// table size, and the first seed to claim a slot keeps it; the splay tree
+// has an entry for every fingerprint.
+//
+// The slots' versions are kept apart from their seeds because most lookups
+// find a slot that is not current and read nothing else; the versions alone
+// are far more likely to be in the cache.
+type onepassTable struct {
+	version []uint64 // versions start at 1, so a zero slot is never current
+	seed    []onepassSeed
+	tree    *SplayTree[onepassEntry] // used in place of the slots if not nil
+}
+
+type onepassSeed struct {
+	fp     uint64
+	offset int
+}
+
+type onepassEntry struct {
+	offset  int
+	version uint64
+}
+
+func newOnepassTable(q int, useSplay bool) *onepassTable {
+	if useSplay {
+		return &onepassTable{tree: new(SplayTree[onepassEntry])}
+	}
+	return &onepassTable{version: make([]uint64, q), seed: make([]onepassSeed, q)}
+}
+
+// store records the seed at offset unless its place is taken by a seed of
+// the current version.
+func (t *onepassTable) store(fp uint64, offset int, version uint64) {
+	if t.tree != nil {
+		if e := t.tree.At(fp); e.version != version {
+			*e = onepassEntry{offset, version}
+		}
+		return
+	}
+	i := fp % uint64(len(t.version))
+	if t.version[i] != version {
+		t.version[i] = version
+		t.seed[i] = onepassSeed{fp, offset}
+	}
+}
+
+// lookup returns the offset of the seed stored with fingerprint fp at the
+// current version, if there is one.
+func (t *onepassTable) lookup(fp, version uint64) (offset int, ok bool) {
+	if t.tree != nil {
+		e, found := t.tree.Find(fp)
+		return e.offset, found && e.version == version
+	}
+	i := fp % uint64(len(t.version))
+	if t.version[i] != version || t.seed[i].fp != fp {
+		return 0, false
+	}
+	return t.seed[i].offset, true
+}
+
+// diffOnepass is the one-pass algorithm (Section 4.1, Figure 3). It scans R
+// and V in step, entering the seed at each position into that string's
+// table and looking it up in the other's. On a match it emits a copy, moves
+// both scans past the match, and empties both tables. It takes time linear
+// in the input and space that depends only on the table size, but because
+// it never looks back it misses blocks that appear in a different order in
+// V (Section 4.3).
 func diffOnepass(r, v []byte, opts DiffOptions) []Command {
 	if len(v) == 0 {
 		return nil
 	}
-
 	p := opts.P
-	q := opts.Q
-	verbose := opts.Verbose
-	useSplay := opts.UseSplay
 
-	// Auto-size hash table: one slot per p-byte chunk of R (floor = q).
-	numSeeds := 0
-	if len(r) >= p {
-		numSeeds = len(r) - p + 1
-	}
-	q = int(NextPrime(max64(int64(q), int64(numSeeds/p))))
+	// One slot for every p bytes of R, but at least opts.Q.
+	q := NextPrime(max(opts.Q, numSeeds(len(r), p)/p))
 
-	if verbose {
-		structName := "hash table"
-		if useSplay {
-			structName = "splay tree"
-		}
+	if opts.Verbose {
 		fmt.Fprintf(os.Stderr, "onepass: %s, q=%d, |R|=%d, |V|=%d, seed_len=%d\n",
-			structName, q, len(r), len(v), p)
+			lookupName(opts.UseSplay), q, len(r), len(v), p)
 	}
 
-	// Step (1): version-based logical flushing.
-	// Hash table entries: parallel arrays for fp, offset, version.
-	var htVFp, htRFp []int64
-	var htVOff, htROff []int
-	var htVVer, htRVer []int64
-	var spV, spR *SplayTree[[2]int64] // value = [offset, version]
-
-	if useSplay {
-		spV = &SplayTree[[2]int64]{}
-		spR = &SplayTree[[2]int64]{}
-	} else {
-		htVFp = make([]int64, q)
-		htVOff = make([]int, q)
-		htVVer = make([]int64, q)
-		htRFp = make([]int64, q)
-		htROff = make([]int, q)
-		htRVer = make([]int64, q)
-		for i := range htVVer {
-			htVVer[i] = -1
-			htRVer[i] = -1
-		}
-	}
-
-	htPut := func(fps []int64, offs []int, vers []int64, fp int64, off int, ver int64) {
-		idx := int(fp % int64(q))
-		if idx < 0 {
-			idx += q
-		}
-		if vers[idx] == ver {
-			return // retain-existing
-		}
-		fps[idx] = fp
-		offs[idx] = off
-		vers[idx] = ver
-	}
-
-	htGet := func(fps []int64, offs []int, vers []int64, fp int64, ver int64) int {
-		idx := int(fp % int64(q))
-		if idx < 0 {
-			idx += q
-		}
-		if vers[idx] == ver && fps[idx] == fp {
-			return offs[idx]
-		}
-		return -1
-	}
-
-	// Step (2): initialize scan pointers.
-	ver := int64(0)
-	rC, vC, vS := 0, 0, 0
-
-	var rhV, rhR *RollingHash
-	rhVPos, rhRPos := 0, 0
-	if len(v) >= p {
-		rhV = NewRollingHash(v, 0, p)
-	}
-	if len(r) >= p {
-		rhR = NewRollingHash(r, 0, p)
-	}
+	tableR := newOnepassTable(q, opts.UseSplay)
+	tableV := newOnepassTable(q, opts.UseSplay)
+	hashR := newRollingHash(r, p)
+	hashV := newRollingHash(v, p)
 
 	var commands []Command
-
-	for vC+p <= len(v) || rC+p <= len(r) {
-		// Step (3): which streams still have seeds?
-		canV := vC+p <= len(v)
-		canR := rC+p <= len(r)
-
-		fpV := int64(-1)
-		fpR := int64(-1)
-		hasFpV := false
-		hasFpR := false
-
-		if canV && rhV != nil {
-			if vC == rhVPos {
-				// already positioned
-			} else if vC == rhVPos+1 {
-				rhV.Roll(int(v[vC-1]&0xFF), int(v[vC+p-1]&0xFF))
-				rhVPos = vC
-			} else {
-				rhV = NewRollingHash(v, vC, p)
-				rhVPos = vC
-			}
-			fpV = rhV.Value()
-			hasFpV = true
+	version := uint64(1)
+	rC, vC := 0, 0 // scan positions
+	vS := 0        // start of the bytes of V not yet encoded
+	for {
+		haveR := rC+p <= len(r)
+		haveV := vC+p <= len(v)
+		if !haveR && !haveV {
+			break
 		}
-		if canR && rhR != nil {
-			if rC == rhRPos {
-				// already positioned
-			} else if rC == rhRPos+1 {
-				rhR.Roll(int(r[rC-1]&0xFF), int(r[rC+p-1]&0xFF))
-				rhRPos = rC
-			} else {
-				rhR = NewRollingHash(r, rC, p)
-				rhRPos = rC
-			}
-			fpR = rhR.Value()
-			hasFpR = true
+		var fpR, fpV uint64
+		if haveV {
+			fpV = hashV.at(vC)
+			tableV.store(fpV, vC, version)
+		}
+		if haveR {
+			fpR = hashR.at(rC)
+			tableR.store(fpR, rC, version)
 		}
 
-		// Step (4a): store offsets (retain-existing policy).
-		if hasFpV {
-			if useSplay {
-				entry, ok := spV.Find(fpV)
-				if !ok || entry[1] != ver {
-					spV.Insert(fpV, [2]int64{int64(vC), ver})
-				}
-			} else {
-				htPut(htVFp, htVOff, htVVer, fpV, vC, ver)
+		// A match pairs the seed at one scan position with a seed of the
+		// other string that is already in its table.
+		rM, vM, found := 0, 0, false
+		if haveR {
+			if off, ok := tableV.lookup(fpR, version); ok && bytes.Equal(r[rC:rC+p], v[off:off+p]) {
+				rM, vM, found = rC, off, true
 			}
 		}
-		if hasFpR {
-			if useSplay {
-				entry, ok := spR.Find(fpR)
-				if !ok || entry[1] != ver {
-					spR.Insert(fpR, [2]int64{int64(rC), ver})
-				}
-			} else {
-				htPut(htRFp, htROff, htRVer, fpR, rC, ver)
+		if !found && haveV {
+			if off, ok := tableR.lookup(fpV, version); ok && bytes.Equal(v[vC:vC+p], r[off:off+p]) {
+				rM, vM, found = off, vC, true
 			}
 		}
-
-		// Step (4b): look for a matching seed in the other table.
-		matchFound := false
-		rM, vM := 0, 0
-
-		if hasFpR {
-			var vCand int
-			if useSplay {
-				entry, ok := spV.Find(fpR)
-				if ok && entry[1] == ver {
-					vCand = int(entry[0])
-				} else {
-					vCand = -1
-				}
-			} else {
-				vCand = htGet(htVFp, htVOff, htVVer, fpR, ver)
-			}
-			if vCand >= 0 && regionEquals(r, rC, v, vCand, p) {
-				rM = rC
-				vM = vCand
-				matchFound = true
-			}
-		}
-
-		if !matchFound && hasFpV {
-			var rCand int
-			if useSplay {
-				entry, ok := spR.Find(fpV)
-				if ok && entry[1] == ver {
-					rCand = int(entry[0])
-				} else {
-					rCand = -1
-				}
-			} else {
-				rCand = htGet(htRFp, htROff, htRVer, fpV, ver)
-			}
-			if rCand >= 0 && regionEquals(v, vC, r, rCand, p) {
-				vM = vC
-				rM = rCand
-				matchFound = true
-			}
-		}
-
-		if !matchFound {
-			vC++
+		if !found {
 			rC++
+			vC++
 			continue
 		}
 
-		// Step (5): extend match forward.
-		ml := 0
-		for vM+ml < len(v) && rM+ml < len(r) && v[vM+ml] == r[rM+ml] {
-			ml++
-		}
-
-		if ml < p {
-			vC++
-			rC++
-			continue
-		}
-
-		// Step (6): encode.
+		n := commonPrefix(r[rM:], v[vM:])
 		if vS < vM {
-			data := make([]byte, vM-vS)
-			copy(data, v[vS:vM])
-			commands = append(commands, AddCmd{Data: data})
+			commands = append(commands, literal(v[vS:vM]))
 		}
-		commands = append(commands, CopyCmd{Offset: rM, Length: ml})
-		vS = vM + ml
-
-		// Step (7): advance pointers and flush tables.
-		vC = vM + ml
-		rC = rM + ml
-		ver++
+		commands = append(commands, CopyCmd{Offset: rM, Length: n})
+		rC, vC = rM+n, vM+n
+		vS = vC
+		version++
 	}
-
-	// Step (8): trailing add.
 	if vS < len(v) {
-		data := make([]byte, len(v)-vS)
-		copy(data, v[vS:])
-		commands = append(commands, AddCmd{Data: data})
+		commands = append(commands, literal(v[vS:]))
 	}
 
-	if verbose {
+	if opts.Verbose {
 		printStats(commands)
 	}
 	return commands
-}
-
-func max64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
 }

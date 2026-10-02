@@ -5,140 +5,88 @@ import (
 	"os"
 )
 
-// diffGreedy implements the greedy algorithm (Section 3.1, Figure 2).
-//
-// Finds an optimal delta encoding under the simple cost measure.
-// (Optimality proof: Section 3.3, Theorem 1.)
-// Time: O(|V| * |R|) worst case. Space: O(|R|).
+// A seedIndex maps a fingerprint to the offsets of every seed of R that has
+// it, in increasing order.
+type seedIndex struct {
+	table map[uint64][]int
+	tree  *SplayTree[[]int] // used instead of table when non-nil
+}
+
+func newSeedIndex(useSplay bool) *seedIndex {
+	if useSplay {
+		return &seedIndex{tree: new(SplayTree[[]int])}
+	}
+	return &seedIndex{table: make(map[uint64][]int)}
+}
+
+func (x *seedIndex) add(fp uint64, offset int) {
+	if x.tree == nil {
+		x.table[fp] = append(x.table[fp], offset)
+		return
+	}
+	offsets := x.tree.At(fp)
+	*offsets = append(*offsets, offset)
+}
+
+func (x *seedIndex) offsets(fp uint64) []int {
+	if x.tree == nil {
+		return x.table[fp]
+	}
+	offsets, _ := x.tree.Find(fp)
+	return offsets
+}
+
+// diffGreedy is the greedy algorithm (Section 3.1, Figure 2). It indexes
+// every seed of R, then at each position of V takes the longest match that
+// any seed with the same fingerprint offers. The result is optimal under the
+// simple cost measure (Theorem 1). It takes O(|V|*|R|) time in the worst
+// case and O(|R|) space.
 func diffGreedy(r, v []byte, opts DiffOptions) []Command {
 	if len(v) == 0 {
 		return nil
 	}
-
 	p := opts.P
-	verbose := opts.Verbose
-	useSplay := opts.UseSplay
 
-	// Step (1): build lookup structure for R keyed by full fingerprint.
-	// Maps fingerprint → list of R offsets with that fingerprint.
-	var hrHt map[int64][]int
-	var hrSp *SplayTree[[]int]
-
-	if useSplay {
-		hrSp = &SplayTree[[]int]{}
-	} else {
-		hrHt = make(map[int64][]int)
+	index := newSeedIndex(opts.UseSplay)
+	hashR := newRollingHash(r, p)
+	for a := 0; a+p <= len(r); a++ {
+		index.add(hashR.at(a), a)
 	}
 
-	insertOffset := func(fp int64, offset int) {
-		if useSplay {
-			existing, ok := hrSp.Find(fp)
-			if ok {
-				hrSp.Insert(fp, append(existing, offset))
-			} else {
-				hrSp.Insert(fp, []int{offset})
-			}
-		} else {
-			hrHt[fp] = append(hrHt[fp], offset)
-		}
-	}
-
-	lookupOffsets := func(fp int64) []int {
-		if useSplay {
-			v, _ := hrSp.Find(fp)
-			return v
-		}
-		return hrHt[fp]
-	}
-
-	if len(r) >= p {
-		rh := NewRollingHash(r, 0, p)
-		insertOffset(rh.Value(), 0)
-		for a := 1; a <= len(r)-p; a++ {
-			rh.Roll(int(r[a-1]&0xFF), int(r[a+p-1]&0xFF))
-			insertOffset(rh.Value(), a)
-		}
-	}
-
-	if verbose {
-		structName := "hash table"
-		if useSplay {
-			structName = "splay tree"
-		}
+	if opts.Verbose {
 		fmt.Fprintf(os.Stderr, "greedy: %s, |R|=%d, |V|=%d, seed_len=%d\n",
-			structName, len(r), len(v), p)
-	}
-
-	// Step (2): initialize scan pointers.
-	vC, vS := 0, 0
-	var rhV *RollingHash
-	rhVPos := 0
-	if len(v) >= p {
-		rhV = NewRollingHash(v, 0, p)
+			lookupName(opts.UseSplay), len(r), len(v), p)
 	}
 
 	var commands []Command
-
-	for vC+p <= len(v) {
-		// Step (3)+(4): compute fingerprint at vC.
-		if rhV == nil {
-			break
-		}
-		if vC == rhVPos {
-			// already positioned
-		} else if vC == rhVPos+1 {
-			rhV.Roll(int(v[vC-1]&0xFF), int(v[vC+p-1]&0xFF))
-			rhVPos = vC
-		} else {
-			rhV = NewRollingHash(v, vC, p)
-			rhVPos = vC
-		}
-		fpV := rhV.Value()
-
-		// Steps (4)+(5): find the longest matching substring.
-		bestRm := -1
-		bestLen := 0
-
-		for _, rCand := range lookupOffsets(fpV) {
-			if !regionEquals(r, rCand, v, vC, p) {
-				continue
-			}
-			ml := p
-			for vC+ml < len(v) && rCand+ml < len(r) && v[vC+ml] == r[rCand+ml] {
-				ml++
-			}
-			if ml > bestLen {
-				bestLen = ml
-				bestRm = rCand
+	hashV := newRollingHash(v, p)
+	vS := 0 // start of the bytes of V not yet encoded
+	for vC := 0; vC+p <= len(v); {
+		// Fingerprints can collide, so a candidate counts only if it
+		// matches at least the seed.
+		bestOff, bestLen := 0, 0
+		for _, off := range index.offsets(hashV.at(vC)) {
+			if n := commonPrefix(r[off:], v[vC:]); n >= p && n > bestLen {
+				bestOff, bestLen = off, n
 			}
 		}
-
-		if bestLen < p {
+		if bestLen == 0 {
 			vC++
 			continue
 		}
 
-		// Step (6): encode.
 		if vS < vC {
-			data := make([]byte, vC-vS)
-			copy(data, v[vS:vC])
-			commands = append(commands, AddCmd{Data: data})
+			commands = append(commands, literal(v[vS:vC]))
 		}
-		commands = append(commands, CopyCmd{Offset: bestRm, Length: bestLen})
-		vS = vC + bestLen
-
-		// Step (7): advance past matched region.
+		commands = append(commands, CopyCmd{Offset: bestOff, Length: bestLen})
 		vC += bestLen
+		vS = vC
 	}
-
-	// Step (8): trailing add.
 	if vS < len(v) {
-		data := make([]byte, len(v)-vS)
-		copy(data, v[vS:])
-		commands = append(commands, AddCmd{Data: data})
+		commands = append(commands, literal(v[vS:]))
 	}
 
-	if verbose {
+	if opts.Verbose {
 		printStats(commands)
 	}
 	return commands

@@ -1,16 +1,16 @@
-BIN     := delta
-PKG     := ./cmd/delta
-TESTPKG := ./delta/...
+# The binary is delta/delta because the package directory delta/ already
+# has the name the binary would take here.
+BIN := delta/delta
 
 .PHONY: all build test clean
 
 all: build
 
 build:
-	go build -o $(BIN) $(PKG)
+	go build -o $(BIN) ./cmd/delta
 
 test:
-	go test $(TESTPKG) -v
+	go test ./delta/... -v
 
 clean:
 	rm -f $(BIN)

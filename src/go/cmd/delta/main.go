@@ -1,4 +1,4 @@
-// Command delta is a CLI for differential compression (Ajtai et al. 2002).
+// Command delta computes and applies binary deltas.
 //
 // Usage:
 //
@@ -7,14 +7,13 @@
 //	delta info <delta>
 //	delta inplace <ref> <delta_in> <delta_out> [--policy P]
 //
-// Algorithms: greedy, onepass, correcting
-// Options: --seed-len N, --table-size N, --max-table N (k/M/B ok),
-//
-//	--inplace, --policy P, --verbose, --splay
+// The algorithms are greedy, onepass and correcting. The options of encode
+// are --seed-len N, --table-size N, --max-table N (with an optional k, M or
+// B suffix), --inplace, --large, --policy P, --verbose and --splay.
 package main
 
 import (
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -44,9 +43,8 @@ func run(args []string) error {
 		return cmdInfo(args)
 	case "inplace":
 		return cmdInplace(args)
-	default:
-		usage()
 	}
+	usage()
 	return nil
 }
 
@@ -63,33 +61,29 @@ Options: --seed-len N, --table-size N, --max-table N (k/M/B ok),
 	os.Exit(1)
 }
 
-// parseSizeSuffix parses a size string with optional k/M/B suffix.
-func parseSizeSuffix(s string) (int, error) {
-	if len(s) == 0 {
-		return 0, fmt.Errorf("empty size value")
+// parseSize parses a decimal count with an optional suffix: k for thousand,
+// M for million, B for billion.
+func parseSize(s string) (int, error) {
+	if s == "" {
+		return 0, errors.New("empty size value")
 	}
-	last := s[len(s)-1]
-	var mult int64
-	var num string
-	switch last {
+	mult := 1
+	digits := s[:len(s)-1]
+	switch s[len(s)-1] {
 	case 'k', 'K':
 		mult = 1_000
-		num = s[:len(s)-1]
 	case 'm', 'M':
 		mult = 1_000_000
-		num = s[:len(s)-1]
 	case 'b', 'B':
 		mult = 1_000_000_000
-		num = s[:len(s)-1]
 	default:
-		mult = 1
-		num = s
+		digits = s
 	}
-	n, err := strconv.ParseInt(num, 10, 64)
+	n, err := strconv.ParseInt(digits, 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("invalid size: %s", s)
 	}
-	return int(n * mult), nil
+	return int(n) * mult, nil
 }
 
 func parseAlgorithm(s string) (delta.Algorithm, error) {
@@ -100,9 +94,8 @@ func parseAlgorithm(s string) (delta.Algorithm, error) {
 		return delta.AlgorithmOnepass, nil
 	case "correcting":
 		return delta.AlgorithmCorrecting, nil
-	default:
-		return 0, fmt.Errorf("unknown algorithm: %s", s)
 	}
+	return 0, fmt.Errorf("unknown algorithm: %s", s)
 }
 
 func parsePolicy(s string) (delta.CyclePolicy, error) {
@@ -111,105 +104,108 @@ func parsePolicy(s string) (delta.CyclePolicy, error) {
 		return delta.CyclePolicyLocalmin, nil
 	case "constant":
 		return delta.CyclePolicyConstant, nil
-	default:
-		return 0, fmt.Errorf("unknown policy: %s", s)
 	}
+	return 0, fmt.Errorf("unknown policy: %s", s)
 }
 
-func readFile(path string) ([]byte, error) {
-	return os.ReadFile(path)
+// An optionArgs is the list of options that follow a subcommand's
+// positional arguments.
+type optionArgs []string
+
+// next removes and returns the first argument.
+func (a *optionArgs) next() string {
+	s := (*a)[0]
+	*a = (*a)[1:]
+	return s
 }
 
-func writeFile(path string, data []byte) error {
-	return os.WriteFile(path, data, 0644)
+// value removes and returns the argument of the option name.
+func (a *optionArgs) value(name string) (string, error) {
+	if len(*a) == 0 {
+		return "", fmt.Errorf("%s: missing value", name)
+	}
+	return a.next(), nil
 }
 
-func toHex(b [8]byte) string {
-	return hex.EncodeToString(b[:])
+// intValue is value for an option whose argument parse must accept.
+func (a *optionArgs) intValue(name string, parse func(string) (int, error)) (int, error) {
+	s, err := a.value(name)
+	if err != nil {
+		return 0, err
+	}
+	n, err := parse(s)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %v", name, err)
+	}
+	return n, nil
+}
+
+func formatName(inplace bool) string {
+	if inplace {
+		return "in-place"
+	}
+	return "standard"
 }
 
 func cmdEncode(args []string) error {
 	if len(args) < 5 {
 		usage()
 	}
-
 	algo, err := parseAlgorithm(args[1])
 	if err != nil {
 		return err
 	}
-	refPath := args[2]
-	verPath := args[3]
-	deltaPath := args[4]
+	refPath, verPath, deltaPath := args[2], args[3], args[4]
 
 	opts := delta.DefaultDiffOptions()
 	inplace := false
 	forceLarge := false
 	policy := delta.CyclePolicyLocalmin
-
-	i := 5
-	for i < len(args) {
-		switch args[i] {
+	for rest := optionArgs(args[5:]); len(rest) > 0; {
+		var err error
+		switch name := rest.next(); name {
 		case "--seed-len":
-			if i+1 >= len(args) { return fmt.Errorf("--seed-len: missing value") }
-			i++
-			n, err := strconv.Atoi(args[i])
-			if err != nil {
-				return fmt.Errorf("--seed-len: %v", err)
-			}
-			opts.P = n
+			opts.P, err = rest.intValue(name, strconv.Atoi)
 		case "--table-size":
-			if i+1 >= len(args) { return fmt.Errorf("--table-size: missing value") }
-			i++
-			n, err := strconv.Atoi(args[i])
-			if err != nil {
-				return fmt.Errorf("--table-size: %v", err)
-			}
-			opts.Q = n
+			opts.Q, err = rest.intValue(name, strconv.Atoi)
 		case "--max-table":
-			if i+1 >= len(args) { return fmt.Errorf("--max-table: missing value") }
-			i++
-			n, err := parseSizeSuffix(args[i])
-			if err != nil {
-				return fmt.Errorf("--max-table: %v", err)
-			}
-			opts.MaxTable = n
+			opts.MaxTable, err = rest.intValue(name, parseSize)
 		case "--inplace":
 			inplace = true
 		case "--large":
 			forceLarge = true
 		case "--policy":
-			if i+1 >= len(args) { return fmt.Errorf("--policy: missing value") }
-			i++
-			policy, err = parsePolicy(args[i])
-			if err != nil {
-				return err
+			var s string
+			if s, err = rest.value(name); err == nil {
+				policy, err = parsePolicy(s)
 			}
 		case "--verbose":
 			opts.Verbose = true
 		case "--splay":
 			opts.UseSplay = true
 		default:
-			return fmt.Errorf("unknown option: %s", args[i])
+			err = fmt.Errorf("unknown option: %s", name)
 		}
-		i++
+		if err != nil {
+			return err
+		}
 	}
-
 	if opts.P < 1 {
-		return fmt.Errorf("--seed-len must be >= 1")
+		return errors.New("--seed-len must be >= 1")
 	}
 
-	r, err := readFile(refPath)
+	r, err := os.ReadFile(refPath)
 	if err != nil {
 		return err
 	}
-	v, err := readFile(verPath)
+	v, err := os.ReadFile(verPath)
 	if err != nil {
 		return err
 	}
 	srcCrc := delta.Crc64XZ(r)
 	dstCrc := delta.Crc64XZ(v)
 
-	t0 := now()
+	start := time.Now()
 	commands, err := delta.DiffErr(algo, r, v, opts)
 	if err != nil {
 		return err
@@ -220,28 +216,26 @@ func cmdEncode(args []string) error {
 	} else {
 		placed = delta.PlaceCommands(commands)
 	}
-	elapsed := since(t0)
+	elapsed := time.Since(start)
 
 	deltaBytes := delta.EncodeDeltaLarge(placed, inplace, len(v), srcCrc, dstCrc, forceLarge)
-	if err := writeFile(deltaPath, deltaBytes); err != nil {
+	if err := os.WriteFile(deltaPath, deltaBytes, 0644); err != nil {
 		return err
 	}
 
 	stats := delta.PlacedSummaryOf(placed)
-	var ratio float64
+	ratio := 0.0
 	if len(v) > 0 {
 		ratio = float64(len(deltaBytes)) / float64(len(v))
 	}
-	algoName := algo.String()
-	splayTag := ""
+	name := algo.String()
 	if opts.UseSplay {
-		splayTag = " [splay]"
+		name += " [splay]"
 	}
 	if inplace {
-		fmt.Printf("Algorithm:    %s%s + in-place (%s)\n", algoName, splayTag, policy.String())
-	} else {
-		fmt.Printf("Algorithm:    %s%s\n", algoName, splayTag)
+		name += fmt.Sprintf(" + in-place (%s)", policy)
 	}
+	fmt.Printf("Algorithm:    %s\n", name)
 	fmt.Printf("Reference:    %s (%d bytes)\n", refPath, len(r))
 	fmt.Printf("Version:      %s (%d bytes)\n", verPath, len(v))
 	fmt.Printf("Delta:        %s (%d bytes)\n", deltaPath, len(deltaBytes))
@@ -249,9 +243,9 @@ func cmdEncode(args []string) error {
 	fmt.Printf("Commands:     %d copies, %d adds\n", stats.NumCopies, stats.NumAdds)
 	fmt.Printf("Copy bytes:   %d\n", stats.CopyBytes)
 	fmt.Printf("Add bytes:    %d\n", stats.AddBytes)
-	fmt.Printf("Src CRC:      %s\n", toHex(srcCrc))
-	fmt.Printf("Dst CRC:      %s\n", toHex(dstCrc))
-	fmt.Printf("Time:         %.3fs\n", elapsed)
+	fmt.Printf("Src CRC:      %x\n", srcCrc)
+	fmt.Printf("Dst CRC:      %x\n", dstCrc)
+	fmt.Printf("Time:         %.3fs\n", elapsed.Seconds())
 	return nil
 }
 
@@ -259,83 +253,69 @@ func cmdDecode(args []string) error {
 	if len(args) < 4 {
 		usage()
 	}
-
-	refPath := args[1]
-	deltaPath := args[2]
-	outPath := args[3]
+	refPath, deltaPath, outPath := args[1], args[2], args[3]
 	ignoreHash := false
 	for _, a := range args[4:] {
-		if a == "--ignore-hash" {
-			ignoreHash = true
-		} else {
+		if a != "--ignore-hash" {
 			return fmt.Errorf("unknown decode option: %s", a)
 		}
+		ignoreHash = true
 	}
 
-	r, err := readFile(refPath)
+	r, err := os.ReadFile(refPath)
 	if err != nil {
 		return err
 	}
-	deltaBytes, err := readFile(deltaPath)
+	deltaBytes, err := os.ReadFile(deltaPath)
 	if err != nil {
 		return err
 	}
-	result, err := delta.DecodeDelta(deltaBytes)
+	d, err := delta.DecodeDelta(deltaBytes)
 	if err != nil {
 		return err
 	}
 
-	// Pre-check: verify reference matches embedded src_crc.
-	rCrc := delta.Crc64XZ(r)
-	if rCrc != result.SrcCrc {
+	if crc := delta.Crc64XZ(r); crc != d.SrcCrc {
 		if !ignoreHash {
-			fmt.Fprintf(os.Stderr, "source file does not match delta: expected %s, got %s\n",
-				toHex(result.SrcCrc), toHex(rCrc))
-			os.Exit(1)
+			return fmt.Errorf("source file does not match delta: expected %x, got %x", d.SrcCrc, crc)
 		}
 		fmt.Fprintln(os.Stderr, "warning: skipping source CRC check (--ignore-hash)")
 	}
-	if err := delta.ValidatePlacedCommands(result.Commands, len(r), result.VersionSize, result.Inplace); err != nil {
+	if err := delta.ValidatePlacedCommands(d.Commands, len(r), d.VersionSize, d.Inplace); err != nil {
 		return err
 	}
 
-	t0 := now()
+	start := time.Now()
 	var out []byte
-	if result.Inplace {
-		out = delta.ApplyDeltaInplace(r, result.Commands, result.VersionSize)
+	if d.Inplace {
+		out = delta.ApplyDeltaInplace(r, d.Commands, d.VersionSize)
 	} else {
-		out = make([]byte, result.VersionSize)
-		delta.ApplyPlacedTo(r, result.Commands, out)
+		out = make([]byte, d.VersionSize)
+		delta.ApplyPlacedTo(r, d.Commands, out)
 	}
-	elapsed := since(t0)
+	elapsed := time.Since(start)
 
-	if err := writeFile(outPath, out); err != nil {
+	// The output is written even if its checksum is wrong, so that it can
+	// be examined.
+	if err := os.WriteFile(outPath, out, 0644); err != nil {
 		return err
 	}
-	outCrc := delta.Crc64XZ(out)
-
-	// Post-check: verify output matches embedded dst_crc.
-	if outCrc != result.DstCrc {
+	if delta.Crc64XZ(out) != d.DstCrc {
 		if !ignoreHash {
-			fmt.Fprintln(os.Stderr, "output integrity check failed")
-			os.Exit(1)
+			return errors.New("output integrity check failed")
 		}
 		fmt.Fprintln(os.Stderr, "warning: skipping output CRC check (--ignore-hash)")
 	}
 
-	fmtStr := "standard"
-	if result.Inplace {
-		fmtStr = "in-place"
-	}
-	fmt.Printf("Format:       %s\n", fmtStr)
+	fmt.Printf("Format:       %s\n", formatName(d.Inplace))
 	fmt.Printf("Reference:    %s (%d bytes)\n", refPath, len(r))
 	fmt.Printf("Delta:        %s (%d bytes)\n", deltaPath, len(deltaBytes))
 	fmt.Printf("Output:       %s (%d bytes)\n", outPath, len(out))
 	if !ignoreHash {
-		fmt.Printf("Src CRC:      %s  OK\n", toHex(result.SrcCrc))
-		fmt.Printf("Dst CRC:      %s  OK\n", toHex(result.DstCrc))
+		fmt.Printf("Src CRC:      %x  OK\n", d.SrcCrc)
+		fmt.Printf("Dst CRC:      %x  OK\n", d.DstCrc)
 	}
-	fmt.Printf("Time:         %.3fs\n", elapsed)
+	fmt.Printf("Time:         %.3fs\n", elapsed.Seconds())
 	return nil
 }
 
@@ -343,27 +323,22 @@ func cmdInfo(args []string) error {
 	if len(args) < 2 {
 		usage()
 	}
-
 	deltaPath := args[1]
-	deltaBytes, err := readFile(deltaPath)
+	deltaBytes, err := os.ReadFile(deltaPath)
 	if err != nil {
 		return err
 	}
-	result, err := delta.DecodeDelta(deltaBytes)
+	d, err := delta.DecodeDelta(deltaBytes)
 	if err != nil {
 		return err
 	}
-	stats := delta.PlacedSummaryOf(result.Commands)
+	stats := delta.PlacedSummaryOf(d.Commands)
 
-	fmtStr := "standard"
-	if result.Inplace {
-		fmtStr = "in-place"
-	}
 	fmt.Printf("Delta file:   %s (%d bytes)\n", deltaPath, len(deltaBytes))
-	fmt.Printf("Format:       %s\n", fmtStr)
-	fmt.Printf("Version size: %d bytes\n", result.VersionSize)
-	fmt.Printf("Src CRC:      %s\n", toHex(result.SrcCrc))
-	fmt.Printf("Dst CRC:      %s\n", toHex(result.DstCrc))
+	fmt.Printf("Format:       %s\n", formatName(d.Inplace))
+	fmt.Printf("Version size: %d bytes\n", d.VersionSize)
+	fmt.Printf("Src CRC:      %x\n", d.SrcCrc)
+	fmt.Printf("Dst CRC:      %x\n", d.DstCrc)
 	fmt.Printf("Commands:     %d\n", stats.NumCommands)
 	fmt.Printf("  Copies:     %d (%d bytes)\n", stats.NumCopies, stats.CopyBytes)
 	fmt.Printf("  Adds:       %d (%d bytes)\n", stats.NumAdds, stats.AddBytes)
@@ -375,88 +350,72 @@ func cmdInplace(args []string) error {
 	if len(args) < 4 {
 		usage()
 	}
-
-	refPath := args[1]
-	deltaInPath := args[2]
-	deltaOutPath := args[3]
+	refPath, inPath, outPath := args[1], args[2], args[3]
 	policy := delta.CyclePolicyLocalmin
-	policyStr := "localmin"
-	forceLargeIP := false
-
-	i := 4
-	for i < len(args) {
-		switch args[i] {
+	forceLarge := false
+	for rest := optionArgs(args[4:]); len(rest) > 0; {
+		switch name := rest.next(); name {
 		case "--policy":
-			if i+1 >= len(args) { return fmt.Errorf("--policy: missing value") }
-			i++
-			var err error
-			policy, err = parsePolicy(args[i])
+			s, err := rest.value(name)
 			if err != nil {
 				return err
 			}
-			policyStr = policy.String()
+			if policy, err = parsePolicy(s); err != nil {
+				return err
+			}
 		case "--large":
-			forceLargeIP = true
+			forceLarge = true
 		default:
-			return fmt.Errorf("unknown inplace option: %s", args[i])
+			return fmt.Errorf("unknown inplace option: %s", name)
 		}
-		i++
 	}
 
-	r, err := readFile(refPath)
+	r, err := os.ReadFile(refPath)
 	if err != nil {
 		return err
 	}
-	deltaBytes, err := readFile(deltaInPath)
+	deltaBytes, err := os.ReadFile(inPath)
 	if err != nil {
 		return err
 	}
-	result, err := delta.DecodeDelta(deltaBytes)
+	d, err := delta.DecodeDelta(deltaBytes)
 	if err != nil {
 		return err
 	}
-
-	if result.Inplace {
-		if err := writeFile(deltaOutPath, deltaBytes); err != nil {
+	if d.Inplace {
+		if err := os.WriteFile(outPath, deltaBytes, 0644); err != nil {
 			return err
 		}
 		fmt.Println("Delta is already in-place format; copied unchanged.")
 		return nil
 	}
 
-	// Verify reference matches the delta's embedded source CRC before converting.
-	rCrc := delta.Crc64XZ(r)
-	if rCrc != result.SrcCrc {
-		return fmt.Errorf("source file does not match delta: expected %s, got %s",
-			toHex(result.SrcCrc), toHex(rCrc))
+	// The conversion reads the reference to turn copies into adds, so the
+	// reference must be the one the delta was made from.
+	if crc := delta.Crc64XZ(r); crc != d.SrcCrc {
+		return fmt.Errorf("source file does not match delta: expected %x, got %x", d.SrcCrc, crc)
 	}
-	if err := delta.ValidatePlacedCommands(result.Commands, len(r), result.VersionSize, false); err != nil {
+	if err := delta.ValidatePlacedCommands(d.Commands, len(r), d.VersionSize, false); err != nil {
 		return err
 	}
 
-	t0 := now()
-	commands := delta.UnplaceCommands(result.Commands)
-	ipPlaced := delta.MakeInplace(r, commands, policy)
-	elapsed := since(t0)
+	start := time.Now()
+	placed := delta.MakeInplace(r, delta.UnplaceCommands(d.Commands), policy)
+	elapsed := time.Since(start)
 
-	ipDelta := delta.EncodeDeltaLarge(ipPlaced, true, result.VersionSize, result.SrcCrc, result.DstCrc, forceLargeIP)
-	if err := writeFile(deltaOutPath, ipDelta); err != nil {
+	out := delta.EncodeDeltaLarge(placed, true, d.VersionSize, d.SrcCrc, d.DstCrc, forceLarge)
+	if err := os.WriteFile(outPath, out, 0644); err != nil {
 		return err
 	}
 
-	stats := delta.PlacedSummaryOf(ipPlaced)
+	stats := delta.PlacedSummaryOf(placed)
 	fmt.Printf("Reference:    %s (%d bytes)\n", refPath, len(r))
-	fmt.Printf("Input delta:  %s (%d bytes)\n", deltaInPath, len(deltaBytes))
-	fmt.Printf("Output delta: %s (%d bytes)\n", deltaOutPath, len(ipDelta))
-	fmt.Printf("Format:       in-place (%s)\n", policyStr)
+	fmt.Printf("Input delta:  %s (%d bytes)\n", inPath, len(deltaBytes))
+	fmt.Printf("Output delta: %s (%d bytes)\n", outPath, len(out))
+	fmt.Printf("Format:       in-place (%s)\n", policy)
 	fmt.Printf("Commands:     %d copies, %d adds\n", stats.NumCopies, stats.NumAdds)
 	fmt.Printf("Copy bytes:   %d\n", stats.CopyBytes)
 	fmt.Printf("Add bytes:    %d\n", stats.AddBytes)
-	fmt.Printf("Time:         %.3fs\n", elapsed)
+	fmt.Printf("Time:         %.3fs\n", elapsed.Seconds())
 	return nil
 }
-
-// ── timing helpers ──
-
-func now() time.Time            { return time.Now() }
-func since(t time.Time) float64 { return time.Since(t).Seconds() }

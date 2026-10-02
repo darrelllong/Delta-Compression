@@ -14,13 +14,13 @@ import (
 //
 //	go test -fuzz=FuzzDecode -fuzztime=300s
 func FuzzDecode(f *testing.F) {
-	// Seed corpus: valid V3 empty→empty delta.
+	// Seed corpus: valid V3 empty-to-empty delta.
 	f.Add([]byte("\x44\x4c\x54\x03\x00" +
 		"\x00\x00\x00\x00" +
 		"\x00\x00\x00\x00\x00\x00\x00\x00" +
 		"\x00\x00\x00\x00\x00\x00\x00\x00" +
 		"\x00"))
-	// Seed corpus: valid V4 empty→empty delta.
+	// Seed corpus: valid V4 empty-to-empty delta.
 	f.Add([]byte("\x44\x4c\x54\x04\x00" +
 		"\x00\x00\x00\x00\x00\x00\x00\x00" +
 		"\x00\x00\x00\x00\x00\x00\x00\x00" +
@@ -37,12 +37,14 @@ func FuzzDecode(f *testing.F) {
 	})
 }
 
-// FuzzRoundtrip runs encode→decode→apply and asserts byte-identical reconstruction.
+// FuzzRoundtrip encodes a delta with the greedy algorithm, decodes and
+// applies it, and checks that the version is reconstructed exactly.
 //
 // Input layout: [split_byte | reference... | version...]
-//   split = 1 + (split_byte * (len-1)) / 256
 //
-// Inputs are capped at 4 KiB; diffGreedy is O(|ref|×|ver|).
+//	split = 1 + (split_byte * (len-1)) / 256
+//
+// Inputs are capped at 4 KiB; diffGreedy is O(|ref|*|ver|).
 //
 // Run:
 //
@@ -58,14 +60,13 @@ func FuzzRoundtrip(f *testing.F) {
 			return
 		}
 
-		split := 1 + (int(data[0])*( len(data)-1))/256
+		split := 1 + (int(data[0])*(len(data)-1))/256
 		if split > len(data) {
 			split = len(data)
 		}
 		refData := data[1:split]
 		verData := data[split:]
 
-		// Encode
 		opts := DefaultDiffOptions()
 		cmds := Diff(AlgorithmGreedy, refData, verData, opts)
 		placed := PlaceCommands(cmds)
@@ -73,7 +74,7 @@ func FuzzRoundtrip(f *testing.F) {
 		dstCrc := Crc64XZ(verData)
 		encoded := EncodeDeltaLarge(placed, false, len(verData), srcCrc, dstCrc, false)
 
-		// Decode — must not fail on our own output
+		// The decoder must accept the encoder's output.
 		result, err := DecodeDelta(encoded)
 		if err != nil {
 			t.Fatalf("decode failed on valid encoder output: %v", err)
@@ -89,7 +90,6 @@ func FuzzRoundtrip(f *testing.F) {
 			t.Fatalf("version_size did not round-trip: got %d, want %d", result.VersionSize, len(verData))
 		}
 
-		// Apply
 		out := make([]byte, result.VersionSize)
 		ApplyPlacedTo(refData, result.Commands, out)
 		if !bytes.Equal(out, verData) {

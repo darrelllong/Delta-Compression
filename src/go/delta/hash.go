@@ -1,150 +1,156 @@
 package delta
 
-import (
-	"math/big"
-	"math/bits"
-)
+import "math/bits"
 
-// ── Karp-Rabin rolling hash (Karp & Rabin 1987; Section 2.1.3) ──
-//
-// Polynomial fingerprints over the Mersenne prime 2^61-1.
+// Karp-Rabin fingerprints (Section 2.1.3) are polynomials in HashBase
+// evaluated modulo the Mersenne prime HashMod = 2^61-1. A fingerprint is
+// always less than HashMod, so the top three bits of the uint64 are zero.
 
-// ModMersenne reduces the 128-bit value (hi:lo) modulo 2^61-1.
-func ModMersenne(hi, lo uint64) int64 {
-	const P = uint64(HashMod)
-	upper := (hi << 3) | (lo >> 61)
-	lower := lo & P
-	r := upper + lower
-	if r >= P {
-		r -= P
+// ModMersenne reduces the 128-bit value hi:lo modulo 2^61-1.
+// The value must be less than 2^122, as the product of two fingerprints is.
+func ModMersenne(hi, lo uint64) uint64 {
+	// 2^61 = 1 (mod 2^61-1), so the bits above bit 60 fold onto the low bits.
+	r := (hi<<3 | lo>>61) + lo&HashMod
+	if r >= HashMod {
+		r -= HashMod
 	}
-	// Second reduction.
-	upper2 := r >> 61
-	lower2 := r & P
-	r2 := upper2 + lower2
-	if r2 >= P {
-		r2 -= P
+	r = r>>61 + r&HashMod
+	if r >= HashMod {
+		r -= HashMod
 	}
-	return int64(r2)
+	return r
 }
 
-// mulmod computes (a * b) mod (2^61-1) using a 128-bit intermediate.
-func mulmod(a, b int64) int64 {
-	hi, lo := bits.Mul64(uint64(a), uint64(b))
-	return ModMersenne(hi, lo)
+// mulmod returns a*b mod 2^61-1.
+func mulmod(a, b uint64) uint64 {
+	return ModMersenne(bits.Mul64(a, b))
 }
 
-// Fingerprint computes the Karp-Rabin fingerprint of data[offset..offset+p] (Eq. 1).
-func Fingerprint(data []byte, offset, p int) int64 {
-	var h int64
-	for i := 0; i < p; i++ {
-		b := int64(data[offset+i] & 0xFF)
-		hi, lo := bits.Mul64(uint64(h), HashBase)
-		newLo := lo + uint64(b)
-		newHi := hi
-		if newLo < lo {
-			newHi++
-		}
-		h = ModMersenne(newHi, newLo)
+// shiftIn returns h*HashBase + b mod 2^61-1.
+func shiftIn(h uint64, b byte) uint64 {
+	hi, lo := bits.Mul64(h, HashBase)
+	lo, carry := bits.Add64(lo, uint64(b), 0)
+	return ModMersenne(hi+carry, lo)
+}
+
+// Fingerprint returns the Karp-Rabin fingerprint of data[offset:offset+p]
+// (Eq. 1).
+func Fingerprint(data []byte, offset, p int) uint64 {
+	var h uint64
+	for _, b := range data[offset : offset+p] {
+		h = shiftIn(h, b)
 	}
 	return h
 }
 
-// PrecomputeBp computes HASH_BASE^{p-1} mod HASH_MOD.
-func PrecomputeBp(p int) int64 {
-	if p == 0 {
-		return 1
-	}
-	result := int64(1)
-	base := int64(HashBase)
-	exp := p - 1
-	for exp > 0 {
+// PrecomputeBp returns HashBase^(p-1) mod HashMod, the weight of the oldest
+// byte in a p-byte window.
+func PrecomputeBp(p int) uint64 {
+	result, base := uint64(1), uint64(HashBase)
+	for exp := p - 1; exp > 0; exp >>= 1 {
 		if exp&1 == 1 {
 			result = mulmod(result, base)
 		}
 		base = mulmod(base, base)
-		exp >>= 1
 	}
 	return result
 }
 
-// ── Rolling hash ──
-
-// RollingHash supports O(1) incremental fingerprint updates (Eq. 2).
-type RollingHash struct {
-	value int64
-	bp    int64 // HASH_BASE^{p-1} mod HASH_MOD
+// A rollingHash yields the fingerprint of the p-byte seed at successive
+// positions of data. Moving forward one byte updates the fingerprint in
+// constant time (Eq. 2); any other move recomputes it.
+type rollingHash struct {
+	data  []byte
+	p     int
+	pos   int    // position of the current seed
+	value uint64 // its fingerprint
+	bp    uint64 // HashBase^(p-1) mod HashMod
 }
 
-// NewRollingHash initializes a rolling hash over data[offset..offset+p].
-func NewRollingHash(data []byte, offset, p int) *RollingHash {
-	return &RollingHash{
-		bp:    PrecomputeBp(p),
-		value: Fingerprint(data, offset, p),
+// newRollingHash returns a rollingHash positioned at 0. If data is shorter
+// than p it has no seeds and at must not be called.
+func newRollingHash(data []byte, p int) rollingHash {
+	h := rollingHash{data: data, p: p, bp: PrecomputeBp(p)}
+	if len(data) >= p {
+		h.value = Fingerprint(data, 0, p)
 	}
+	return h
 }
 
-// Value returns the current fingerprint.
-func (rh *RollingHash) Value() int64 { return rh.value }
-
-// Roll slides the window: remove oldByte from left, add newByte to right.
-func (rh *RollingHash) Roll(oldByte, newByte int) {
-	sub := mulmod(int64(oldByte), rh.bp)
-	var v int64
-	if rh.value >= sub {
-		v = rh.value - sub
-	} else {
-		v = HashMod - (sub - rh.value)
+// at returns the fingerprint of data[pos:pos+p].
+func (h *rollingHash) at(pos int) uint64 {
+	switch pos {
+	case h.pos:
+	case h.pos + 1:
+		// Remove the byte that leaves the seed, then shift in the new one.
+		sub := mulmod(uint64(h.data[pos-1]), h.bp)
+		v := h.value - sub
+		if h.value < sub {
+			v += HashMod
+		}
+		h.value = shiftIn(v, h.data[pos+h.p-1])
+	default:
+		h.value = Fingerprint(h.data, pos, h.p)
 	}
-	hi, lo := bits.Mul64(uint64(v), HashBase)
-	newLo := lo + uint64(newByte)
-	newHi := hi
-	if newLo < lo {
-		newHi++
-	}
-	rh.value = ModMersenne(newHi, newLo)
+	h.pos = pos
+	return h.value
 }
 
-// ── Primality testing ──
+// powmod returns base^exp mod m.
+func powmod(base, exp, m uint64) uint64 {
+	result := uint64(1)
+	base %= m
+	for ; exp > 0; exp >>= 1 {
+		if exp&1 == 1 {
+			result = mulmodN(result, base, m)
+		}
+		base = mulmodN(base, base, m)
+	}
+	return result
+}
 
-// Fixed witnesses for deterministic Miller-Rabin.
-// Sufficient for all n < 3,317,044,064,679,887,385,961,981 (> 2^81).
-// Jaeschke, Math. Comp. 61(204), 1993.
-var mrWitnesses = []int64{2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37}
+// mulmodN returns a*b mod m for a, b < m.
+func mulmodN(a, b, m uint64) uint64 {
+	hi, lo := bits.Mul64(a, b)
+	_, rem := bits.Div64(hi, lo, m) // hi < m because a, b < m
+	return rem
+}
 
-// IsPrime reports whether n is prime using deterministic Miller-Rabin.
-func IsPrime(n int64) bool {
-	if n < 2 {
+// witness reports whether a proves the odd number n composite: either
+// a^(n-1) != 1 (mod n), or squaring a^d toward a^(n-1) passes through a
+// square root of 1 other than 1 and n-1. Here n-1 = d * 2^r with d odd.
+func witness(a, n uint64) bool {
+	r := bits.TrailingZeros64(n - 1)
+	d := (n - 1) >> r
+	x := powmod(a, d, n)
+	for i := 0; i < r; i++ {
+		y := mulmodN(x, x, n)
+		if y == 1 && x != 1 && x != n-1 {
+			return true
+		}
+		x = y
+	}
+	return x != 1
+}
+
+// mrWitnesses, the first twelve primes, make Miller-Rabin deterministic for
+// every n < 318,665,857,834,031,151,167,461, and so for every uint64
+// (Sorenson and Webster, Math. Comp. 86(304), 2017).
+var mrWitnesses = [...]uint64{2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37}
+
+// IsPrime reports whether n is prime.
+func IsPrime(n int) bool {
+	if n < 2 || (n != 2 && n%2 == 0) {
 		return false
 	}
-	if n < 4 {
+	if n == 2 || n == 3 {
 		return true
 	}
-	if n%2 == 0 {
-		return false
-	}
-	bn := big.NewInt(n)
-	nm1 := new(big.Int).Sub(bn, big.NewInt(1))
-	r := nm1.TrailingZeroBits()
-	d := new(big.Int).Rsh(nm1, r)
-
 	for _, a := range mrWitnesses {
-		if a >= n {
+		if a >= uint64(n) {
 			break
 		}
-		x := new(big.Int).Exp(big.NewInt(a), d, bn)
-		if x.Cmp(big.NewInt(1)) == 0 || x.Cmp(nm1) == 0 {
-			continue
-		}
-		found := false
-		for j := uint(0); j < r-1; j++ {
-			x.Exp(x, big.NewInt(2), bn)
-			if x.Cmp(nm1) == 0 {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if witness(a, uint64(n)) {
 			return false
 		}
 	}
@@ -152,13 +158,11 @@ func IsPrime(n int64) bool {
 }
 
 // NextPrime returns the smallest prime >= n.
-func NextPrime(n int64) int64 {
+func NextPrime(n int) int {
 	if n <= 2 {
 		return 2
 	}
-	if n%2 == 0 {
-		n++
-	}
+	n |= 1
 	for !IsPrime(n) {
 		n += 2
 	}
