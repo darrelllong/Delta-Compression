@@ -162,8 +162,8 @@ def main() -> None:
         "kernel-onepass-speed-radar.svg",
         "Onepass speed score (faster is larger, max=100) - linux-5.1 -> 5.1.1",
         "Kernel onepass speed score by language. Scores normalize encode time to the fastest implementation.",
-        ["C", "Rust", "C++", "Go", "Haskell", "Java", "Kotlin", "Scala"],
-        [("Speed score", "#0f766e", 0.22, [100.0, 88.9, 88.9, 81.6, 78.4, 66.7, 65.6, 64.5])],
+        ["C", "Rust", "C++", "Go", "Java"],
+        [("Speed score", "#0f766e", 0.22, [100.0, 88.9, 88.9, 81.6, 66.7])],
         100.0,
         [20, 40, 60, 80, 100],
     )
@@ -171,8 +171,8 @@ def main() -> None:
         "kernel-correcting-speed-radar.svg",
         "Correcting speed score (faster is larger, max=100) - linux-5.1 -> 5.1.1",
         "Kernel correcting speed score by language. Scores normalize encode time to the fastest implementation.",
-        ["Rust", "Java", "Scala", "Go", "Kotlin", "Haskell", "C", "C++"],
-        [("Speed score", "#8b5cf6", 0.22, [100.0, 80.5, 75.0, 70.2, 70.2, 56.6, 51.6, 51.0])],
+        ["Rust", "Java", "Go", "C", "C++"],
+        [("Speed score", "#8b5cf6", 0.22, [100.0, 80.5, 70.2, 51.6, 51.0])],
         100.0,
         [20, 40, 60, 80, 100],
     )
@@ -180,8 +180,8 @@ def main() -> None:
         "shakespeare-onepass-throughput-radar.svg",
         "Onepass throughput profile (MiB/s) - Shakespeare, Dyson M4, Pilot before f01eec4",
         "Onepass throughput by language for Shakespeare pilot-bench workload on Dyson M4.",
-        ["Rust", "Go", "C", "C++", "Java", "Haskell", "Kotlin", "Scala"],
-        [("Throughput", "#0f766e", 0.22, [49.33, 44.49, 34.19, 30.87, 25.35, 23.71, 21.93, 17.09])],
+        ["Rust", "Go", "C", "C++", "Java"],
+        [("Throughput", "#0f766e", 0.22, [49.33, 44.49, 34.19, 30.87, 25.35])],
         55.0,
         [11, 22, 33, 44, 55],
     )
@@ -189,8 +189,8 @@ def main() -> None:
         "shakespeare-correcting-throughput-radar.svg",
         "Correcting throughput profile (MiB/s) - Shakespeare, Dyson M4, Pilot before f01eec4",
         "Correcting throughput by language for Shakespeare pilot-bench workload on Dyson M4.",
-        ["Rust", "Go", "C", "C++", "Java", "Haskell", "Kotlin", "Scala"],
-        [("Throughput", "#2563eb", 0.22, [54.56, 37.12, 30.54, 29.09, 23.99, 23.11, 21.30, 16.00])],
+        ["Rust", "Go", "C", "C++", "Java"],
+        [("Throughput", "#2563eb", 0.22, [54.56, 37.12, 30.54, 29.09, 23.99])],
         60.0,
         [12, 24, 36, 48, 60],
     )
