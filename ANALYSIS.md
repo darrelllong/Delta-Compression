@@ -70,8 +70,9 @@ equivalent to direct indexing with no filtering overhead.
 The footprint modulus $|F|$ is chosen as a prime using a deterministic
 Miller-Rabin primality test with the fixed witness set {2, 3, 5, 7, 11,
 13, 17, 19, 23, 29, 31, 37}.  This set is proven sufficient for all n <
-3,317,044,064,679,887,385,961,981 ($> 2^{81}$), far exceeding any table
-size that arises in practice (Jaeschke, Math. Comp. 61(204), 1993).
+318,665,857,834,031,151,167,461 ($> 2^{78}$), far exceeding any table
+size that arises in practice (Sorenson and Webster, Math. Comp. 86(304),
+2017).
 No random number generator is required: the result is deterministic and
 identical across all six language implementations.
 
@@ -346,7 +347,7 @@ Total: $O(n \log n + E)$.
 
 | Script | Purpose |
 |--------|---------|
-| `tests/correctness.sh` | Builds all six implementations and runs unit tests + cross-language compatibility (236/89/93/230/73/81 checks: Python/Rust/C++/C/Java/Go) |
+| `tests/correctness.sh` | Builds all six implementations and runs unit tests + cross-language compatibility |
 | `tests/kernel-delta-test.sh` | Performance benchmark on Linux 5.1.0–5.1.7 kernel tarballs (~871 MB each) |
 | `tests/transposition-benchmark.sh` | Performance benchmark on synthetic block permutations (16 MB–1 GB) |
 | `tests/per-language-benchmark.sh` | Per-language speed comparison (compiled implementations, linux-5.1.0→5.1.1) |

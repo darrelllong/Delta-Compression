@@ -1,0 +1,121 @@
+warm before Rust onepass 189.998155
+warm after Rust onepass 189.415266
+warm before Rust correcting 78.567292
+warm after Rust correcting 77.496444
+warm before C onepass 220.755262
+warm after C onepass 222.245976
+warm before C correcting 71.730552
+warm after C correcting 71.390543
+warm before Cpp onepass 197.267129
+warm after Cpp onepass 206.225428
+warm before Cpp correcting 71.352372
+warm after Cpp correcting 81.142143
+Traceback (most recent call last):
+  File "<stdin>", line 4, in <module>
+  File "/usr/lib/python3.14/subprocess.py", line 578, in run
+    raise CalledProcessError(retcode, process.args,
+                             output=stdout, stderr=stderr)
+subprocess.CalledProcessError: Command '['/usr/bin/java', '-cp', '/mnt/delta/before/src/java/out', 'delta.Delta', 'encode', 'onepass', '/mnt/delta/kernel/linux-5.1.tar', '/mnt/delta/kernel/linux-5.1.1.tar', '/mnt/delta/kernel/pilot-Java-onepass.delta']' returned non-zero exit status 1.
+warm before Java onepass 
+Traceback (most recent call last):
+  File "<stdin>", line 4, in <module>
+  File "/usr/lib/python3.14/subprocess.py", line 578, in run
+    raise CalledProcessError(retcode, process.args,
+                             output=stdout, stderr=stderr)
+subprocess.CalledProcessError: Command '['/usr/bin/java', '-cp', '/mnt/delta/after/src/java/out', 'delta.Delta', 'encode', 'onepass', '/mnt/delta/kernel/linux-5.1.tar', '/mnt/delta/kernel/linux-5.1.1.tar', '/mnt/delta/kernel/pilot-Java-onepass.delta']' returned non-zero exit status 1.
+warm after Java onepass 
+warm before Java correcting 65.097786
+warm after Java correcting 68.644653
+warm before Go onepass 180.244355
+warm after Go onepass 376.353557
+warm before Go correcting 54.622449
+warm after Go correcting 80.018310
+warm before Rust onepass 190.092374
+warm after Rust onepass 189.853181
+warm before Rust correcting 78.558054
+warm after Rust correcting 78.109614
+warm before C onepass 221.105791
+warm after C onepass 222.364128
+warm before C correcting 71.735509
+warm after C correcting 71.378024
+warm before Cpp onepass 198.727762
+warm after Cpp onepass 206.854645
+warm before Cpp correcting 71.211041
+warm after Cpp correcting 81.007395
+Traceback (most recent call last):
+  File "<stdin>", line 4, in <module>
+  File "/usr/lib/python3.14/subprocess.py", line 578, in run
+    raise CalledProcessError(retcode, process.args,
+                             output=stdout, stderr=stderr)
+subprocess.CalledProcessError: Command '['/usr/bin/java', '-cp', '/mnt/delta/before/src/java/out', 'delta.Delta', 'encode', 'onepass', '/mnt/delta/kernel/linux-5.1.tar', '/mnt/delta/kernel/linux-5.1.1.tar', '/mnt/delta/kernel/pilot-Java-onepass.delta']' returned non-zero exit status 1.
+warm before Java onepass 
+Traceback (most recent call last):
+  File "<stdin>", line 4, in <module>
+  File "/usr/lib/python3.14/subprocess.py", line 578, in run
+    raise CalledProcessError(retcode, process.args,
+                             output=stdout, stderr=stderr)
+subprocess.CalledProcessError: Command '['/usr/bin/java', '-cp', '/mnt/delta/after/src/java/out', 'delta.Delta', 'encode', 'onepass', '/mnt/delta/kernel/linux-5.1.tar', '/mnt/delta/kernel/linux-5.1.1.tar', '/mnt/delta/kernel/pilot-Java-onepass.delta']' returned non-zero exit status 1.
+warm after Java onepass 
+warm before Java correcting 64.815151
+warm after Java correcting 68.764312
+warm before Go onepass 181.426128
+warm after Go onepass 404.357956
+warm before Go correcting 54.559703
+warm after Go correcting 79.873296
+warm before Rust onepass 189.367922
+warm after Rust onepass 189.784183
+warm before Rust correcting 78.354095
+warm after Rust correcting 78.289945
+warm before C onepass 220.960856
+warm after C onepass 222.480171
+warm before C correcting 71.724855
+warm after C correcting 71.387579
+warm before Cpp onepass 198.741609
+warm after Cpp onepass 207.010943
+warm before Cpp correcting 71.203929
+warm after Cpp correcting 81.038430
+Traceback (most recent call last):
+  File "<stdin>", line 4, in <module>
+  File "/usr/lib/python3.14/subprocess.py", line 578, in run
+    raise CalledProcessError(retcode, process.args,
+                             output=stdout, stderr=stderr)
+subprocess.CalledProcessError: Command '['/usr/bin/java', '-cp', '/mnt/delta/before/src/java/out', 'delta.Delta', 'encode', 'onepass', '/mnt/delta/kernel/linux-5.1.tar', '/mnt/delta/kernel/linux-5.1.1.tar', '/mnt/delta/kernel/pilot-Java-onepass.delta']' returned non-zero exit status 1.
+warm before Java onepass 
+Traceback (most recent call last):
+  File "<stdin>", line 4, in <module>
+  File "/usr/lib/python3.14/subprocess.py", line 578, in run
+    raise CalledProcessError(retcode, process.args,
+                             output=stdout, stderr=stderr)
+subprocess.CalledProcessError: Command '['/usr/bin/java', '-cp', '/mnt/delta/after/src/java/out', 'delta.Delta', 'encode', 'onepass', '/mnt/delta/kernel/linux-5.1.tar', '/mnt/delta/kernel/linux-5.1.1.tar', '/mnt/delta/kernel/pilot-Java-onepass.delta']' returned non-zero exit status 1.
+warm after Java onepass 
+warm before Java correcting 65.041525
+warm after Java correcting 68.786204
+warm before Go onepass 181.138491
+warm after Go onepass 397.412542
+warm before Go correcting 54.512947
+warm after Go correcting 79.438843
+cold after Rust onepass 118.168109
+cold after Rust correcting 62.610357
+cold after C onepass 205.495761
+cold after C correcting 69.417264
+cold after Cpp onepass 191.694750
+cold after Cpp correcting 78.738022
+Traceback (most recent call last):
+  File "<stdin>", line 4, in <module>
+  File "/usr/lib/python3.14/subprocess.py", line 578, in run
+    raise CalledProcessError(retcode, process.args,
+                             output=stdout, stderr=stderr)
+subprocess.CalledProcessError: Command '['/usr/bin/java', '-cp', '/mnt/delta/after/src/java/out', 'delta.Delta', 'encode', 'onepass', '/mnt/delta/kernel/linux-5.1.tar', '/mnt/delta/kernel/linux-5.1.1.tar', '/mnt/delta/kernel/pilot-Java-onepass.delta']' returned non-zero exit status 1.
+cold after Java onepass 
+cold after Java correcting 56.309608
+cold after Go onepass 178.644003
+cold after Go correcting 63.980108
+c5195ac1b0c5  /mnt/delta/kernel/pilot-C-correcting.delta
+77fe5d0043ae  /mnt/delta/kernel/pilot-C-onepass.delta
+c5195ac1b0c5  /mnt/delta/kernel/pilot-Cpp-correcting.delta
+77fe5d0043ae  /mnt/delta/kernel/pilot-Cpp-onepass.delta
+c5195ac1b0c5  /mnt/delta/kernel/pilot-Go-correcting.delta
+77fe5d0043ae  /mnt/delta/kernel/pilot-Go-onepass.delta
+c5195ac1b0c5  /mnt/delta/kernel/pilot-Java-correcting.delta
+c5195ac1b0c5  /mnt/delta/kernel/pilot-Rust-correcting.delta
+77fe5d0043ae  /mnt/delta/kernel/pilot-Rust-onepass.delta

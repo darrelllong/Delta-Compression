@@ -71,9 +71,9 @@ java -cp out delta.Delta decode old.bin delta.bin recovered.bin
 
 ```bash
 cd src/go
-go build ./cmd/delta
-./delta encode onepass old.bin new.bin delta.bin
-./delta decode old.bin delta.bin recovered.bin
+go build -o delta/delta ./cmd/delta
+delta/delta encode onepass old.bin new.bin delta.bin
+delta/delta decode old.bin delta.bin recovered.bin
 ```
 
 ## Algorithms
@@ -168,14 +168,17 @@ To run all unit and cross-language compatibility tests in one shot:
 
 Individual suites:
 
-| Language | Tests | Command |
-|----------|------:|---------|
-| Python | 215 | `cd src/python && python3 -m unittest test_delta -v` |
-| Rust | 85 | `cd src/rust/delta && cargo test` |
-| C++ | 75 | `cd src/cpp && cmake -B build && cmake --build build && ctest --test-dir build` |
-| C | 91 | `cd src/c && make && bash test_delta.sh` |
-| Java | 57 | `cd src/java && make test` |
-| Go | 63 | `cd src/go && go test ./delta/...` |
+| Language | Command |
+|----------|---------|
+| Python | `cd src/python && python3 -m unittest test_delta -v` |
+| Rust | `cd src/rust/delta && cargo test` |
+| C++ | `cd src/cpp && cmake -B build && cmake --build build && ctest --test-dir build` |
+| C | `cd src/c && make test` |
+| Java | `cd src/java && make test` |
+| Go | `cd src/go && go test ./delta/...` |
+
+The C suite also checks that the six implementations produce
+byte-identical deltas and decode one another's output.
 
 Tests cover all three algorithms, binary round-trips, paper examples,
 edge cases (empty/identical/completely different files), in-place
@@ -191,12 +194,12 @@ tables and details.
 
 ```
 src/
-  python/         Single-file library + CLI + 215-test suite
-  rust/delta/     Cargo crate — library + clap CLI + 85 tests
-  cpp/            CMake project — static library + CLI11 CLI + Catch2 tests (75)
-  c/              Makefile project — single-header API + CLI + 91 tests
-  java/           Makefile project — library + CLI + 57 tests
-  go/             Go module — library + CLI + 63 tests
+  python/         Single-file library + CLI + unit tests
+  rust/delta/     Cargo crate — library + clap CLI + tests
+  cpp/            CMake project — static library + CLI11 CLI + tests
+  c/              Makefile project — single-header API + CLI + cross-language tests
+  java/           Makefile project — library + CLI + tests
+  go/             Go module — library + CLI + tests
 tests/
   correctness.sh          Run all unit + cross-language tests (all 6 implementations)
   kernel-delta-test.sh    Kernel tarball benchmark
@@ -280,8 +283,8 @@ formalized string-to-string correction (edit distance).  Tichy extended
 it to block moves — the model solved by the algorithms here.
 Reichenberger and Miller-Myers are the prior O(n^2) optimal algorithms
 that Ajtai et al. improve upon.  Rabin's paper describes the
-deterministic Miller-Rabin primality test (fixed witness set, Jaeschke
-1993) used for hash table auto-sizing.  Kahn's algorithm is used for topological sorting of the
+deterministic Miller-Rabin primality test (fixed witness set, Sorenson
+and Webster 2017) used for hash table auto-sizing.  Kahn's algorithm is used for topological sorting of the
 CRWI digraph during in-place conversion.  Sleator and Tarjan's splay
 tree provides an alternative to hash tables for fingerprint lookup;
 frequent fingerprints self-promote to the root, giving sub-logarithmic

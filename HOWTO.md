@@ -7,7 +7,7 @@ For algorithmic background and benchmark data, see [ANALYSIS.md](ANALYSIS.md).
 
 ### Python
 
-No installation required — just Python 3.6+.
+No installation required — just Python 3.7+.
 
 ```bash
 cd src/python
@@ -25,7 +25,8 @@ cargo build --release
 ### C++
 
 Requires a C++20 compiler (GCC 11+, Clang 14+, Apple Clang 15+) and CMake 3.20+.
-Catch2 v3 and CLI11 are fetched automatically.
+CLI11 must be installed (`brew install cli11`, or `libcli11-dev` on Debian
+and Ubuntu); the tests have no dependencies.
 
 ```bash
 cd src/cpp
@@ -508,7 +509,7 @@ byte[] deltaBytes = Encoding.encodeDelta(placed, false, v.length, srcCrc, dstCrc
 
 // Decode and reconstruct
 Encoding.DecodeResult result = Encoding.decodeDelta(deltaBytes);
-byte[] output = new byte[result.versionSize()];
+byte[] output = new byte[(int) result.versionSize()];
 Apply.applyPlacedTo(r, result.commands(), output);
 
 // In-place delta
@@ -529,26 +530,30 @@ then runs cross-language compatibility tests):
 Individual suites:
 
 ```bash
-# Python — 215 tests
+# Python
 cd src/python
 python3 -m unittest test_delta -v
 
-# Rust — 85 tests
+# Rust
 cd src/rust/delta
 cargo test
 
-# C++ — 75 test cases
+# C++
 cd src/cpp
 cmake -B build && cmake --build build
 ctest --test-dir build
 
-# C — 91 integration tests
+# C, and cross-language compatibility
 cd src/c
-make && bash test_delta.sh
+make test
 
-# Java — 57 unit tests (requires Java 17+)
+# Java (requires Java 17+)
 cd src/java
 make test
+
+# Go
+cd src/go
+go test ./delta/...
 ```
 
 A kernel tarball benchmark (`tests/kernel-delta-test.sh`) exercises

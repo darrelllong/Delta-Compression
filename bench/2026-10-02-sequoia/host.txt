@@ -1,0 +1,39 @@
+== uname
+Linux sequoia 7.0.0-34-generic #34-Ubuntu SMP PREEMPT_DYNAMIC Wed Sep  2 14:29:37 UTC 2026 x86_64 GNU/Linux
+== cpu
+CPU(s):                                  12
+Model name:                              Intel(R) Core(TM) 5 210H
+Thread(s) per core:                      2
+Core(s) per socket:                      8
+CPU(s) scaling MHz:                      33%
+CPU max MHz:                             4800.0000
+CPU min MHz:                             400.0000
+== memory
+               total        used        free      shared  buff/cache   available
+Mem:            14Gi       1.1Gi        11Gi        10Mi       2.2Gi        13Gi
+== os
+PRETTY_NAME="Ubuntu 26.04.1 LTS"
+== compilers
+gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+g++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+rustc 1.95.0 (59807616e 2026-04-14)
+openjdk version "25.0.4.1" 2026-08-18
+Python 3.14.4
+cmake version 4.2.3
+== pilot-bench
+a6e6e77
+== storage (/mnt)
+/dev/mapper/jbod-jbod   22T  7.9G   22T   1% /mnt
+  PV             VG        Fmt  Attr PSize    PFree   
+  /dev/nvme0n1p3 ubuntu-vg lvm2 a--  <473.89g <373.89g
+  /dev/sdb       jbod      lvm2 a--    10.91t       0 
+  /dev/sdc       jbod      lvm2 a--    10.91t       0 
+NAME    ROTA   SIZE MODEL
+sda        1   4.5T Portable
+sdb        1  10.9T ST12000VN0008-3M
+sdc        1  10.9T ST12000VN0008-3M
+nvme0n1    0 476.9G WD PC SN5000S SDEQNSJ-512G-1002
+== inputs
+3cf4b3d44ee14cff  data/shakespeare.txt
+7164f27da741910f  data/shakespeare-5pct.txt
+5638480
