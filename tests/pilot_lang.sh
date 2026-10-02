@@ -37,11 +37,7 @@ if [[ ! -f "$REF" || ! -f "$VER" ]]; then
     exit 1
 fi
 
-# ── Locate Java ───────────────────────────────────────────────────────────────
-
 JAVA=$(command -v java 2>/dev/null || true)
-
-# ── Resolve command ───────────────────────────────────────────────────────────
 
 case "$LANG_ARG" in
     Python)
@@ -71,7 +67,6 @@ case "$LANG_ARG" in
         ;;
 esac
 
-# ── Time one encode and print MiB/s ──────────────────────────────────────────
 # Args layout passed to the inner script:
 #   sys.argv[1:] = full command, ending with: <algo> <ref> <ver> <delta>
 # So sys.argv[-3] = REF, sys.argv[-2] = VER, sys.argv[-1] = DELTA.

@@ -25,7 +25,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKDIR="${WORKDIR:-/tmp/delta-kernel-test}"
 KERNEL_BASE="https://cdn.kernel.org/pub/linux/kernel/v5.x"
 
-# ── Locate Java 17 toolchain ──────────────────────────────────────────────────
 # Prefer the Homebrew openjdk@17 install; fall back to PATH.  Derive JAVAC
 # from the same prefix as JAVA so both point at the same JDK.
 
@@ -39,8 +38,6 @@ if [[ -z "$JAVA" || ! -x "$JAVA" || ! -x "$JAVAC" ]]; then
     JAVA=""
     JAVAC=""
 fi
-
-# ── Build all implementations ─────────────────────────────────────────────────
 
 echo "Building all implementations..."
 echo ""
@@ -68,20 +65,13 @@ make -s
 
 echo ""
 
-# ── Download / cache tarballs ─────────────────────────────────────────────────
-
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
 echo "Fetching Linux 5.1.0 and 5.1.1 kernel tarballs..."
-for i in 0 1; do
-    if [[ "$i" -eq 0 ]]; then
-        TAR="linux-5.1.tar"; GZ="linux-5.1.tar.gz"
-        URL="$KERNEL_BASE/linux-5.1.tar.gz"
-    else
-        TAR="linux-5.1.$i.tar"; GZ="linux-5.1.$i.tar.gz"
-        URL="$KERNEL_BASE/$GZ"
-    fi
+for TAR in linux-5.1.tar linux-5.1.1.tar; do
+    GZ="$TAR.gz"
+    URL="$KERNEL_BASE/$GZ"
     if [[ -f "$TAR" ]]; then
         echo "  $TAR (cached)"
     elif [[ -f "$GZ" ]]; then
@@ -95,20 +85,17 @@ echo ""
 REF="$WORKDIR/linux-5.1.tar"
 VER="$WORKDIR/linux-5.1.1.tar"
 
-# ── Timing helper ─────────────────────────────────────────────────────────────
-
 # time_encode <cmd...>
 # Runs the given command and prints elapsed seconds to one decimal place.
 time_encode() {
     python3 - "$@" <<'EOF'
 import sys, subprocess, time
 t0 = time.perf_counter()
-subprocess.run(sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# A failed encode would otherwise be timed as a fast one.
+subprocess.run(sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 print(f"{time.perf_counter()-t0:.1f}")
 EOF
 }
-
-# ── Per-language timing ───────────────────────────────────────────────────────
 
 echo "=== Per-language: linux-5.1.0 → 5.1.1 (~871 MB) ==="
 echo ""

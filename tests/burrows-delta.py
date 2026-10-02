@@ -38,7 +38,6 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-# ── Configuration ─────────────────────────────────────────────────────────────
 
 DEFAULT_DATA_DIR = "/tmp/delta-gutenberg"
 
@@ -66,7 +65,6 @@ DEFAULT_N_VALUES = [50, 100, 200, 500]
 # the ~10th most common token.  It is not a stylistic word choice.
 EXCLUDE = {"s"}
 
-# ── Tokenization ──────────────────────────────────────────────────────────────
 
 def tokenize(path: Path) -> list[str]:
     """Return list of lowercase alphabetic tokens from a text file."""
@@ -74,7 +72,6 @@ def tokenize(path: Path) -> list[str]:
     tokens = re.findall(r"[a-zA-Z]+", text.lower())
     return [t for t in tokens if t not in EXCLUDE]
 
-# ── Core algorithm ────────────────────────────────────────────────────────────
 
 def top_n_words(combined: Counter, n: int) -> list[str]:
     """Return the n most frequent words from the combined counter."""
@@ -121,7 +118,6 @@ def cosine_delta(
     """Euclidean distance of z-score vectors (Argamon cosine Delta)."""
     return math.sqrt(sum((zs_a[w] - zs_b[w]) ** 2 for w in words))
 
-# ── Output formatting ─────────────────────────────────────────────────────────
 
 def print_matrix(title: str, names: list[str], labels: dict[str, str],
                  matrix: dict[tuple[str, str], float]) -> None:
@@ -150,7 +146,6 @@ def print_ranking(names: list[str], labels: dict[str, str],
         print(f"    {rank}. {labels[name]:<14}  {d:.4f}{flag}")
     print()
 
-# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
@@ -165,7 +160,6 @@ def main() -> None:
 
     data_dir = Path(args.data_dir)
 
-    # ── Load corpora ──────────────────────────────────────────────────────────
 
     print("Loading corpora...")
     tokens: dict[str, list[str]] = {}
@@ -195,7 +189,6 @@ def main() -> None:
 
     print()
 
-    # ── Run for each N ────────────────────────────────────────────────────────
 
     rank_table: dict[int, list[tuple[str, float]]] = {}   # n → sorted (name, delta)
 
@@ -245,7 +238,6 @@ def main() -> None:
         others.sort(key=lambda x: x[1])
         rank_table[n] = others
 
-    # ── Rank stability summary ────────────────────────────────────────────────
 
     ns = sorted(args.top_n)
     print("=== Rank stability across N ===")

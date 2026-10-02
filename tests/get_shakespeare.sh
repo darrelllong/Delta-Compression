@@ -21,8 +21,6 @@ mkdir -p "$WORKDIR"
 SRC="$WORKDIR/shakespeare.txt"
 URL="https://www.gutenberg.org/cache/epub/100/pg100.txt"
 
-# ── Download ──────────────────────────────────────────────────────────────────
-
 if [[ -f "$SRC" ]]; then
     echo "shakespeare.txt (cached, $(wc -c < "$SRC" | tr -d ' ') bytes)"
 else
@@ -30,8 +28,6 @@ else
     curl -sfL -o "$SRC" "$URL"
     echo "Downloaded: $(wc -c < "$SRC" | tr -d ' ') bytes"
 fi
-
-# ── Generate mutated versions ─────────────────────────────────────────────────
 
 python3 - "$SRC" "$WORKDIR" <<'PYEOF'
 import sys, random, os

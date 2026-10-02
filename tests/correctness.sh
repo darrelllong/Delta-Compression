@@ -1,117 +1,68 @@
 #!/usr/bin/env bash
 #
-# correctness.sh — Run all unit and cross-language compatibility tests
+# correctness.sh — build every implementation and run every test suite.
 #
-# Builds every implementation, runs its unit/integration test suite, then
-# runs the cross-language compatibility tests in src/c/test_delta.sh.
+# Each language's unit tests run first.  The C suite (src/c/test_delta.sh)
+# comes last because it also checks that the implementations produce
+# byte-identical deltas and decode one another's output; it uses whichever of
+# the other binaries exist, so they are all built before it runs.
 #
-# Usage:
-#   ./tests/correctness.sh           # from repo root or tests/
-#
-# Exit status: 0 if all suites pass, 1 if any fail.
-#
-# Suites run:
-#   Python  — 236 unit tests  (python3 -m unittest)
-#   Rust    — 89 tests        (cargo test)
-#   C++     — 93 checks       (ctest)
-#   C       — 230 checks      (test_delta.sh)
-#   Java    — 73 unit tests   (make test)
-#   Go      — 81 tests        (go test)
-#   Cross   — cross-language byte-identical encode/decode (src/c/test_delta.sh)
+# Usage: ./tests/correctness.sh
+# Exit status: 0 if every suite passes, 1 otherwise.  A suite whose toolchain
+# is missing counts as a failure.
 
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SRC="$REPO_ROOT/src"
+JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
-PASS_SUITES=0
-FAIL_SUITES=0
+passed=0
+failed=0
 
-# ── Locate Java 17 toolchain ───────────────────────────────────────────────
-# Prefer the Homebrew openjdk@17 install; fall back to PATH.  Derive JAVAC
-# from the same prefix as JAVA so both point at the same JDK.
-
-_JAVA_BIN=/opt/homebrew/opt/openjdk@17/bin/java
-if [[ ! -x "$_JAVA_BIN" ]]; then
-    _JAVA_BIN=$(command -v java 2>/dev/null || true)
-fi
-_JAVAC_BIN="${_JAVA_BIN%java}javac"
-if [[ -z "$_JAVA_BIN" || ! -x "$_JAVA_BIN" || ! -x "$_JAVAC_BIN" ]]; then
-    _JAVA_BIN=""
-    _JAVAC_BIN=""
-fi
-
-# ── helpers ───────────────────────────────────────────────────────────────────
-
-banner()    { echo ""; echo "════════════════════════════════════════"; echo "  $*"; echo "════════════════════════════════════════"; }
-
-run_suite() {
-    local name="$1"; shift
-    if "$@"; then
-        echo "  PASSED: $name"
-        PASS_SUITES=$((PASS_SUITES + 1))
+# suite <name> <dir> <command>: run the command in the directory.
+suite() {
+    local name=$1 dir=$2 cmd=$3
+    echo
+    echo "== $name"
+    if (cd "$dir" && bash -c "$cmd"); then
+        echo "PASSED: $name"
+        passed=$((passed + 1))
     else
-        echo "  FAILED: $name"
-        FAIL_SUITES=$((FAIL_SUITES + 1))
+        echo "FAILED: $name"
+        failed=$((failed + 1))
     fi
 }
 
-# ── Python ────────────────────────────────────────────────────────────────────
+# The Java classes are compiled with --release 17, so any JDK from 17 on will
+# do.  Prefer Homebrew's openjdk@17 when it is installed; java and javac must
+# come from the same JDK.
+JAVA=/opt/homebrew/opt/openjdk@17/bin/java
+[[ -x "$JAVA" ]] || JAVA=$(command -v java || true)
+JAVAC="${JAVA%java}javac"
+export JAVA
 
-banner "Python (236 tests)"
-run_suite "Python unit tests" \
-    bash -c "cd '$REPO_ROOT/src/python' && python3 -m unittest test_delta -v"
+suite "Python" "$SRC/python" "python3 -m unittest test_delta"
 
-# ── Rust ──────────────────────────────────────────────────────────────────────
+suite "Rust" "$SRC/rust/delta" "cargo test && cargo build --release"
 
-banner "Rust (89 tests)"
-run_suite "Rust tests" \
-    bash -c "cd '$REPO_ROOT/src/rust/delta' && cargo test"
+suite "C++" "$SRC/cpp" \
+    "cmake -B build -DCMAKE_BUILD_TYPE=Release >/dev/null &&
+     cmake --build build --parallel $JOBS &&
+     ctest --test-dir build --output-on-failure"
 
-# ── C++ ───────────────────────────────────────────────────────────────────────
-
-banner "C++ (93 checks)"
-run_suite "C++ build + ctest" \
-    bash -c "cd '$REPO_ROOT/src/cpp' && cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_BUILD_PARALLEL_LEVEL=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) 2>&1 | tail -3 && cmake --build build --parallel && ctest --test-dir build --output-on-failure"
-
-# ── C ─────────────────────────────────────────────────────────────────────────
-
-banner "C (230 checks)"
-run_suite "C build + integration tests" \
-    bash -c "cd '$REPO_ROOT/src/c' && make && bash test_delta.sh"
-
-# ── Java ──────────────────────────────────────────────────────────────────────
-
-banner "Java (73 tests)"
-if [[ -n "$_JAVA_BIN" ]]; then
-    run_suite "Java build + unit tests" \
-        bash -c "cd '$REPO_ROOT/src/java' && make test JAVA='$_JAVA_BIN' JAVAC='$_JAVAC_BIN'"
+if [[ -n "$JAVA" && -x "$JAVAC" ]]; then
+    suite "Java" "$SRC/java" "make test JAVA='$JAVA' JAVAC='$JAVAC'"
 else
-    echo "  SKIPPED: Java (no compatible JDK 17 javac found)"
-    FAIL_SUITES=$((FAIL_SUITES + 1))
+    echo
+    echo "FAILED: Java (no JDK found)"
+    failed=$((failed + 1))
 fi
 
-# ── Go ────────────────────────────────────────────────────────────────────────
+suite "Go" "$SRC/go" "go test ./delta/... && go build -o delta/delta ./cmd/delta"
 
-banner "Go (81 tests)"
-run_suite "Go tests" \
-    bash -c "cd '$REPO_ROOT/src/go' && go test ./delta/..."
+suite "C and cross-language" "$SRC/c" "make && sh test_delta.sh"
 
-# ── Cross-language compatibility ───────────────────────────────────────────────
-
-banner "Cross-language compatibility"
-echo "  (encode with each implementation, decode with every other)"
-run_suite "Cross-language (via src/c/test_delta.sh)" \
-    bash -c "cd '$REPO_ROOT/src/c' && bash test_delta.sh"
-
-# ── Summary ───────────────────────────────────────────────────────────────────
-
-echo ""
-echo "════════════════════════════════════════"
-printf "  Suites passed: %d / %d\n" "$PASS_SUITES" "$((PASS_SUITES + FAIL_SUITES))"
-echo "════════════════════════════════════════"
-echo ""
-
-if [ "$FAIL_SUITES" -gt 0 ]; then
-    exit 1
-fi
+echo
+echo "Suites passed: $passed / $((passed + failed))"
+[[ "$failed" -eq 0 ]]

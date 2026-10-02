@@ -33,8 +33,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKDIR="${DELTA_BENCH_WORKDIR:-/tmp/delta-transposition-benchmark}"
 GEN="$SCRIPT_DIR/gen_transpositions.py"
 
-# ── Build ─────────────────────────────────────────────────────────────────
-
 echo "Building delta tool (release)..."
 cd "$REPO_ROOT/src/rust/delta"
 cargo build --release -q
@@ -42,8 +40,6 @@ DELTA="$REPO_ROOT/src/rust/delta/target/release/delta"
 echo ""
 
 mkdir -p "$WORKDIR"
-
-# ── Helpers ───────────────────────────────────────────────────────────────
 
 # encode_and_measure <algo> <ref> <ver> <delta> [extra-flags...]
 # Prints: ratio copies adds time cycles_broken
@@ -88,8 +84,6 @@ print_inplace_row() {
 
 PERMS="0 25 50 75 100"
 
-# ── 16 MB dataset — all three algorithms ──────────────────────────────────
-
 echo "=== 16 MB (greedy, onepass, correcting) ==="
 echo "    32,000 blocks × 512 B mean"
 echo ""
@@ -120,8 +114,6 @@ done
 echo ""
 echo ""
 
-# ── Inplace vs normal — 16 MB, onepass and correcting ─────────────────────
-
 echo "=== Inplace vs normal (16 MB, onepass and correcting) ==="
 echo "    32,000 blocks × 512 B mean"
 echo ""
@@ -147,8 +139,6 @@ done
 echo ""
 echo ""
 
-# ── Apply-phase performance — 16 MB, onepass and correcting ───────────────
-#
 # Measures decode time for standard vs in-place deltas produced above.
 # Uses the same delta files; writes decoded output to a scratch file.
 # Isolates the apply half of the encode+apply round trip.
@@ -187,8 +177,6 @@ rm -f "$apply_scratch"
 echo ""
 echo ""
 
-# ── Inplace scaling — correcting, 16 / 32 / 64 MB ────────────────────────
-
 echo "=== Inplace scaling (correcting, 16 → 256 MB) ==="
 echo "    ~512 B mean blocks"
 echo ""
@@ -199,17 +187,7 @@ printf "  %-8s  %7s  %9s  %9s  %9s  %8s  %8s\n" \
     "----" "-----" "-------" "--------" "-------" "------" "-------"
 
 for size_mb in 16 32 64 128 256; do
-    if [[ "$size_mb" -eq 16 ]]; then
-        nblocks=32000; mean=512; tag="16mb"
-    elif [[ "$size_mb" -eq 32 ]]; then
-        nblocks=64000; mean=512; tag="32mb"
-    elif [[ "$size_mb" -eq 64 ]]; then
-        nblocks=128000; mean=512; tag="64mb"
-    elif [[ "$size_mb" -eq 128 ]]; then
-        nblocks=256000; mean=512; tag="128mb"
-    else
-        nblocks=512000; mean=512; tag="256mb"
-    fi
+    nblocks=$((size_mb * 2000)); mean=512; tag="${size_mb}mb"
 
     for pct in $PERMS; do
         ref="$WORKDIR/${tag}-ref-${pct}.bin"
@@ -240,8 +218,6 @@ for size_mb in 16 32 64 128 256; do
     done
     echo ""
 done
-
-# ── 1 GB dataset — onepass and correcting ─────────────────────────────────
 
 echo "=== 1 GB (onepass, correcting) ==="
 echo "    8,000,000 blocks × 128 B mean"

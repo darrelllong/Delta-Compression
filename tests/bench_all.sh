@@ -20,8 +20,6 @@ WORKLOAD="$REPO_ROOT/tests/pilot_lang.sh"
 export WORKDIR="${WORKDIR:-/tmp/delta-kernel-test}"
 mkdir -p "$WORKDIR"
 
-# ── Prepare Shakespeare benchmark data (once, cached) ────────────────────────
-
 export PILOT_REF="$WORKDIR/shakespeare.txt"
 export PILOT_VER="$WORKDIR/shakespeare-5pct.txt"
 
@@ -30,11 +28,7 @@ if [[ ! -f "$PILOT_REF" || ! -f "$PILOT_VER" ]]; then
     bash "$REPO_ROOT/tests/get_shakespeare.sh"
 fi
 
-# ── Locate Java ───────────────────────────────────────────────────────────────
-
 JAVA=$(command -v java 2>/dev/null || true)
-
-# ── Measure helper ────────────────────────────────────────────────────────────
 
 measure() {
     local name=$1 lang=$2 algo=$3
@@ -68,8 +62,6 @@ hdr() {
     echo "| Language | Algorithm  |   MiB/s    | CI width (95%) | Runs  |"
     sep
 }
-
-# ── Benchmarks ────────────────────────────────────────────────────────────────
 
 hdr "Encode: Shakespeare (~5.4 MB, 5% mutations)"
 
