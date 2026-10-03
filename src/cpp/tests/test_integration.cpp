@@ -702,7 +702,52 @@ TEST_CASE("localmin picks smallest", "[inplace]") {
     CHECK(add_lmin <= add_const);
 }
 
-// Checkpointing tests.
+// Two copies that each read what the other writes: one edge each way and
+// one cycle, broken by converting the shorter copy under localmin and the
+// first under constant.
+TEST_CASE("make_inplace reports what it did", "[inplace]") {
+    std::vector<uint8_t> r(100);
+    std::iota(r.begin(), r.end(), 0);
+    const std::vector<Command> cmds = {CopyCmd{40, 60}, CopyCmd{0, 40}};
+
+    InplaceStats lmin;
+    auto ip = make_inplace(r, cmds, CyclePolicy::Localmin, lmin);
+    CHECK(ip == make_inplace(r, cmds, CyclePolicy::Localmin));
+    CHECK(lmin.num_copies == 1);
+    CHECK(lmin.num_adds == 1);
+    CHECK(lmin.edges == 2);
+    CHECK(lmin.cycles_broken == 1);
+    CHECK(lmin.copies_converted == 1);
+    CHECK(lmin.bytes_converted == 40);
+
+    InplaceStats constant;
+    make_inplace(r, cmds, CyclePolicy::Constant, constant);
+    CHECK(constant.edges == 2);
+    CHECK(constant.copies_converted == 1);
+    CHECK(constant.bytes_converted == 60);
+
+    // No conflict: nothing to convert.
+    InplaceStats none;
+    make_inplace(r, {CopyCmd{0, 100}}, CyclePolicy::Localmin, none);
+    CHECK(none.num_copies == 1);
+    CHECK(none.num_adds == 0);
+    CHECK(none.edges == 0);
+    CHECK(none.cycles_broken == 0);
+    CHECK(none.bytes_converted == 0);
+}
+
+// A MOVE reads V, not R, so it is no command of a differencing algorithm
+// and a delta that has one cannot be converted to in-place.
+TEST_CASE("unplace_commands rejects a move", "[inplace]") {
+    std::vector<PlacedCommand> placed = {
+        PlacedAdd{0, {'h','e','l','l','o'}},
+        PlacedMove{0, 5, 5},
+    };
+    CHECK_THROWS_AS(unplace_commands(placed), DeltaError);
+}
+
+// Checkpointing tests.  q is only a floor for the table size, which grows
+// with |R|; max_table is the ceiling that makes a table small.
 
 TEST_CASE("correcting checkpointing tiny table", "[correcting]") {
     std::vector<uint8_t> base = {'A','B','C','D','E','F','G','H',
@@ -714,6 +759,7 @@ TEST_CASE("correcting checkpointing tiny table", "[correcting]") {
     DiffOptions o;
     o.p = 16;
     o.q = 7;
+    o.max_table = 7; // 7 slots for 305 seeds; otherwise there would be 41
     auto cmds = diff_correcting(r, v, o);
     auto recovered = apply_delta(r, cmds);
     REQUIRE(recovered == v);
@@ -729,6 +775,7 @@ TEST_CASE("correcting checkpointing various sizes", "[correcting]") {
         DiffOptions o;
         o.p = 16;
         o.q = q;
+        o.max_table = q; // exactly q slots: each q is prime
         auto cmds = diff_correcting(r, v, o);
         auto recovered = apply_delta(r, cmds);
         REQUIRE(recovered == v);
@@ -899,18 +946,31 @@ TEST_CASE("inplace |V|=|R| same-size swap", "[edge]") {
     }
 }
 
-// A one-byte V is shorter than a seed (p = 2), so it is encoded as an add
-// whether or not the byte occurs in R.
+// A one-byte V.  With p = 1 the byte is a seed: it is copied if it occurs in
+// R and added if not.  With p = 2 it is shorter than a seed and is added
+// either way.
 TEST_CASE("inplace v=1 byte", "[edge]") {
     std::vector<uint8_t> r(64);
     std::iota(r.begin(), r.end(), 0);
-    std::vector<uint8_t> v_copy = {r[32]};  // occurs in R
-    std::vector<uint8_t> v_add  = {0xAB};   // does not occur in R
-    for (auto& [name, algo] : all_algos())
-        for (auto pol : all_policies()) {
-            REQUIRE(inplace_roundtrip(algo, r, v_copy, pol, 2) == v_copy);
-            REQUIRE(inplace_roundtrip(algo, r, v_add,  pol, 2) == v_add);
-        }
+    std::vector<uint8_t> v_in_r  = {r[32]};
+    std::vector<uint8_t> v_not_in_r = {0xAB};
+    for (auto& [name, algo] : all_algos()) {
+        INFO(name);
+        auto copied = algo(r, v_in_r, opts(1));
+        REQUIRE(copied.size() == 1);
+        CHECK((copied[0] == Command{CopyCmd{32, 1}}));
+        auto added = algo(r, v_not_in_r, opts(1));
+        REQUIRE(added.size() == 1);
+        CHECK(std::holds_alternative<AddCmd>(added[0]));
+        auto short_of_seed = algo(r, v_in_r, opts(2));
+        REQUIRE(short_of_seed.size() == 1);
+        CHECK(std::holds_alternative<AddCmd>(short_of_seed[0]));
+        for (auto pol : all_policies())
+            for (size_t p : {size_t{1}, size_t{2}}) {
+                REQUIRE(inplace_roundtrip(algo, r, v_in_r, pol, p) == v_in_r);
+                REQUIRE(inplace_roundtrip(algo, r, v_not_in_r, pol, p) == v_not_in_r);
+            }
+    }
 }
 
 // p = 1, 2, |R| and |R| + 1; the last leaves R with no seeds.

@@ -74,6 +74,15 @@ public final class Apply {
      */
     public static List<PlacedCommand> makeInplace(byte[] r, List<Command> commands,
                                                    CyclePolicy policy) {
+        return Inplace.convert(r, commands, policy).commands();
+    }
+
+    /**
+     * As {@link #makeInplace}, and also reports the size of the digraph of
+     * conflicts between copies and how many copies became adds.
+     */
+    public static InplaceResult makeInplaceWithStats(byte[] r, List<Command> commands,
+                                                     CyclePolicy policy) {
         return Inplace.convert(r, commands, policy);
     }
 

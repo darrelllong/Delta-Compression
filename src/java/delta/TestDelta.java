@@ -620,8 +620,9 @@ public class TestDelta {
     }
 
     /**
-     * Checkpointing with a small table.  q is only a floor: |R| asks for 38
-     * slots, so the table has 41 and not 7, and m = 15.
+     * Checkpointing with a table of 7 slots.  q is only a floor, and |R|
+     * asks for 38 slots, so maxTable is what holds the table to 7; then
+     * |F| = 613 and m = 88.
      */
     static void testCorrectingCheckpointingTinyTable() {
         byte[] r = repeat(b("ABCDEFGHIJKLMNOP"), 20);  // 320 bytes
@@ -634,13 +635,15 @@ public class TestDelta {
         DiffOptions o = new DiffOptions();
         o.p = 16;
         o.q = 7;
+        o.maxTable = 7;
+        assertEquals(7, Correcting.tableSize(Diff.seedCount(r, o.p), o), "table size");
         List<Command> cmds = Diff.diff(Algorithm.CORRECTING, r, v, o);
-        assertArrayEquals(v, Apply.applyDelta(r, cmds), "correcting q=7 tiny table");
+        assertArrayEquals(v, Apply.applyDelta(r, cmds), "correcting 7-slot table");
     }
 
     /**
-     * Several values of q.  q is only a floor: |R| asks for 248 slots, so
-     * 7, 31 and 101 all give the same table of 251.
+     * Tables of several sizes.  q is only a floor, and |R| asks for 248
+     * slots, so for the sizes below that maxTable is what sets the size.
      */
     static void testCorrectingCheckpointingVariousSizes() {
         byte[] r = new byte[2000];
@@ -655,8 +658,10 @@ public class TestDelta {
             DiffOptions o = new DiffOptions();
             o.p = 16;
             o.q = q;
+            o.maxTable = q;
+            assertEquals(q, Correcting.tableSize(Diff.seedCount(r, o.p), o), "table size");
             List<Command> cmds = Diff.diff(Algorithm.CORRECTING, r, v, o);
-            assertArrayEquals(v, Apply.applyDelta(r, cmds), "correcting q=" + q);
+            assertArrayEquals(v, Apply.applyDelta(r, cmds), "correcting, table of " + q);
         }
     }
 
@@ -721,6 +726,182 @@ public class TestDelta {
                         algo + "/" + pol + " subcommand vs direct case " + i);
                 }
         }
+    }
+
+    /** Two blocks exchanged: two copies, each reading what the other writes, so one cycle. */
+    static void testInplaceStats() {
+        byte[] a = new byte[40], c = new byte[24];
+        for (int i = 0; i < a.length; i++) a[i] = (byte) (i * 7 + 1);
+        for (int i = 0; i < c.length; i++) c[i] = (byte) (200 - i * 3);
+        byte[] r = concat(a, c), v = concat(c, a);
+        List<Command> cmds = List.of(new CopyCmd(40, 24), new CopyCmd(0, 40));
+        for (CyclePolicy pol : ALL_POLICIES) {
+            InplaceResult res = Apply.makeInplaceWithStats(r, cmds, pol);
+            InplaceStats s = res.stats();
+            // LOCALMIN gives up the shorter copy, CONSTANT the first, which is the shorter here.
+            assertEquals(1, s.numCopies(), pol + " copies kept");
+            assertEquals(1, s.numAdds(), pol + " adds");
+            assertEquals(2, s.edges(), pol + " edges");
+            assertEquals(1, s.cyclesBroken(), pol + " cycles broken");
+            assertEquals(1, s.copiesConverted(), pol + " copies converted");
+            assertEquals(24, s.bytesConverted(), pol + " bytes converted");
+            assertArrayEquals(v, Apply.applyDeltaInplace(r, res.commands(), v.length), pol + " stats roundtrip");
+            assertArrayEquals(
+                Encoding.encodeDelta(Apply.makeInplace(r, cmds, pol), true, v.length, ZERO_HASH, ZERO_HASH),
+                Encoding.encodeDelta(res.commands(), true, v.length, ZERO_HASH, ZERO_HASH),
+                pol + ": makeInplace and makeInplaceWithStats agree");
+        }
+
+        // Copies that do not conflict, and no copies at all.
+        InplaceStats none = Apply.makeInplaceWithStats(r,
+            List.of(new CopyCmd(0, 64), new AddCmd(b("xyz"))), CyclePolicy.LOCALMIN).stats();
+        assertEquals(1, none.numCopies(), "identity copies");
+        assertEquals(1, none.numAdds(), "identity adds");
+        assertEquals(0, none.edges(), "identity edges");
+        assertEquals(0, none.cyclesBroken(), "identity cycles");
+        assertEquals(0, none.bytesConverted(), "identity bytes converted");
+        InplaceStats adds = Apply.makeInplaceWithStats(r,
+            List.of(new AddCmd(b("xyz"))), CyclePolicy.LOCALMIN).stats();
+        assertEquals(0, adds.numCopies(), "add-only copies");
+        assertEquals(1, adds.numAdds(), "add-only adds");
+        assertEquals(0, adds.edges(), "add-only edges");
+    }
+
+    /** What a run of the command-line tool left behind. */
+    record CliRun(int exit, String out, String err) {}
+
+    /** Runs delta.Delta in a JVM of its own, since it ends with System.exit on failure. */
+    static CliRun cli(String... args) throws IOException {
+        List<String> argv = new ArrayList<>(List.of(
+            Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+            "-cp", System.getProperty("java.class.path"), "delta.Delta"));
+        argv.addAll(List.of(args));
+        Path dir = Files.createTempDirectory("delta-cli");
+        Path out = dir.resolve("out"), err = dir.resolve("err");
+        try {
+            Process proc = new ProcessBuilder(argv)
+                .redirectOutput(out.toFile()).redirectError(err.toFile()).start();
+            int exit = proc.waitFor();
+            return new CliRun(exit, Files.readString(out), Files.readString(err));
+        } catch (InterruptedException e) {
+            throw new IOException("interrupted waiting for delta.Delta");
+        } finally {
+            Files.deleteIfExists(out);
+            Files.deleteIfExists(err);
+            Files.delete(dir);
+        }
+    }
+
+    /** Runs body with a scratch directory, which is removed afterwards with the files in it. */
+    interface InDir { void run(Path dir) throws IOException; }
+
+    static void withTempDir(InDir body) {
+        try {
+            Path dir = Files.createTempDirectory("delta-test");
+            try {
+                body.run(dir);
+            } finally {
+                try (var files = Files.list(dir)) {
+                    for (Path f : (Iterable<Path>) files::iterator) Files.delete(f);
+                }
+                Files.delete(dir);
+            }
+        } catch (IOException e) {
+            throw new AssertionError("I/O: " + e);
+        }
+    }
+
+    /** Two blocks exchanged, written to dir as ref and ver; returns their paths and that of a delta. */
+    static String[] swapFiles(Path dir) throws IOException {
+        byte[] a = new byte[400], c = new byte[240];
+        for (int i = 0; i < a.length; i++) a[i] = (byte) (i * 7 + 1);
+        for (int i = 0; i < c.length; i++) c[i] = (byte) (i * i + 3);
+        Files.write(dir.resolve("ref"), concat(a, c));
+        Files.write(dir.resolve("ver"), concat(c, a));
+        return new String[] {dir.resolve("ref").toString(), dir.resolve("ver").toString(),
+                             dir.resolve("std.delta").toString()};
+    }
+
+    /** {@code inplace --verbose} reports the digraph and the conversion on stderr. */
+    static void testCliInplaceVerbose() {
+        withTempDir(dir -> {
+            String[] f = swapFiles(dir);
+            String ip = dir.resolve("ip.delta").toString(), out = dir.resolve("out").toString();
+            assertEquals(0, cli("encode", "greedy", f[0], f[1], f[2]).exit(), "encode exit");
+
+            CliRun quiet = cli("inplace", f[0], f[2], ip);
+            assertEquals(0, quiet.exit(), "inplace exit");
+            assertTrue(quiet.err().isEmpty(), "inplace without --verbose: stderr " + quiet.err());
+
+            CliRun run = cli("inplace", f[0], f[2], ip, "--verbose");
+            assertEquals(0, run.exit(), "inplace --verbose exit");
+            String want = String.format("inplace: 2 copies, 2 CRWI edges, 1 cycles broken%n" +
+                "  converted 1 copies -> adds (240 bytes materialized)%n");
+            assertTrue(want.equals(run.err()), "inplace --verbose stderr: " + run.err());
+
+            assertEquals(0, cli("decode", f[0], ip, out).exit(), "decode exit");
+            assertArrayEquals(Files.readAllBytes(Path.of(f[1])), Files.readAllBytes(Path.of(out)),
+                "decode of converted delta");
+        });
+    }
+
+    /** {@code inplace} reads the reference to break cycles, so it refuses one with the wrong CRC. */
+    static void testCliInplaceWrongReference() {
+        withTempDir(dir -> {
+            String[] f = swapFiles(dir);
+            Path ip = dir.resolve("ip.delta");
+            assertEquals(0, cli("encode", "greedy", f[0], f[1], f[2]).exit(), "encode exit");
+            CliRun run = cli("inplace", f[1], f[2], ip.toString());
+            assertEquals(1, run.exit(), "inplace with the version as reference: exit");
+            assertTrue(run.err().startsWith("source file does not match delta: expected "),
+                "stderr: " + run.err());
+            assertFalse(Files.exists(ip), "no delta should be written");
+        });
+    }
+
+    /** A MOVE has no unplaced form: the library throws, and the tool exits 1 with one line. */
+    static void testInplaceRejectsMove() {
+        byte[] hello = b("hello");
+        List<PlacedCommand> cmds = List.of(
+            new PlacedAdd(0, hello),
+            new PlacedMove(0, 5, hello.length)
+        );
+        assertRejects("unplace of a MOVE", () -> Apply.unplaceCommands(cmds),
+            "PlacedMove has no algorithm-level equivalent");
+
+        withTempDir(dir -> {
+            Path ref = dir.resolve("ref"), std = dir.resolve("std.delta"), ip = dir.resolve("ip.delta");
+            Files.write(ref, new byte[0]);
+            Files.write(std, Encoding.encodeDeltaLarge(cmds, false, 10,
+                Hash.Crc64.hash8(new byte[0]), Hash.Crc64.hash8(b("hellohello")), false));
+            CliRun run = cli("inplace", ref.toString(), std.toString(), ip.toString());
+            assertEquals(1, run.exit(), "inplace of a delta with a MOVE: exit");
+            String want = String.format(
+                "inplace: %s has MOVE commands, which cannot be converted%n", std);
+            assertTrue(want.equals(run.err()), "stderr: " + run.err());
+            assertFalse(Files.exists(ip), "no delta should be written");
+        });
+    }
+
+    /** With --ignore-hash a wrong reference draws warnings only; without it, the complaint and exit 1. */
+    static void testCliDecodeIgnoreHash() {
+        withTempDir(dir -> {
+            String[] f = swapFiles(dir);
+            Path out = dir.resolve("out");
+            assertEquals(0, cli("encode", "greedy", f[0], f[1], f[2]).exit(), "encode exit");
+
+            CliRun strict = cli("decode", f[1], f[2], out.toString());
+            assertEquals(1, strict.exit(), "decode with the wrong reference: exit");
+            assertTrue(strict.err().startsWith("source file does not match delta: expected "),
+                "stderr: " + strict.err());
+            assertFalse(Files.exists(out), "no output should be written");
+
+            CliRun lax = cli("decode", f[1], f[2], out.toString(), "--ignore-hash");
+            assertEquals(0, lax.exit(), "decode --ignore-hash exit");
+            String want = String.format("warning: skipping source CRC check (--ignore-hash)%n" +
+                "warning: skipping output CRC check (--ignore-hash)%n");
+            assertTrue(want.equals(lax.err()), "decode --ignore-hash stderr: " + lax.err());
+        });
     }
 
     /** With useSplay set, each algorithm still builds V. */
@@ -909,7 +1090,10 @@ public class TestDelta {
         }
     }
 
-    /** A version of one byte is shorter than the seed, so it is an add whether or not the byte is in R. */
+    /**
+     * A version of one byte.  With p = 1 it is a copy if the byte is in R
+     * and an add if not; with p = 2 it is shorter than the seed, so an add.
+     */
     static void testInplaceVersionOneByteMin() {
         byte[] r = new byte[64];
         for (int i = 0; i < 64; i++) r[i] = (byte) i;
@@ -919,11 +1103,21 @@ public class TestDelta {
 
         for (Algorithm algo : ALL_ALGOS)
             for (CyclePolicy pol : ALL_POLICIES) {
-                assertArrayEquals(vCopy, inplaceRoundtrip(algo, r, vCopy, pol, 2),
-                    algo + "/" + pol + " inplace v=1 byte (copy)");
-                assertArrayEquals(vAdd, inplaceRoundtrip(algo, r, vAdd, pol, 2),
-                    algo + "/" + pol + " inplace v=1 byte (add)");
+                String who = algo + "/" + pol + " inplace v=1 byte ";
+                oneByteInplace(algo, pol, r, vCopy, 1, true,  who + "(p=1, copy)");
+                oneByteInplace(algo, pol, r, vAdd,  1, false, who + "(p=1, add)");
+                oneByteInplace(algo, pol, r, vCopy, 2, false, who + "(p=2, add)");
             }
+    }
+
+    /** Checks that the in-place delta for the one-byte v is one command of the kind expected, and builds v. */
+    static void oneByteInplace(Algorithm algo, CyclePolicy pol, byte[] r, byte[] v,
+                               int p, boolean copy, String msg) {
+        List<PlacedCommand> ip = Apply.makeInplace(r, Diff.diff(algo, r, v, opts(p)), pol);
+        assertEquals(1, ip.size(), msg + ": commands");
+        assertTrue(copy ? ip.get(0) instanceof PlacedCopy : ip.get(0) instanceof PlacedAdd,
+            msg + ": got " + ip.get(0));
+        assertArrayEquals(v, Apply.applyDeltaInplace(r, ip, v.length), msg);
     }
 
     /** Seed lengths 1, 2, |R|, which leaves R one seed, and |R| + 1, which leaves it none. */
@@ -1025,7 +1219,7 @@ public class TestDelta {
         check("localmin picks smallest",        TestDelta::testLocalminPicksSmallest);
 
         System.out.println("\n=== Checkpointing ===");
-        check("correcting tiny table (q=7)",    TestDelta::testCorrectingCheckpointingTinyTable);
+        check("correcting tiny table (7 slots)", TestDelta::testCorrectingCheckpointingTinyTable);
         check("correcting various table sizes", TestDelta::testCorrectingCheckpointingVariousSizes);
 
         System.out.println("\n=== CRC-64/XZ ===");
@@ -1039,6 +1233,13 @@ public class TestDelta {
         check("inplace subcommand roundtrip",   TestDelta::testInplaceSubcommandRoundtrip);
         check("inplace subcommand idempotent",  TestDelta::testInplaceSubcommandIdempotent);
         check("inplace subcommand equiv direct",TestDelta::testInplaceSubcommandEquivDirect);
+        check("inplace statistics",             TestDelta::testInplaceStats);
+        check("inplace rejects MOVE",           TestDelta::testInplaceRejectsMove);
+
+        System.out.println("\n=== Command line ===");
+        check("cli: inplace --verbose",         TestDelta::testCliInplaceVerbose);
+        check("cli: inplace, wrong reference",  TestDelta::testCliInplaceWrongReference);
+        check("cli: decode --ignore-hash",      TestDelta::testCliDecodeIgnoreHash);
 
         System.out.println("\n=== Splay tree ===");
         check("splay roundtrip",                TestDelta::testSplayRoundtrip);

@@ -523,7 +523,7 @@ def diff_correcting(R: bytes, V: bytes,
               f"  checkpoint gap={m} bytes, "
               f"expected fill ~{expected} "
               f"(~{expected * 100 // C}% table occupancy)\n"
-              f"  table memory ~{C * 24 // 1048576} MB",
+              f"  table memory ~{C * 16 // 1048576} MB",
               file=sys.stderr)
 
     # Build the table: open addressing with linear probing.  A slot holds
@@ -1233,17 +1233,16 @@ def _schedule(copies: list[_Copy], adj: list[list[int]], policy: str):
         remove(victim)
 
 
-def make_inplace(R: bytes, commands: list[Command],
-                 policy: str = 'localmin',
-                 return_stats: bool = False):
-    """Convert algorithm commands to placed commands that can run in place.
+def _convert_inplace(R: bytes, commands: list[Command], policy: str):
+    """Do the work of make_inplace.
 
-    Applied in order to a buffer that holds R, the result builds V there.
-    policy is 'localmin' or 'constant'.  R supplies the bytes of each copy
-    that has to become an add.
-
-    Returns the placed commands, copies first; with return_stats, returns
-    (commands, {'cycles_broken': n}).
+    Returns (commands, stats), where stats has:
+      num_copies        copies in the result
+      num_adds          adds in the result, including those that replaced copies
+      edges             edges in the CRWI digraph
+      cycles_broken     cycles broken, each by replacing one copy with an add
+      copies_converted  copies replaced by adds, one for each cycle broken
+      bytes_converted   total length of the copies replaced
     """
     copies: list[_Copy] = []
     adds: list[PlacedCommand] = []
@@ -1256,7 +1255,8 @@ def make_inplace(R: bytes, commands: list[Command],
             adds.append(PlacedAdd(dst=dst, data=cmd.data))
             dst += len(cmd.data)
 
-    order, victims = _schedule(copies, _build_crwi_digraph(copies), policy)
+    adj = _build_crwi_digraph(copies)
+    order, victims = _schedule(copies, adj, policy)
 
     result: list[PlacedCommand] = [
         PlacedCopy(src=copies[i].src, dst=copies[i].dst, length=copies[i].length)
@@ -1266,8 +1266,31 @@ def make_inplace(R: bytes, commands: list[Command],
         c = copies[i]
         result.append(PlacedAdd(dst=c.dst, data=bytes(R[c.src:c.src + c.length])))
 
+    return result, {
+        'num_copies': len(order),
+        'num_adds': len(adds) + len(victims),
+        'edges': sum(len(successors) for successors in adj),
+        'cycles_broken': len(victims),
+        'copies_converted': len(victims),
+        'bytes_converted': sum(copies[i].length for i in victims),
+    }
+
+
+def make_inplace(R: bytes, commands: list[Command],
+                 policy: str = 'localmin',
+                 return_stats: bool = False):
+    """Convert algorithm commands to placed commands that can run in place.
+
+    Applied in order to a buffer that holds R, the result builds V there.
+    policy is 'localmin' or 'constant'.  R supplies the bytes of each copy
+    that has to become an add.
+
+    Returns the placed commands, copies first; with return_stats, returns
+    (commands, {'cycles_broken': n}).
+    """
+    result, stats = _convert_inplace(R, commands, policy)
     if return_stats:
-        return result, {'cycles_broken': len(victims)}
+        return result, {'cycles_broken': stats['cycles_broken']}
     return result
 
 
@@ -1392,7 +1415,8 @@ def cmd_decode(args):
 
     The reference is checked against the source CRC before the commands
     run and the output against the destination CRC after; --ignore-hash
-    turns either failure into a warning.
+    turns either failure into a warning.  Without it, an output that fails
+    its check is removed.
     """
     R, r_crc = _read_with_crc(args.reference)
     with open(args.delta, 'rb') as f:
@@ -1426,6 +1450,7 @@ def cmd_decode(args):
 
     if output_crc != dst_crc:
         if not args.ignore_hash:
+            os.remove(args.output)
             raise SystemExit("error: output integrity check failed")
         print("warning: skipping output CRC check (--ignore-hash)", file=sys.stderr)
 
@@ -1457,10 +1482,11 @@ def cmd_info(args):
 def cmd_inplace(args):
     """Convert a standard delta to an in-place one.
 
-    A delta that is already in-place is copied unchanged.
+    A delta that is already in-place is copied unchanged.  Otherwise the
+    reference must match the delta's source CRC, and the delta must have
+    no MOVE commands; nothing is written if either check fails.
     """
-    with open(args.reference, 'rb') as f:
-        R = f.read()
+    R, r_crc = _read_with_crc(args.reference)
     with open(args.delta_in, 'rb') as f:
         delta_bytes = f.read()
     placed, inplace, version_size, src_crc, dst_crc = decode_delta(delta_bytes)
@@ -1471,8 +1497,21 @@ def cmd_inplace(args):
         print("Delta is already in-place format; copied unchanged.")
         return
 
+    # A copy that becomes an add takes its bytes from R, so the wrong R
+    # would give a wrong delta.
+    if r_crc != src_crc:
+        raise SystemExit(
+            f"error: source file does not match delta: "
+            f"expected {src_crc.hex()}, got {r_crc.hex()}"
+        )
+    # unplace_commands drops moves, which would leave holes in the version.
+    if any(isinstance(cmd, PlacedMove) for cmd in placed):
+        raise SystemExit(
+            "error: delta has MOVE commands; cannot convert it to in-place")
+
     t0 = time.time()
-    ip_placed = make_inplace(R, unplace_commands(placed), policy=args.policy)
+    ip_placed, convert = _convert_inplace(R, unplace_commands(placed),
+                                          args.policy)
     elapsed = time.time() - t0
 
     # The CRCs describe the reference and the version, which the
@@ -1482,6 +1521,16 @@ def cmd_inplace(args):
                                   force_large=args.large)
     with open(args.delta_out, 'wb') as f:
         f.write(ip_delta)
+
+    if args.verbose:
+        print(f"inplace: {convert['num_copies'] + convert['copies_converted']} "
+              f"copies, {convert['edges']} CRWI edges, "
+              f"{convert['cycles_broken']} cycles broken",
+              file=sys.stderr)
+        if convert['copies_converted'] > 0:
+            print(f"  converted {convert['copies_converted']} copies -> adds "
+                  f"({convert['bytes_converted']} bytes materialized)",
+                  file=sys.stderr)
 
     stats = placed_summary(ip_placed)
     print(f"Reference:    {args.reference} ({len(R):,} bytes)")
@@ -1541,6 +1590,8 @@ def main():
                      help='Cycle-breaking policy (default: localmin)')
     inp.add_argument('--large', action='store_true',
                      help='Force 64-bit (BIGCOPY/BIGADD/BIGMOVE) commands')
+    inp.add_argument('--verbose', action='store_true',
+                     help='Print diagnostic messages to stderr')
     inp.set_defaults(func=cmd_inplace)
 
     args = ap.parse_args()

@@ -38,9 +38,19 @@ func PlaceCommands(commands []Command) []PlacedCommand {
 	return placed
 }
 
+// HasMove reports whether commands contains a PlacedMove.
+func HasMove(commands []PlacedCommand) bool {
+	for _, cmd := range commands {
+		if _, ok := cmd.(PlacedMove); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // UnplaceCommands is the inverse of PlaceCommands: it returns the commands
 // in order of destination, without their destinations. It panics if placed
-// contains a PlacedMove, which has no unplaced form.
+// contains a PlacedMove, which has no unplaced form; see HasMove.
 func UnplaceCommands(placed []PlacedCommand) []Command {
 	sorted := make([]PlacedCommand, len(placed))
 	copy(sorted, placed)

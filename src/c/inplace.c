@@ -435,13 +435,15 @@ pick_victim(order_t *o, delta_cycle_policy_t policy)
 }
 
 // order_copies appends the copies to out in a safe order, and to adds those
-// it had to convert, with the bytes they read from r.
-static void
+// it had to convert, with the bytes they read from r.  It returns the total
+// length of the copies converted.
+static size_t
 order_copies(const graph_t *g, const copy_t *copies, const uint8_t *r,
              delta_cycle_policy_t policy,
              delta_placed_commands_t *out, delta_placed_commands_t *adds)
 {
 	size_t n = g->n;
+	size_t converted_bytes = 0;
 	order_t o = { .g = g, .copies = copies, .sccs = find_sccs(g) };
 	o.in_degree = delta_calloc(n, sizeof(*o.in_degree));
 	o.done = delta_calloc(n, sizeof(*o.done));
@@ -477,6 +479,7 @@ order_copies(const graph_t *g, const copy_t *copies, const uint8_t *r,
 			pc.add.data = delta_memdup(&r[copies[v].src],
 			                           copies[v].length);
 			delta_placed_commands_push(adds, pc);
+			converted_bytes += copies[v].length;
 		}
 		retire(&o, v);
 	}
@@ -487,6 +490,7 @@ order_copies(const graph_t *g, const copy_t *copies, const uint8_t *r,
 	free(o.heap);
 	free(o.mark);
 	free(o.path);
+	return converted_bytes;
 }
 
 delta_placed_commands_t
@@ -494,8 +498,18 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
                    const delta_commands_t *cmds,
                    delta_cycle_policy_t policy)
 {
+	return delta_make_inplace_stats(r, r_len, cmds, policy, NULL);
+}
+
+delta_placed_commands_t
+delta_make_inplace_stats(const uint8_t *r, size_t r_len,
+                         const delta_commands_t *cmds,
+                         delta_cycle_policy_t policy,
+                         delta_inplace_stats_t *stats)
+{
 	(void)r_len;
 
+	delta_inplace_stats_t st = {0};
 	size_t n = delta_summary(cmds).num_copies;
 	copy_t *copies = delta_malloc(n * sizeof(*copies));
 	delta_placed_commands_t result, adds;
@@ -521,10 +535,20 @@ delta_make_inplace(const uint8_t *r, size_t r_len,
 
 	if (n > 0) {
 		graph_t g = build_graph(copies, n);
-		order_copies(&g, copies, r, policy, &result, &adds);
+		st.edges = g.first[n];
+		st.bytes_converted =
+		    order_copies(&g, copies, r, policy, &result, &adds);
 		graph_free(&g);
 	}
 	free(copies);
+
+	// Every conversion breaks one cycle.
+	st.num_copies = result.len;
+	st.copies_converted = st.cycles_broken = n - result.len;
+	st.num_adds = adds.len;
+	if (stats) {
+		*stats = st;
+	}
 
 	// The adds move to the result, data and all.
 	for (size_t i = 0; i < adds.len; i++) {

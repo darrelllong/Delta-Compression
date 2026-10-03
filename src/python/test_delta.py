@@ -14,6 +14,7 @@ from pathlib import Path
 
 from delta import (
     DELTA_CRC_SIZE, DELTA_MAGIC, DELTA_MAGIC_LARGE, TABLE_SIZE,
+    DiffOptions,
     CopyCmd, AddCmd,
     PlacedCopy, PlacedAdd, PlacedMove,
     diff_greedy, diff_onepass, diff_correcting,
@@ -225,8 +226,12 @@ class TestBinaryEncodingErrors(unittest.TestCase):
             decode_delta(delta)
 
 
-class TestLargeCopy(unittest.TestCase):
-    """A copy with large field values in DLT\\x03; not the DLT\\x04 format."""
+class TestSmallFormatCopy(unittest.TestCase):
+    """A copy with five- and six-digit fields survives DLT\\x03.
+
+    The fields fit in u32 with room to spare; TestDltLargeCopy covers
+    DLT\\x04 and BIGCOPY.
+    """
 
     _sh = b'\x01' * 8
     _dh = b'\x02' * 8
@@ -242,8 +247,8 @@ class TestLargeCopy(unittest.TestCase):
         self.assertEqual(placed2[0].length, 50000)
 
 
-class TestLargeAdd(unittest.TestCase):
-    """A 1024-byte add in DLT\\x03; not the DLT\\x04 format."""
+class TestSmallFormatAdd(unittest.TestCase):
+    """A 1024-byte add survives DLT\\x03; TestDltLargeAdd covers DLT\\x04."""
 
     _sh = b'\x03' * 8
     _dh = b'\x04' * 8
@@ -975,26 +980,63 @@ class TestNextPrime(unittest.TestCase):
 class TestCheckpointing(unittest.TestCase):
     """The correcting algorithm with checkpointing (Section 8).
 
-    q is only a floor on the table size |C|, which grows with |R|; the
-    comments below give the |C| and m that each case really gets.
+    q is only a floor on the table size |C|, which grows with |R|; a small
+    table needs max_table as well: |C| = next_prime(min(max_table,
+    max(q, 2 * seeds in R // p))).  The comments below give the |C| and m
+    that each case gets.
     """
 
+    @staticmethod
+    def _correcting(R, V, p, q, max_table):
+        return diff_correcting(R, V, opts=DiffOptions(p=p, q=q,
+                                                      max_table=max_table))
+
+    def test_table_size_formula(self):
+        """The |C| that the cases below rely on, read from the verbose line."""
+        script = (
+            "import random, sys\n"
+            "from delta import DiffOptions, diff_correcting\n"
+            "rng = random.Random(42)\n"
+            "R = bytes(rng.getrandbits(8) for _ in range(2000))\n"
+            "for q, mt in ((7, 7), (31, 31), (101, 101), (7, 2**30)):\n"
+            "    diff_correcting(R, R, opts=DiffOptions(p=16, q=q,\n"
+            "                    max_table=mt, verbose=True))\n")
+        proc = subprocess.run([sys.executable, "-c", script],
+                              capture_output=True, text=True,
+                              cwd=str(Path(__file__).parent))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        sizes = [line.split()[1] for line in proc.stderr.splitlines()
+                 if line.startswith("correcting:")]
+        # Without max_table, q=7 is only a floor: 2 * 1985 // 16 = 248.
+        self.assertEqual(sizes, ["|C|=7", "|C|=31", "|C|=101", "|C|=251"])
+
     def test_tiny_table_roundtrip(self):
-        """A small table (q=7) with checkpointing produces correct output."""
-        R = b'ABCDEFGHIJKLMNOP' * 20   # 320 bytes: |C| = 41, m = 15
+        """A 7-slot table (q=7, max_table=7) produces correct output."""
+        R = b'ABCDEFGHIJKLMNOP' * 20   # 320 bytes: |C| = 7, m = 88
         V = R[:160] + b'XXXXYYYY' + R[160:]
-        cmds = diff_correcting(R, V, p=16, q=7)
+        cmds = self._correcting(R, V, p=16, q=7, max_table=7)
         recovered = apply_delta(R, cmds)
         self.assertEqual(recovered, V)
+
+    def test_one_slot_table(self):
+        """The smallest table the size formula allows: |C| = 2."""
+        rng = random.Random(7)
+        R = bytes(rng.getrandbits(8) for _ in range(2000))
+        V = R[:500] + b'Z' * 50 + R[500:]
+        for max_table in (1, 2):
+            cmds = self._correcting(R, V, p=16, q=1, max_table=max_table)
+            self.assertEqual(apply_delta(R, cmds), V,
+                             f"failed with max_table={max_table}")
 
     def test_various_table_sizes(self):
         """Correcting produces correct output across a range of table sizes."""
         rng = random.Random(42)
         R = bytes(rng.getrandbits(8) for _ in range(2000))
         V = R[:500] + bytes(rng.getrandbits(8) for _ in range(50)) + R[500:]
-        # |C| = 251 (m = 16) for the first three, then q itself (m = 4, 1).
+        # |C| = q for each: 7, 31, 101, 1009 (m = 570, 129, 40, 4) and
+        # TABLE_SIZE (m = 1).
         for q in [7, 31, 101, 1009, TABLE_SIZE]:
-            cmds = diff_correcting(R, V, p=16, q=q)
+            cmds = self._correcting(R, V, p=16, q=q, max_table=q)
             recovered = apply_delta(R, cmds)
             self.assertEqual(recovered, V, f"failed with q={q}")
 
@@ -1007,13 +1049,17 @@ class TestCheckpointing(unittest.TestCase):
         self.assertEqual(recovered, V)
 
     def test_checkpoint_long_matches(self):
-        """Checkpointing on long matches with a small table (q=31)."""
-        # A 100-byte insertion in the middle; |C| = 1279, m = 17.
+        """Backward extension recovers long matches from a 31-slot table."""
+        # A 100-byte insertion in the middle; |C| = 31, m = 661.
         R = bytes(range(256)) * 40  # 10240 bytes
         V = R[:5000] + b'X' * 100 + R[5000:]
-        cmds = diff_correcting(R, V, p=16, q=31)
+        cmds = self._correcting(R, V, p=16, q=31, max_table=31)
         recovered = apply_delta(R, cmds)
         self.assertEqual(recovered, V)
+        # Each side of the insertion is found whole from one checkpoint
+        # seed.  R has period 256, so the offsets are not unique.
+        self.assertEqual([c.length if isinstance(c, CopyCmd) else len(c.data)
+                          for c in cmds], [5000, 100, 5240])
 
 
 class TestCrc64(unittest.TestCase):
@@ -1508,6 +1554,177 @@ class TestDltLargeAlgoRoundtrip(unittest.TestCase):
     def test_correcting_large(self):
         R, V = b'the quick brown fox', b'the slow brown fox'
         self.assertEqual(self._roundtrip_algo(diff_correcting, R, V), V)
+
+
+def _run_cli(*args):
+    """Run delta.py with args; return the completed process."""
+    script = Path(__file__).with_name("delta.py")
+    return subprocess.run([sys.executable, str(script)] + [str(a) for a in args],
+                          capture_output=True, text=True)
+
+
+class TestCliInplace(unittest.TestCase):
+    """The inplace subcommand: reference check, --verbose, MOVE commands."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        self.ref, self.ver, self.std, self.ip, self.out = (
+            self.dir / n for n in ("ref", "ver", "std", "ip", "out"))
+
+    def _encode(self, R, V, *options):
+        # greedy, because onepass does not find blocks that changed order.
+        self.ref.write_bytes(R)
+        self.ver.write_bytes(V)
+        proc = _run_cli("encode", "greedy", self.ref, self.ver, self.std,
+                        *options)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def _swap(self):
+        """Two blocks exchanged: a two-copy cycle in the CRWI digraph."""
+        rng = random.Random(1)
+        a = bytes(rng.getrandbits(8) for _ in range(300))
+        b = bytes(rng.getrandbits(8) for _ in range(500))
+        self._encode(a + b, b + a)
+        return a + b, b + a
+
+    def test_converts_and_decodes(self):
+        R, V = self._swap()
+        proc = _run_cli("inplace", self.ref, self.std, self.ip)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stderr, "")
+        self.assertTrue(is_inplace_delta(self.ip.read_bytes()))
+        proc = _run_cli("decode", self.ref, self.ip, self.out)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.out.read_bytes(), V)
+
+    def test_wrong_reference_rejected(self):
+        R, _ = self._swap()
+        wrong = self.dir / "wrong"
+        wrong.write_bytes(R[:-1] + bytes([R[-1] ^ 1]))
+        proc = _run_cli("inplace", wrong, self.std, self.ip)
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(
+            proc.stderr,
+            "error: source file does not match delta: expected {}, got {}\n"
+            .format(_crc64_xz(R).hex(), _crc64_xz(wrong.read_bytes()).hex()))
+        self.assertFalse(self.ip.exists())
+        # decode reports the same mismatch in the same words.
+        dec = _run_cli("decode", wrong, self.std, self.out)
+        self.assertEqual(dec.returncode, 1)
+        self.assertEqual(dec.stderr, proc.stderr)
+
+    def test_no_ignore_hash_option(self):
+        self._swap()
+        proc = _run_cli("inplace", self.ref, self.std, self.ip, "--ignore-hash")
+        self.assertEqual(proc.returncode, 2)
+        self.assertFalse(self.ip.exists())
+
+    def test_already_inplace_copied_without_check(self):
+        R, V = b"abcdefgh" * 40, b"abcdefgh" * 20 + b"XY" + b"abcdefgh" * 20
+        self._encode(R, V, "--inplace")
+        wrong = self.dir / "wrong"
+        wrong.write_bytes(b"not the reference")
+        proc = _run_cli("inplace", wrong, self.std, self.ip, "--verbose")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout,
+                         "Delta is already in-place format; copied unchanged.\n")
+        self.assertEqual(proc.stderr, "")
+        self.assertEqual(self.ip.read_bytes(), self.std.read_bytes())
+
+    def test_verbose_cycle_broken(self):
+        R, V = self._swap()
+        proc = _run_cli("inplace", self.ref, self.std, self.ip, "--verbose")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # The shorter block, 300 bytes, is the one converted.
+        self.assertEqual(
+            proc.stderr,
+            "inplace: 2 copies, 2 CRWI edges, 1 cycles broken\n"
+            "  converted 1 copies -> adds (300 bytes materialized)\n")
+        proc = _run_cli("decode", self.ref, self.ip, self.out)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.out.read_bytes(), V)
+
+    def test_verbose_nothing_converted(self):
+        R = bytes(range(256)) * 2
+        self._encode(R, R[:200] + b"!" * 40 + R[200:])
+        proc = _run_cli("inplace", self.ref, self.std, self.ip, "--verbose")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stderr,
+                         "inplace: 2 copies, 0 CRWI edges, 0 cycles broken\n")
+
+    def test_move_rejected(self):
+        """A standard delta with a MOVE cannot be converted."""
+        R = bytes(range(100))
+        V = R[:40] * 2
+        placed = [PlacedCopy(src=0, dst=0, length=40),
+                  PlacedMove(src=0, dst=40, length=40)]
+        self.assertEqual(apply_placed(R, placed), V)
+        self.ref.write_bytes(R)
+        self.std.write_bytes(encode_delta_large(
+            placed, version_size=len(V),
+            src_crc=_crc64_xz(R), dst_crc=_crc64_xz(V)))
+        proc = _run_cli("inplace", self.ref, self.std, self.ip)
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(
+            proc.stderr,
+            "error: delta has MOVE commands; cannot convert it to in-place\n")
+        self.assertFalse(self.ip.exists())
+
+
+class TestCliDecodeOutputCheck(unittest.TestCase):
+    """decode leaves no output file when the output fails its CRC."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        self.ref, self.dlt, self.out = (
+            self.dir / n for n in ("ref", "dlt", "out"))
+        self.R = b"0123456789abcdef" * 8
+        self.ref.write_bytes(self.R)
+
+    def _write_delta(self, inplace):
+        """A delta whose commands are sound but whose dst CRC is wrong."""
+        self.built = self.R[64:] + b"tail"
+        placed = [PlacedCopy(src=64, dst=0, length=64),
+                  PlacedAdd(dst=64, data=b"tail")]
+        self.dlt.write_bytes(encode_delta_large(
+            placed, inplace=inplace, version_size=len(self.built),
+            src_crc=_crc64_xz(self.R), dst_crc=_crc64_xz(b"something else")))
+
+    def test_bad_output_not_left(self):
+        for inplace in (False, True):
+            with self.subTest(inplace=inplace):
+                self._write_delta(inplace)
+                proc = _run_cli("decode", self.ref, self.dlt, self.out)
+                self.assertEqual(proc.returncode, 1)
+                self.assertEqual(proc.stderr,
+                                 "error: output integrity check failed\n")
+                self.assertFalse(self.out.exists())
+
+    def test_ignore_hash_keeps_output(self):
+        for inplace in (False, True):
+            with self.subTest(inplace=inplace):
+                self._write_delta(inplace)
+                proc = _run_cli("decode", self.ref, self.dlt, self.out,
+                                "--ignore-hash")
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(
+                    proc.stderr,
+                    "warning: skipping output CRC check (--ignore-hash)\n")
+                self.assertEqual(self.out.read_bytes(), self.built)
+                self.out.unlink()
+
+    def test_good_output_kept(self):
+        self.dlt.write_bytes(encode_delta_large(
+            [PlacedCopy(src=0, dst=0, length=len(self.R))],
+            version_size=len(self.R),
+            src_crc=_crc64_xz(self.R), dst_crc=_crc64_xz(self.R)))
+        proc = _run_cli("decode", self.ref, self.dlt, self.out)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.out.read_bytes(), self.R)
 
 
 if __name__ == '__main__':

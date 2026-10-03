@@ -98,7 +98,7 @@ std::vector<Command> unplace_commands(const std::vector<PlacedCommand>& placed) 
             [&](const PlacedCopy& c) { commands.emplace_back(CopyCmd{c.src, c.length}); },
             [&](const PlacedAdd& a) { commands.emplace_back(AddCmd{a.data}); },
             [&](const PlacedMove&) {
-                throw DeltaError("PlacedMove has no algorithm-level equivalent");
+                throw DeltaError("delta has a MOVE command, which has no unplaced form");
             },
         }, placed[i]);
     }

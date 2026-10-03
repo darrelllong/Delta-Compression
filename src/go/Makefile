@@ -10,7 +10,7 @@ build:
 	go build -o $(BIN) ./cmd/delta
 
 test:
-	go test ./delta/... -v
+	go test ./... -v
 
 clean:
 	rm -f $(BIN)

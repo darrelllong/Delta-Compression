@@ -57,6 +57,10 @@ final class Inplace {
     private int sccCursor, scanPos;
     private int firstLeft; // no vertex below this index remains
 
+    // The copies that sort() replaced by adds, and their total length.
+    private int converted;
+    private long bytesConverted;
+
     private Inplace(long[] src, long[] dst, long[] len) {
         this.n = src.length;
         this.src = src;
@@ -68,8 +72,11 @@ final class Inplace {
         color = new byte[n];
     }
 
-    /** Returns commands that build the version of {@code commands} within a buffer holding r. */
-    static List<PlacedCommand> convert(byte[] r, List<Command> commands, CyclePolicy policy) {
+    /**
+     * Returns commands that build the version of {@code commands} within a
+     * buffer holding r, with counts of what the conversion did.
+     */
+    static InplaceResult convert(byte[] r, List<Command> commands, CyclePolicy policy) {
         int numCopies = 0;
         for (Command cmd : commands) {
             if (cmd instanceof CopyCmd) numCopies++;
@@ -90,7 +97,9 @@ final class Inplace {
                 writePos += a.data().length;
             }
         }
-        if (numCopies == 0) return adds;
+        if (numCopies == 0) {
+            return new InplaceResult(adds, new InplaceStats(0, adds.size(), 0, 0, 0, 0));
+        }
 
         Inplace g = new Inplace(src, dst, len);
         g.buildGraph();
@@ -98,7 +107,9 @@ final class Inplace {
         List<PlacedCommand> result = new ArrayList<>(commands.size());
         g.sort(r, policy, result, adds);
         result.addAll(adds);
-        return result;
+        InplaceStats stats = new InplaceStats(numCopies - g.converted, adds.size(),
+            g.adjStart[numCopies], g.converted, g.converted, g.bytesConverted);
+        return new InplaceResult(result, stats);
     }
 
     /**
@@ -243,6 +254,8 @@ final class Inplace {
                 byte[] data = new byte[(int) len[v]];
                 System.arraycopy(r, (int) src[v], data, 0, data.length);
                 adds.add(new PlacedAdd(dst[v], data));
+                converted++;
+                bytesConverted += len[v];
             }
             removed[v] = true;
             if (sccOf[v] != NO_SCC) active[sccOf[v]]--;

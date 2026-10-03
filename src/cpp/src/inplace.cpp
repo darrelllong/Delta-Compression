@@ -223,6 +223,7 @@ private:
 struct Schedule {
     std::vector<size_t> order;     ///< Copies to perform, in a safe order.
     std::vector<size_t> converted; ///< Copies to replace by adds, in the order chosen.
+    size_t edges = 0;              ///< Edges of the CRWI digraph.
 };
 
 /// Orders the copies by Kahn's algorithm (CACM 5(11), 1962), taking the
@@ -236,6 +237,9 @@ Schedule schedule_copies(const std::vector<Copy>& copies, CyclePolicy policy) {
     for (const auto& successors : adj) {
         for (size_t j : successors) { ++in_degree[j]; }
     }
+
+    Schedule s;
+    for (const auto& successors : adj) { s.edges += successors.size(); }
 
     std::vector<bool> removed(n, false);
     CycleFinder cycles(adj, removed);
@@ -261,7 +265,6 @@ Schedule schedule_copies(const std::vector<Copy>& copies, CyclePolicy policy) {
         return std::pair(copies[a].length, a) < std::pair(copies[b].length, b);
     };
 
-    Schedule s;
     s.order.reserve(n);
     while (s.order.size() + s.converted.size() < n) {
         while (!ready.empty()) {
@@ -293,6 +296,15 @@ std::vector<PlacedCommand> make_inplace(
     std::span<const uint8_t> r,
     const std::vector<Command>& commands,
     CyclePolicy policy) {
+    InplaceStats stats;
+    return make_inplace(r, commands, policy, stats);
+}
+
+std::vector<PlacedCommand> make_inplace(
+    std::span<const uint8_t> r,
+    const std::vector<Command>& commands,
+    CyclePolicy policy,
+    InplaceStats& stats) {
 
     std::vector<Copy> copies;
     std::vector<PlacedAdd> adds;
@@ -309,6 +321,14 @@ std::vector<PlacedCommand> make_inplace(
     }
 
     const Schedule s = schedule_copies(copies, policy);
+
+    stats = {};
+    stats.num_copies = s.order.size();
+    stats.num_adds = adds.size() + s.converted.size();
+    stats.edges = s.edges;
+    stats.cycles_broken = s.converted.size();
+    stats.copies_converted = s.converted.size();
+    for (size_t i : s.converted) { stats.bytes_converted += copies[i].length; }
 
     std::vector<PlacedCommand> result;
     result.reserve(commands.size());

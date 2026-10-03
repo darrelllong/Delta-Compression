@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"reflect"
 	"testing"
 )
 
@@ -799,19 +800,30 @@ func TestLocalminPicksSmallest(t *testing.T) {
 	}
 }
 
+// correctingTable runs the correcting algorithm with a table of the first
+// prime >= slots. Q alone would not do: it is only a floor, and the table
+// grows with the reference unless MaxTable holds it down.
+func correctingTable(r, v []byte, p, slots int) []Command {
+	o := DefaultDiffOptions()
+	o.P = p
+	o.Q = slots
+	o.MaxTable = slots
+	return Diff(AlgorithmCorrecting, r, v, o)
+}
+
+// A 7-slot table for the 305 seeds of R: checkpointing passes about one
+// seed in 88, and all sixteen distinct seeds of this periodic R may miss.
 func TestCorrectingCheckpointingTinyTable(t *testing.T) {
 	r := repeat(b("ABCDEFGHIJKLMNOP"), 20)
 	v := concat(r[:160], b("XXXXYYYY"), r[160:])
-	o := DefaultDiffOptions()
-	o.P = 16
-	o.Q = 7
-	cmds := Diff(AlgorithmCorrecting, r, v, o)
+	cmds := correctingTable(r, v, 16, 7)
 	got := ApplyDelta(r, cmds)
 	if !bytes.Equal(v, got) {
-		t.Fatal("correcting q=7 tiny table failed")
+		t.Fatal("correcting with a 7-slot table failed")
 	}
 }
 
+// Tables from 7 slots to the default, for 1985 seeds of R.
 func TestCorrectingCheckpointingVariousSizes(t *testing.T) {
 	r := make([]byte, 2000)
 	for i := range r {
@@ -825,15 +837,84 @@ func TestCorrectingCheckpointingVariousSizes(t *testing.T) {
 	copy(v[550:], r[500:])
 	for _, q := range []int{7, 31, 101, 1009, TableSize} {
 		t.Run("q="+itoa(q), func(t *testing.T) {
-			o := DefaultDiffOptions()
-			o.P = 16
-			o.Q = q
-			cmds := Diff(AlgorithmCorrecting, r, v, o)
+			cmds := correctingTable(r, v, 16, q)
 			got := ApplyDelta(r, cmds)
 			if !bytes.Equal(v, got) {
-				t.Fatalf("correcting q=%d failed", q)
+				t.Fatalf("correcting with a %d-slot table failed", q)
 			}
 		})
+	}
+}
+
+// A table too small for the checkpoints of R fills up; the seeds that do
+// not fit are dropped and the delta must still be correct.
+func TestCorrectingTinyTableRandomData(t *testing.T) {
+	rng := rand.New(rand.NewSource(7))
+	r := make([]byte, 20000)
+	rng.Read(r)
+	v := concat(r[9000:15000], b("inserted bytes"), r[:9000], r[15000:])
+	for _, slots := range []int{1, 2, 7, 31, 101} {
+		t.Run("slots="+itoa(slots), func(t *testing.T) {
+			cmds := correctingTable(r, v, 16, slots)
+			if got := ApplyDelta(r, cmds); !bytes.Equal(v, got) {
+				t.Fatalf("correcting with a %d-slot table failed", slots)
+			}
+		})
+	}
+}
+
+func TestMakeInplaceStats(t *testing.T) {
+	// Swapping the halves makes two copies that each read what the other
+	// writes: two edges, one cycle.
+	r := b("AAAAAAAABBBBBBBBBBBB")
+	cmds := []Command{
+		CopyCmd{Offset: 8, Length: 12},
+		CopyCmd{Offset: 0, Length: 8},
+	}
+	for _, pol := range allPolicies {
+		t.Run(pol.String(), func(t *testing.T) {
+			placed, st := MakeInplaceStats(r, cmds, pol)
+			if got := ApplyDeltaInplace(r, placed, len(r)); !bytes.Equal(got, b("BBBBBBBBBBBBAAAAAAAA")) {
+				t.Fatalf("got %q", got)
+			}
+			sum := PlacedSummaryOf(placed)
+			if st.NumCopies != sum.NumCopies || st.NumAdds != sum.NumAdds {
+				t.Fatalf("stats %+v disagree with summary %+v", st, sum)
+			}
+			if st.Edges != 2 || st.CyclesBroken != 1 || st.CopiesConverted != 1 {
+				t.Fatalf("stats = %+v, want 2 edges and 1 cycle broken", st)
+			}
+			if int64(st.BytesConverted) != sum.AddBytes {
+				t.Fatalf("BytesConverted = %d, want %d", st.BytesConverted, sum.AddBytes)
+			}
+			// Localmin converts the shorter copy; constant the first.
+			want := 8
+			if pol == CyclePolicyConstant {
+				want = 12
+			}
+			if st.BytesConverted != want {
+				t.Fatalf("BytesConverted = %d, want %d", st.BytesConverted, want)
+			}
+			if !reflect.DeepEqual(placed, MakeInplace(r, cmds, pol)) {
+				t.Fatal("MakeInplaceStats and MakeInplace differ")
+			}
+		})
+	}
+	if placed, st := MakeInplaceStats(r, nil, CyclePolicyLocalmin); placed != nil || st != (InplaceStats{}) {
+		t.Fatalf("empty delta: got %v, %+v", placed, st)
+	}
+}
+
+func TestHasMove(t *testing.T) {
+	cmds := []PlacedCommand{
+		PlacedAdd{DstOff: 0, Data: b("ABC")},
+		PlacedCopy{Src: 0, DstOff: 3, Length: 3},
+	}
+	if HasMove(cmds) {
+		t.Fatal("HasMove reported a move among a copy and an add")
+	}
+	if !HasMove(append(cmds, PlacedMove{Src: 0, DstOff: 6, Length: 3})) {
+		t.Fatal("HasMove missed a move")
 	}
 }
 

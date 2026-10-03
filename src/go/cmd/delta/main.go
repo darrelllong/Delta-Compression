@@ -5,11 +5,13 @@
 //	delta encode <algorithm> <ref> <ver> <delta> [options]
 //	delta decode <ref> <delta> <output> [--ignore-hash]
 //	delta info <delta>
-//	delta inplace <ref> <delta_in> <delta_out> [--policy P]
+//	delta inplace <ref> <delta_in> <delta_out> [--policy P] [--large] [--verbose]
 //
 // The algorithms are greedy, onepass and correcting. The options of encode
 // are --seed-len N, --table-size N, --max-table N (with an optional k, M or
-// B suffix), --inplace, --large, --policy P, --verbose and --splay.
+// B suffix), --inplace, --large, --policy P, --verbose and --splay. The
+// policies are localmin and constant. With --verbose, inplace prints the
+// size of the CRWI digraph and the cycles broken to standard error.
 package main
 
 import (
@@ -53,11 +55,12 @@ func usage() {
   delta encode <algorithm> <ref> <ver> <delta> [options]
   delta decode <ref> <delta> <output> [--ignore-hash]
   delta info <delta>
-  delta inplace <ref> <delta_in> <delta_out> [--policy P]
+  delta inplace <ref> <delta_in> <delta_out> [--policy P] [--large] [--verbose]
 
 Algorithms: greedy, onepass, correcting
 Options: --seed-len N, --table-size N, --max-table N (k/M/B ok),
-         --inplace, --large, --policy P, --verbose, --splay`)
+         --inplace, --large, --policy P, --verbose, --splay
+Policies: localmin, constant`)
 	os.Exit(1)
 }
 
@@ -354,6 +357,7 @@ func cmdInplace(args []string) error {
 	refPath, inPath, outPath := args[1], args[2], args[3]
 	policy := delta.CyclePolicyLocalmin
 	forceLarge := false
+	verbose := false
 	for rest := optionArgs(args[4:]); len(rest) > 0; {
 		switch name := rest.next(); name {
 		case "--policy":
@@ -366,6 +370,8 @@ func cmdInplace(args []string) error {
 			}
 		case "--large":
 			forceLarge = true
+		case "--verbose":
+			verbose = true
 		default:
 			return fmt.Errorf("unknown inplace option: %s", name)
 		}
@@ -400,13 +406,28 @@ func cmdInplace(args []string) error {
 		return err
 	}
 
+	// A move reads the output, not the reference, so it has no place in
+	// the CRWI digraph, and UnplaceCommands would panic on it.
+	if delta.HasMove(d.Commands) {
+		return errors.New("cannot convert to in-place: delta contains a MOVE command")
+	}
+
 	start := time.Now()
-	placed := delta.MakeInplace(r, delta.UnplaceCommands(d.Commands), policy)
+	placed, conv := delta.MakeInplaceStats(r, delta.UnplaceCommands(d.Commands), policy)
 	elapsed := time.Since(start)
 
 	out := delta.EncodeDeltaLarge(placed, true, d.VersionSize, d.SrcCrc, d.DstCrc, forceLarge)
 	if err := os.WriteFile(outPath, out, 0644); err != nil {
 		return err
+	}
+
+	if verbose {
+		fmt.Fprintf(os.Stderr, "inplace: %d copies, %d CRWI edges, %d cycles broken\n",
+			conv.NumCopies+conv.CopiesConverted, conv.Edges, conv.CyclesBroken)
+		if conv.CopiesConverted > 0 {
+			fmt.Fprintf(os.Stderr, "  converted %d copies -> adds (%d bytes materialized)\n",
+				conv.CopiesConverted, conv.BytesConverted)
+		}
 	}
 
 	stats := delta.PlacedSummaryOf(placed)

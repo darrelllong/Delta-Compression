@@ -115,6 +115,23 @@ public final class Types {
     }
 
     /**
+     * What in-place conversion did.  The input had numCopies +
+     * copiesConverted copies; each cycle is broken by converting one copy,
+     * so cyclesBroken and copiesConverted are equal.
+     */
+    public record InplaceStats(
+        int  numCopies,       // copies in the result
+        int  numAdds,         // adds in the result, including converted copies
+        int  edges,           // edges of the CRWI digraph
+        int  cyclesBroken,
+        int  copiesConverted, // copies replaced by adds
+        long bytesConverted   // their total length
+    ) {}
+
+    /** The commands of an in-place delta, and how the conversion went. */
+    public record InplaceResult(java.util.List<PlacedCommand> commands, InplaceStats stats) {}
+
+    /**
      * Counts over a list of placed commands.  A MOVE counts as a copy, and
      * totalOutputBytes is copyBytes + addBytes.
      */

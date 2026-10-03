@@ -6,6 +6,8 @@ use delta::{
     DELTA_HEADER_SIZE_LARGE, DELTA_MAGIC_LARGE, TABLE_SIZE,
 };
 use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{self, Output};
 
 type DiffFn = fn(&[u8], &[u8], &DiffOptions) -> Vec<Command>;
 
@@ -834,45 +836,64 @@ fn test_localmin_picks_smallest() {
 
 #[test]
 fn test_correcting_checkpointing_tiny_table() {
-    // q is a floor: R has 305 seeds, so the table has 41 slots, the first
-    // prime at or above 2 * 305 / 16, and one seed in 15 is a checkpoint.
+    // q is only a floor, so max_table holds the table to 7 slots.  R has
+    // 305 seeds and |F| = 613, so one footprint in 88 is a checkpoint.  The
+    // class that passes is that of the middle seed of V, which must lie in
+    // what V shares with R if any seed of R is to pass.
     let r = b"ABCDEFGHIJKLMNOP".repeat(20); // 320 bytes
-    let mut v = r[..160].to_vec();
+    let mut v = r[..96].to_vec();
     v.extend_from_slice(b"XXXXYYYY");
-    v.extend_from_slice(&r[160..]);
+    v.extend_from_slice(&r[96..]);
     let cmds = diff_correcting(
         &r,
         &v,
         &DiffOptions {
             p: 16,
             q: 7,
+            max_table: 7,
             ..DiffOptions::default()
         },
     );
     let recovered = apply_delta(&r, &cmds);
     assert_eq!(recovered, v);
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::Copy { .. })),
+        "the table found no match"
+    );
 }
 
 #[test]
 fn test_correcting_checkpointing_various_sizes() {
-    // R has 1985 seeds, so every q below 2 * 1985 / 16 = 248 gives the same
-    // table of 251 slots; the last two give larger ones.
+    // R has 1985 seeds, so q alone gives 251 slots for every q below
+    // 2 * 1985 / 16 = 248.  With max_table = q the table has q slots, and
+    // with max_table = 2 the smallest table there is.
     let r: Vec<u8> = (0..=255u8).cycle().take(2000).collect();
     let mut v = r[..500].to_vec();
     v.extend_from_slice(&[0xFFu8; 50]);
     v.extend_from_slice(&r[500..]);
-    for q in [7, 31, 101, 1009, TABLE_SIZE] {
-        let cmds = diff_correcting(
-            &r,
-            &v,
-            &DiffOptions {
-                p: 16,
+    for q in [2, 7, 31, 101, 1009, TABLE_SIZE] {
+        assert!(is_prime(q));
+        for use_splay in [false, true] {
+            let cmds = diff_correcting(
+                &r,
+                &v,
+                &DiffOptions {
+                    p: 16,
+                    q,
+                    max_table: q,
+                    use_splay,
+                    ..DiffOptions::default()
+                },
+            );
+            let recovered = apply_delta(&r, &cmds);
+            assert_eq!(recovered, v, "failed with q={} splay={}", q, use_splay);
+            assert!(
+                cmds.iter().any(|c| matches!(c, Command::Copy { .. })),
+                "no match with q={} splay={}",
                 q,
-                ..DiffOptions::default()
-            },
-        );
-        let recovered = apply_delta(&r, &cmds);
-        assert_eq!(recovered, v, "failed with q={}", q);
+                use_splay
+            );
+        }
     }
 }
 
@@ -956,25 +977,51 @@ fn test_inplace_subcommand_roundtrip() {
 
 #[test]
 fn test_inplace_subcommand_idempotent() {
-    // The subcommand copies a delta that is already in-place.  It knows one
-    // by the flag that decode_delta returns, which is all that is checked
-    // here.
+    // The subcommand copies a delta that is already in-place, whatever the
+    // reference, so converting twice gives the same bytes as converting
+    // once.
+    let dir = scratch_dir("idempotent");
     let r = b"ABCDEFGHIJ";
     let v = b"JIHGFEDCBA";
+    let (r_path, other_path) = (file(&dir, "r"), file(&dir, "other"));
+    let (in_path, out_path) = (file(&dir, "in.delta"), file(&dir, "out.delta"));
+    fs::write(&r_path, r).unwrap();
+    fs::write(&other_path, b"not the reference").unwrap();
     for (_, algo_fn) in all_algos() {
         for (_, pol) in all_policies() {
             let cmds = algo_fn(r, v, &opts(2));
             let (ip, _) = make_inplace(r, &cmds, pol);
-            let sc = crc64_xz(r);
-            let dc = crc64_xz(v);
-            let ip_delta = encode_delta(&ip, true, v.len(), &sc, &dc).unwrap();
-
-            let (_, is_ip, _, sc2, dc2) = decode_delta(&ip_delta).unwrap();
-            assert!(is_ip, "inplace delta should be detected as inplace");
-            assert_eq!(sc2, sc);
-            assert_eq!(dc2, dc);
+            let ip_delta = encode_delta(&ip, true, v.len(), &crc64_xz(r), &crc64_xz(v)).unwrap();
+            fs::write(&in_path, &ip_delta).unwrap();
+            for reference in [&r_path, &other_path] {
+                let _ = fs::remove_file(&out_path);
+                let out = delta_cli(&["inplace", reference, &in_path, &out_path]);
+                assert!(out.status.success(), "{}", stderr(&out));
+                assert_eq!(fs::read(&out_path).unwrap(), ip_delta);
+            }
         }
     }
+
+    // The same through the subcommand alone: standard, in-place, in-place.
+    let (v_path, std_path) = (file(&dir, "v"), file(&dir, "std.delta"));
+    fs::write(&v_path, v).unwrap();
+    let out = delta_cli(&[
+        "encode",
+        "greedy",
+        "--seed-len",
+        "2",
+        &r_path,
+        &v_path,
+        &std_path,
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = delta_cli(&["inplace", &r_path, &std_path, &in_path]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let once = fs::read(&in_path).unwrap();
+    assert!(is_inplace_delta(&once));
+    let out = delta_cli(&["inplace", &r_path, &in_path, &out_path]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(fs::read(&out_path).unwrap(), once);
 }
 
 #[test]
@@ -1007,6 +1054,128 @@ fn test_inplace_subcommand_equiv_direct() {
             }
         }
     }
+}
+
+// The `delta` binary itself.
+
+// Returns an empty directory for the files of one test.
+fn scratch_dir(name: &str) -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+// Returns the path of `name` in `dir`, as the command line takes it.
+fn file(dir: &Path, name: &str) -> String {
+    dir.join(name).to_str().unwrap().to_string()
+}
+
+fn delta_cli(args: &[&str]) -> Output {
+    process::Command::new(env!("CARGO_BIN_EXE_delta"))
+        .args(args)
+        .output()
+        .expect("run delta")
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn stderr(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+#[test]
+fn test_cli_inplace_rejects_wrong_reference() {
+    // Converting a copy to an add reads the reference, so the wrong one
+    // would give a delta that decodes to the wrong version.
+    let dir = scratch_dir("inplace_wrong_reference");
+    let r: Vec<u8> = (0..4000u32).map(|i| (i * 7 + i / 13) as u8).collect();
+    let mut v = r[2000..].to_vec();
+    v.extend_from_slice(&r[..2000]);
+    let mut wrong = r.clone();
+    wrong[100] ^= 0xFF;
+    let (r_path, v_path, wrong_path) = (file(&dir, "r"), file(&dir, "v"), file(&dir, "wrong"));
+    let (std_path, ip_path) = (file(&dir, "std.delta"), file(&dir, "ip.delta"));
+    fs::write(&r_path, &r).unwrap();
+    fs::write(&v_path, &v).unwrap();
+    fs::write(&wrong_path, &wrong).unwrap();
+    let out = delta_cli(&["encode", "onepass", &r_path, &v_path, &std_path]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    for policy in ["localmin", "constant"] {
+        let out = delta_cli(&[
+            "inplace",
+            "--policy",
+            policy,
+            &wrong_path,
+            &std_path,
+            &ip_path,
+        ]);
+        assert_eq!(out.status.code(), Some(1));
+        assert_eq!(
+            stderr(&out).trim_end(),
+            format!(
+                "error: source file does not match delta: expected {}, got {}",
+                hex(&crc64_xz(&r)),
+                hex(&crc64_xz(&wrong))
+            )
+        );
+        assert!(
+            !Path::new(&ip_path).exists(),
+            "output written for the wrong reference"
+        );
+    }
+
+    // The right reference converts, and the result decodes to V.
+    let out = delta_cli(&["inplace", &r_path, &std_path, &ip_path]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(is_inplace_delta(&fs::read(&ip_path).unwrap()));
+    let out_path = file(&dir, "out");
+    let out = delta_cli(&["decode", &r_path, &ip_path, &out_path]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(fs::read(&out_path).unwrap(), v);
+}
+
+#[test]
+fn test_cli_inplace_rejects_move() {
+    // unplace_commands panics on a move; the subcommand must report the
+    // delta instead.
+    let dir = scratch_dir("inplace_move");
+    let r = b"0123456789";
+    let placed = vec![
+        PlacedCommand::Add {
+            dst: 0,
+            data: b"ABCD".to_vec(),
+        },
+        PlacedCommand::Move {
+            src: 0,
+            dst: 4,
+            length: 4,
+        },
+    ];
+    let mut v = vec![0u8; 8];
+    apply_placed_to(r, &placed, &mut v);
+    assert_eq!(v, b"ABCDABCD");
+    let delta = encode_delta_large(&placed, false, 8, &crc64_xz(r), &crc64_xz(&v), true);
+    let (r_path, in_path, out_path) = (
+        file(&dir, "r"),
+        file(&dir, "in.delta"),
+        file(&dir, "out.delta"),
+    );
+    fs::write(&r_path, r).unwrap();
+    fs::write(&in_path, &delta).unwrap();
+
+    let out = delta_cli(&["inplace", &r_path, &in_path, &out_path]);
+    assert_eq!(out.status.code(), Some(1));
+    let message = stderr(&out);
+    assert!(message.contains("move command"), "{}", message);
+    assert!(!message.contains("panicked"), "{}", message);
+    assert!(
+        !Path::new(&out_path).exists(),
+        "output written for a delta with a move"
+    );
 }
 
 // crc64_xz.

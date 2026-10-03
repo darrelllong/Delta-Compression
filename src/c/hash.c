@@ -1,37 +1,8 @@
 // Karp-Rabin fingerprints (Section 2.1.3) and the primality test used to
-// size hash tables.
+// size hash tables.  The fingerprint functions called once for each byte are
+// in delta.h.
 
 #include "internal.h"
-
-// Since 2^61 = 1 (mod 2^61 - 1), the high bits of x fold onto the low ones.
-// Two folds bring any 128-bit x into range.
-uint64_t
-delta_mod_mersenne(__uint128_t x)
-{
-	__uint128_t m = DELTA_HASH_MOD;
-	__uint128_t r = (x >> 61) + (x & m);
-	if (r >= m) {
-		r -= m;
-	}
-	r = (r >> 61) + (r & m);
-	if (r >= m) {
-		r -= m;
-	}
-	return (uint64_t)r;
-}
-
-// The fingerprint of bytes b[0..p) is the sum of b[i] BASE^(p-1-i) (Eq. 1),
-// evaluated by Horner's rule.
-uint64_t
-delta_fingerprint(const uint8_t *data, size_t offset, size_t p)
-{
-	uint64_t h = 0;
-	for (size_t i = 0; i < p; i++) {
-		h = delta_mod_mersenne((__uint128_t)h * DELTA_HASH_BASE +
-		                       data[offset + i]);
-	}
-	return h;
-}
 
 uint64_t
 delta_precompute_bp(size_t p)
@@ -57,32 +28,6 @@ delta_rh_init(delta_rolling_hash_t *rh, const uint8_t *data,
 	rh->bp = delta_precompute_bp(p);
 	rh->p = p;
 	rh->value = delta_fingerprint(data, offset, p);
-}
-
-void
-delta_rh_roll(delta_rolling_hash_t *rh, uint8_t old_byte, uint8_t new_byte)
-{
-	uint64_t sub = delta_mod_mersenne((__uint128_t)old_byte * rh->bp);
-	uint64_t v = rh->value >= sub ? rh->value - sub
-	                              : DELTA_HASH_MOD - (sub - rh->value);
-	rh->value = delta_mod_mersenne((__uint128_t)v * DELTA_HASH_BASE +
-	                               new_byte);
-}
-
-uint64_t
-delta_rh_advance(delta_rolling_hash_t *rh, int *valid, size_t *rh_pos,
-                 const uint8_t *data, size_t target, size_t p)
-{
-	if (!*valid) {
-		delta_rh_init(rh, data, target, p);
-		*valid = 1;
-	} else if (target == *rh_pos + 1) {
-		delta_rh_roll(rh, data[target - 1], data[target + p - 1]);
-	} else if (target != *rh_pos) {
-		rh->value = delta_fingerprint(data, target, p);
-	}
-	*rh_pos = target;
-	return rh->value;
 }
 
 static uint64_t

@@ -145,6 +145,17 @@ public final class Correcting {
         }
     }
 
+    /**
+     * Returns |C| for a reference of numSeeds seeds: two slots for every p
+     * bytes of R, but at least opts.q and, with precedence, at most
+     * opts.maxTable; then the next prime.
+     */
+    static int tableSize(int numSeeds, DiffOptions opts) {
+        int maxTable = opts.maxTable > 0 ? opts.maxTable : MAX_TABLE_SIZE;
+        long wanted = numSeeds > 0 ? Math.max(opts.q, 2L * numSeeds / opts.p) : opts.q;
+        return (int) Hash.nextPrime(Math.min(maxTable, wanted));
+    }
+
     /** Returns commands that build v from r. */
     public static List<Command> diff(byte[] r, byte[] v, DiffOptions opts) {
         List<Command> commands = new ArrayList<>();
@@ -153,12 +164,8 @@ public final class Correcting {
         int p = opts.p;
         int numSeeds = Diff.seedCount(r, p);
 
-        // |C|: two slots for every p bytes of R, but at least opts.q and, with
-        // precedence, at most maxTable; then the next prime.
         // |F|: a prime of about twice the number of seeds (Section 8.1).
-        int maxTable = opts.maxTable > 0 ? opts.maxTable : MAX_TABLE_SIZE;
-        long wanted = numSeeds > 0 ? Math.max(opts.q, 2L * numSeeds / p) : opts.q;
-        int cap = (int) Hash.nextPrime(Math.min(maxTable, wanted));
+        int cap = tableSize(numSeeds, opts);
         long fSize = numSeeds > 0 ? Hash.nextPrime(2L * numSeeds) : 1;
         long m = fSize <= cap ? 1 : (fSize + cap - 1) / cap;
         // k is the residue of a seed of V, which favors the residues common

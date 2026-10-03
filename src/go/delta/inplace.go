@@ -6,6 +6,16 @@ import (
 	"sort"
 )
 
+// InplaceStats describes one conversion of a delta to in-place form.
+type InplaceStats struct {
+	NumCopies       int // copies in the result
+	NumAdds         int // adds in the result, including those that replaced copies
+	Edges           int // edges of the CRWI digraph
+	CyclesBroken    int // cycles broken, each by replacing one copy with an add
+	CopiesConverted int // copies replaced by adds, one for each cycle broken
+	BytesConverted  int // total length of the copies replaced
+}
+
 // MakeInplace reorders the commands of a delta so that it can be applied in
 // the buffer that holds the reference r, with no second buffer (Burns, Long
 // and Stockmeyer, IEEE TKDE 2003).
@@ -17,8 +27,15 @@ import (
 // chosen by policy, to an add of the bytes it would have copied. The adds
 // follow all the copies, since nothing reads what they write.
 func MakeInplace(r []byte, commands []Command, policy CyclePolicy) []PlacedCommand {
+	placed, _ := MakeInplaceStats(r, commands, policy)
+	return placed
+}
+
+// MakeInplaceStats is MakeInplace, and also reports what the conversion
+// did.
+func MakeInplaceStats(r []byte, commands []Command, policy CyclePolicy) ([]PlacedCommand, InplaceStats) {
 	if len(commands) == 0 {
-		return nil
+		return nil, InplaceStats{}
 	}
 
 	var copies []placedCopy
@@ -36,7 +53,16 @@ func MakeInplace(r []byte, commands []Command, policy CyclePolicy) []PlacedComma
 	}
 
 	s := newScheduler(copies, policy)
+	stats := InplaceStats{NumAdds: len(adds)}
+	// The scheduler consumes the in-degrees, so count the edges first.
+	for _, d := range s.inDeg {
+		stats.Edges += d
+	}
 	order, converted := s.run()
+	stats.NumCopies = len(order)
+	stats.NumAdds += len(converted)
+	stats.CyclesBroken = len(converted)
+	stats.CopiesConverted = len(converted)
 
 	result := make([]PlacedCommand, 0, len(commands))
 	for _, i := range order {
@@ -49,8 +75,9 @@ func MakeInplace(r []byte, commands []Command, policy CyclePolicy) []PlacedComma
 	for _, i := range converted {
 		c := copies[i]
 		result = append(result, PlacedAdd{DstOff: c.dst, Data: bytes.Clone(r[c.src : c.src+c.length])})
+		stats.BytesConverted += c.length
 	}
-	return result
+	return result, stats
 }
 
 // A placedCopy is a copy command and its destination. Copies are identified

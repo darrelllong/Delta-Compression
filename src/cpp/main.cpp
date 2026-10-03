@@ -280,7 +280,7 @@ int info(const std::string& delta_path) {
 struct InplaceArgs {
     std::string reference, delta_in, delta_out;
     std::string policy = "localmin";
-    bool large = false;
+    bool large = false, verbose = false;
 };
 
 int convert_to_inplace(const InplaceArgs& args) {
@@ -302,12 +302,25 @@ int convert_to_inplace(const InplaceArgs& args) {
     validate_placed_commands(placed, r.size(), version_size, false);
 
     const Stopwatch timer;
-    const auto ip_placed = make_inplace(r, unplace_commands(placed), *policy);
+    // Throws if there is a MOVE: its source is in V, so it is no copy from R.
+    const auto commands = unplace_commands(placed);
+    InplaceStats converted;
+    const auto ip_placed = make_inplace(r, commands, *policy, converted);
     const double elapsed = timer.seconds();
 
     const auto ip_delta =
         encode_delta_large(ip_placed, true, version_size, src_crc, dst_crc, args.large);
     write_file(args.delta_out, ip_delta);
+
+    if (args.verbose) {
+        std::fprintf(stderr, "inplace: %zu copies, %zu CRWI edges, %zu cycles broken\n",
+            converted.num_copies + converted.copies_converted,
+            converted.edges, converted.cycles_broken);
+        if (converted.copies_converted > 0) {
+            std::fprintf(stderr, "  converted %zu copies -> adds (%zu bytes materialized)\n",
+                converted.copies_converted, converted.bytes_converted);
+        }
+    }
 
     const auto stats = placed_summary(ip_placed);
     std::printf("Reference:    %s (%zu bytes)\n", args.reference.c_str(), r.size());
@@ -363,6 +376,7 @@ int main(int argc, char** argv) {
     inp_cmd->add_option("delta_out", inp.delta_out, "Output (in-place) delta file")->required();
     inp_cmd->add_option("--policy", inp.policy, "Cycle policy (localmin/constant)");
     inp_cmd->add_flag("--large", inp.large, "Force 64-bit (BIGCOPY/BIGADD) commands");
+    inp_cmd->add_flag("--verbose", inp.verbose, "Print diagnostics");
 
     CLI11_PARSE(app, argc, argv);
 

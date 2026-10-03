@@ -42,10 +42,11 @@ public final class Delta {
             "  java delta.Delta encode <algorithm> <ref> <ver> <delta> [options]\n" +
             "  java delta.Delta decode <ref> <delta> <output> [--ignore-hash]\n" +
             "  java delta.Delta info <delta>\n" +
-            "  java delta.Delta inplace <ref> <delta_in> <delta_out> [--policy P]\n\n" +
+            "  java delta.Delta inplace <ref> <delta_in> <delta_out>\n" +
+            "                           [--policy P] [--large] [--verbose]\n\n" +
             "Algorithms: greedy, onepass, correcting\n" +
             "Options: --seed-len N, --table-size N, --max-table N (k/M/B ok),\n" +
-            "         --inplace, --policy P, --verbose, --splay");
+            "         --inplace, --policy P, --large, --verbose, --splay");
     }
 
     private static void encode(String[] args) throws IOException {
@@ -129,8 +130,12 @@ public final class Delta {
         byte[] delta = readFile(deltaPath);
         Encoding.DecodeResult result = Encoding.decodeDelta(delta);
 
-        if (!referenceMatches(r, result)) {
-            if (!ignoreHash) System.exit(1);
+        String mismatch = sourceMismatch(r, result);
+        if (mismatch != null) {
+            if (!ignoreHash) {
+                System.err.println(mismatch);
+                System.exit(1);
+            }
             System.err.println("warning: skipping source CRC check (--ignore-hash)");
         }
         Apply.validatePlacedCommands(result.commands(), r.length, result.versionSize(), result.inplace());
@@ -199,10 +204,12 @@ public final class Delta {
 
         CyclePolicy policy = CyclePolicy.LOCALMIN;
         boolean forceLarge = false;
+        boolean verbose = false;
         for (int i = 4; i < args.length; i++) {
             switch (args[i]) {
-                case "--policy" -> policy = parsePolicy(optionValue(args, ++i));
-                case "--large"  -> forceLarge = true;
+                case "--policy"  -> policy = parsePolicy(optionValue(args, ++i));
+                case "--large"   -> forceLarge = true;
+                case "--verbose" -> verbose = true;
                 default -> throw new IllegalArgumentException("Unknown inplace option: " + args[i]);
             }
         }
@@ -218,17 +225,41 @@ public final class Delta {
         }
 
         // The conversion reads the reference, so it must be the right one.
-        if (!referenceMatches(r, result)) System.exit(1);
+        String mismatch = sourceMismatch(r, result);
+        if (mismatch != null) {
+            System.err.println(mismatch);
+            System.exit(1);
+        }
         Apply.validatePlacedCommands(result.commands(), r.length, result.versionSize(), false);
+        // A MOVE reads the version, which only the order of a standard delta
+        // makes safe; conversion reorders the commands and knows only copies
+        // from the reference.
+        for (PlacedCommand cmd : result.commands()) {
+            if (cmd instanceof PlacedMove) {
+                throw new IllegalArgumentException(
+                    "inplace: " + inPath + " has MOVE commands, which cannot be converted");
+            }
+        }
 
         long t0 = System.nanoTime();
         List<Command> commands = Apply.unplaceCommands(result.commands());
-        List<PlacedCommand> placed = Apply.makeInplace(r, commands, policy);
+        InplaceResult converted = Apply.makeInplaceWithStats(r, commands, policy);
+        List<PlacedCommand> placed = converted.commands();
         long elapsed = System.nanoTime() - t0;
 
         byte[] out = Encoding.encodeDeltaLarge(placed, true, result.versionSize(),
                                                result.srcCrc(), result.dstCrc(), forceLarge);
         writeFile(outPath, out);
+
+        if (verbose) {
+            InplaceStats s = converted.stats();
+            System.err.printf("inplace: %d copies, %d CRWI edges, %d cycles broken%n",
+                s.numCopies() + s.copiesConverted(), s.edges(), s.cyclesBroken());
+            if (s.copiesConverted() > 0) {
+                System.err.printf("  converted %d copies -> adds (%d bytes materialized)%n",
+                    s.copiesConverted(), s.bytesConverted());
+            }
+        }
 
         PlacedSummary stats = Apply.placedSummary(placed);
         System.out.printf("Reference:    %s (%d bytes)%n", refPath, r.length);
@@ -241,13 +272,12 @@ public final class Delta {
         System.out.printf("Time:         %.3fs%n", elapsed / 1e9);
     }
 
-    /** Reports whether r has the source CRC that the delta records; if not, says so on stderr. */
-    private static boolean referenceMatches(byte[] r, Encoding.DecodeResult result) {
+    /** Returns null if r has the source CRC that the delta records, and otherwise the complaint. */
+    private static String sourceMismatch(byte[] r, Encoding.DecodeResult result) {
         byte[] crc = Hash.Crc64.hash8(r);
-        if (Arrays.equals(crc, result.srcCrc())) return true;
-        System.err.printf("source file does not match delta: expected %s, got %s%n",
+        if (Arrays.equals(crc, result.srcCrc())) return null;
+        return String.format("source file does not match delta: expected %s, got %s",
             HEX.formatHex(result.srcCrc()), HEX.formatHex(crc));
-        return false;
     }
 
     /** Returns args[i], the value of the option args[i - 1]. */

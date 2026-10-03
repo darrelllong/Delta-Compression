@@ -116,11 +116,40 @@ delta_summary_t delta_placed_summary(const delta_placed_commands_t *cmds);
 
 // Fingerprints (Section 2.1.3).
 
-// delta_mod_mersenne reduces x modulo DELTA_HASH_MOD.
-uint64_t delta_mod_mersenne(__uint128_t x);
+// The functions a scan calls once for each byte are defined here, so that
+// every caller compiles them inline.
 
-// delta_fingerprint is the fingerprint of the p bytes at data + offset.
-uint64_t delta_fingerprint(const uint8_t *data, size_t offset, size_t p);
+// delta_mod_mersenne reduces x modulo DELTA_HASH_MOD.  Since 2^61 = 1
+// (mod 2^61 - 1), the high bits of x fold onto the low ones; two folds bring
+// any 128-bit x into range.
+static inline uint64_t
+delta_mod_mersenne(__uint128_t x)
+{
+	__uint128_t m = DELTA_HASH_MOD;
+	__uint128_t r = (x >> 61) + (x & m);
+	if (r >= m) {
+		r -= m;
+	}
+	r = (r >> 61) + (r & m);
+	if (r >= m) {
+		r -= m;
+	}
+	return (uint64_t)r;
+}
+
+// delta_fingerprint is the fingerprint of the p bytes at data + offset: the
+// sum of b[i] BASE^(p-1-i) over the bytes b[0..p) (Eq. 1), evaluated by
+// Horner's rule.
+static inline uint64_t
+delta_fingerprint(const uint8_t *data, size_t offset, size_t p)
+{
+	uint64_t h = 0;
+	for (size_t i = 0; i < p; i++) {
+		h = delta_mod_mersenne((__uint128_t)h * DELTA_HASH_BASE +
+		                       data[offset + i]);
+	}
+	return h;
+}
 
 // delta_precompute_bp is DELTA_HASH_BASE^(p-1) mod DELTA_HASH_MOD, the
 // weight of the byte that leaves a p-byte window.
@@ -136,16 +165,35 @@ void delta_rh_init(delta_rolling_hash_t *rh, const uint8_t *data,
                    size_t offset, size_t p);
 
 // delta_rh_roll slides the window one byte: old_byte leaves, new_byte enters.
-void delta_rh_roll(delta_rolling_hash_t *rh, uint8_t old_byte,
-                   uint8_t new_byte);
+static inline void
+delta_rh_roll(delta_rolling_hash_t *rh, uint8_t old_byte, uint8_t new_byte)
+{
+	uint64_t sub = delta_mod_mersenne((__uint128_t)old_byte * rh->bp);
+	uint64_t v = rh->value >= sub ? rh->value - sub
+	                              : DELTA_HASH_MOD - (sub - rh->value);
+	rh->value = delta_mod_mersenne((__uint128_t)v * DELTA_HASH_BASE +
+	                               new_byte);
+}
 
 // delta_rh_advance returns the fingerprint of the window at target.  *valid
 // and *rh_pos are the caller's record of whether rh holds a window and where;
 // start with *valid zero.  A step of one byte forward rolls; any other move
 // computes the fingerprint afresh.
-uint64_t delta_rh_advance(delta_rolling_hash_t *rh, int *valid,
-                          size_t *rh_pos, const uint8_t *data,
-                          size_t target, size_t p);
+static inline uint64_t
+delta_rh_advance(delta_rolling_hash_t *rh, int *valid, size_t *rh_pos,
+                 const uint8_t *data, size_t target, size_t p)
+{
+	if (!*valid) {
+		delta_rh_init(rh, data, target, p);
+		*valid = 1;
+	} else if (target == *rh_pos + 1) {
+		delta_rh_roll(rh, data[target - 1], data[target + p - 1]);
+	} else if (target != *rh_pos) {
+		rh->value = delta_fingerprint(data, target, p);
+	}
+	*rh_pos = target;
+	return rh->value;
+}
 
 // delta_is_prime is a Miller-Rabin test, deterministic for every size_t.
 bool   delta_is_prime(size_t n);
@@ -378,5 +426,23 @@ delta_placed_commands_t delta_make_inplace(
 	const uint8_t *r, size_t r_len,
 	const delta_commands_t *cmds,
 	delta_cycle_policy_t policy);
+
+// What delta_make_inplace_stats did.
+typedef struct {
+	size_t num_copies;       // Copies in the result.
+	size_t num_adds;         // Adds in the result, converted copies included.
+	size_t edges;            // Edges in the digraph of conflicts.
+	size_t cycles_broken;    // Each by converting one copy to an add.
+	size_t copies_converted; // One for each cycle broken.
+	size_t bytes_converted;  // Total length of the copies converted.
+} delta_inplace_stats_t;
+
+// delta_make_inplace_stats is delta_make_inplace, and fills in *stats unless
+// it is NULL.
+delta_placed_commands_t delta_make_inplace_stats(
+	const uint8_t *r, size_t r_len,
+	const delta_commands_t *cmds,
+	delta_cycle_policy_t policy,
+	delta_inplace_stats_t *stats);
 
 #endif // DELTA_H

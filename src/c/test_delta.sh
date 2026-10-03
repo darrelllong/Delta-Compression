@@ -265,6 +265,38 @@ for algo in $algos; do
         cmp -s "$direct_d" "$ip_d"
 done
 
+# The conversion reads the reference, so the wrong one must be refused
+# before anything is written.
+tmp; std_d=$t
+tmp; wrong_out=$t
+$DELTA encode onepass "$ref" "$ver" "$std_d"
+if ! $DELTA inplace "$ver" "$std_d" "$wrong_out" >/dev/null 2>&1 \
+    && [ ! -e "$wrong_out" ]; then
+    pass "inplace rejects wrong reference without writing output"
+else
+    fail "inplace rejects wrong reference without writing output"
+fi
+
+tmp; ip_d=$t
+tmp; verbose_err=$t
+check "inplace --verbose succeeds" \
+    sh -c '"$@" 2>"$0"' "$verbose_err" \
+    $DELTA inplace "$ref" "$std_d" "$ip_d" --verbose
+check "inplace --verbose prints the inplace: line" \
+    grep -Eq '^inplace: [0-9]+ copies, [0-9]+ CRWI edges, [0-9]+ cycles broken$' \
+    "$verbose_err"
+
+section "Inplace subcommand rejects the wrong reference"
+
+for l in C Rust Go C++ Java Python; do
+    have_all $l || continue
+    tmp; d=$t
+    tmp; wrong_out=$t
+    quiet run $l encode onepass "$ref" "$ver" "$d"
+    check_fails "inplace rejects wrong reference ($l)" \
+        run $l inplace "$ver" "$d" "$wrong_out"
+done
+
 # chain desc L1 L2 L3 ref ver algo: L1 encodes, L2 converts to in-place, L3
 # decodes.
 chain() {

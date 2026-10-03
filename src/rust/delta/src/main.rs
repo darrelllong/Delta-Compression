@@ -214,6 +214,15 @@ fn write_file(path: &str, bytes: &[u8]) -> Result<(), String> {
     fs::write(path, bytes).map_err(|e| format!("Error writing {}: {}", path, e))
 }
 
+/// The message for a reference whose CRC is not the one the delta records.
+fn source_mismatch(expected: &[u8], got: &[u8]) -> String {
+    format!(
+        "error: source file does not match delta: expected {}, got {}",
+        hex(expected),
+        hex(got)
+    )
+}
+
 /// A decoded delta file.
 struct Delta {
     commands: Vec<PlacedCommand>,
@@ -347,11 +356,7 @@ fn decode(args: DecodeArgs) -> Result<(), String> {
     let delta = Delta::decode(&delta_bytes)?;
     if r_crc != delta.src_crc {
         if !args.ignore_hash {
-            return Err(format!(
-                "error: source file does not match delta: expected {}, got {}",
-                hex(&delta.src_crc),
-                hex(&r_crc)
-            ));
+            return Err(source_mismatch(&delta.src_crc, &r_crc));
         }
         eprintln!("warning: skipping source CRC check (--ignore-hash)");
     }
@@ -442,6 +447,24 @@ fn inplace(args: InplaceArgs) -> Result<(), String> {
         write_file(&args.delta_out, &delta_bytes)?;
         println!("Delta is already in-place format; copied unchanged.");
         return Ok(());
+    }
+    // Converting a copy to an add reads R, so R must be the right file.
+    let r_crc = crc64_xz(&r);
+    if r_crc != delta.src_crc {
+        return Err(source_mismatch(&delta.src_crc, &r_crc));
+    }
+    validate_placed_commands(&delta.commands, r.len(), delta.version_size, false)
+        .map_err(|e| format!("Error validating delta: {}", e))?;
+    // A move reads the output, not R, and unplace_commands panics on one.
+    if delta
+        .commands
+        .iter()
+        .any(|cmd| matches!(cmd, PlacedCommand::Move { .. }))
+    {
+        return Err(
+            "error: delta contains a move command, which cannot be converted to in-place"
+                .to_string(),
+        );
     }
 
     let t0 = Instant::now();

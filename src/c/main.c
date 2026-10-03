@@ -37,7 +37,8 @@ usage(void)
 	    "  delta encode <algorithm> <ref> <ver> <delta> [options]\n"
 	    "  delta decode <ref> <delta> <output> [--ignore-hash]\n"
 	    "  delta info <delta>\n"
-	    "  delta inplace <ref> <delta_in> <delta_out> [--policy P]\n"
+	    "  delta inplace <ref> <delta_in> <delta_out> [--policy P] [--large]\n"
+	    "                [--verbose]\n"
 	    "\n"
 	    "Algorithms: greedy, onepass, correcting\n"
 	    "\n"
@@ -46,8 +47,9 @@ usage(void)
 	    "  --table-size N   Hash table size floor (default %lu)\n"
 	    "  --max-table N    Max hash table size, k/M/B suffix ok (default %lu)\n"
 	    "  --inplace        Produce in-place delta\n"
+	    "  --large          Force 64-bit commands (encode, inplace)\n"
 	    "  --policy P       Cycle policy: localmin (default), constant\n"
-	    "  --verbose        Print diagnostics\n"
+	    "  --verbose        Print diagnostics (encode, inplace)\n"
 	    "  --splay          Use splay tree instead of hash table\n",
 	    DELTA_SEED_LEN, DELTA_TABLE_SIZE, DELTA_MAX_TABLE_SIZE);
 	exit(1);
@@ -222,6 +224,25 @@ parse_algorithm(const char *s)
 	die("Unknown algorithm: %s", s);
 }
 
+// source_matches reports whether r is the reference a delta was made from,
+// by its CRC.  If not, it says so on stderr.
+static bool
+source_matches(const mapped_file_t *r, const uint8_t src_crc[DELTA_CRC_SIZE])
+{
+	uint8_t r_crc[DELTA_CRC_SIZE];
+
+	delta_crc64_xz(r->data, r->size, r_crc);
+	if (memcmp(r_crc, src_crc, DELTA_CRC_SIZE) == 0) {
+		return true;
+	}
+	fprintf(stderr, "source file does not match delta: expected ");
+	print_hex(stderr, src_crc, DELTA_CRC_SIZE);
+	fprintf(stderr, ", got ");
+	print_hex(stderr, r_crc, DELTA_CRC_SIZE);
+	fprintf(stderr, "\n");
+	return false;
+}
+
 // delta encode <algorithm> <ref> <ver> <delta> [options]
 static void
 cmd_encode(int argc, char **argv)
@@ -350,15 +371,8 @@ cmd_decode(int argc, char **argv)
 	uint8_t *delta = read_file(delta_path, &delta_len);
 	delta_decode_result_t dr = delta_decode(delta, delta_len);
 
-	uint8_t r_crc[DELTA_CRC_SIZE];
-	delta_crc64_xz(r.data, r.size, r_crc);
-	if (memcmp(r_crc, dr.src_crc, DELTA_CRC_SIZE) != 0) {
+	if (!source_matches(&r, dr.src_crc)) {
 		if (!ignore_hash) {
-			fprintf(stderr, "source file does not match delta: expected ");
-			print_hex(stderr, dr.src_crc, DELTA_CRC_SIZE);
-			fprintf(stderr, ", got ");
-			print_hex(stderr, r_crc, DELTA_CRC_SIZE);
-			fprintf(stderr, "\n");
 			exit(1);
 		}
 		fprintf(stderr,
@@ -433,6 +447,7 @@ cmd_info(int argc, char **argv)
 }
 
 // delta inplace <ref> <delta_in> <delta_out> [--policy P] [--large]
+// [--verbose]
 static void
 cmd_inplace(int argc, char **argv)
 {
@@ -445,7 +460,7 @@ cmd_inplace(int argc, char **argv)
 
 	delta_cycle_policy_t policy = POLICY_LOCALMIN;
 	const char *policy_name = "localmin";
-	bool force_large = false;
+	bool force_large = false, verbose = false;
 	for (int a = 5; a < argc; a++) {
 		if (strcmp(argv[a], "--policy") == 0) {
 			if (a + 1 >= argc) {
@@ -455,6 +470,8 @@ cmd_inplace(int argc, char **argv)
 			policy = parse_policy(policy_name);
 		} else if (strcmp(argv[a], "--large") == 0) {
 			force_large = true;
+		} else if (strcmp(argv[a], "--verbose") == 0) {
+			verbose = true;
 		} else {
 			die("error: unknown inplace option: %s", argv[a]);
 		}
@@ -464,22 +481,43 @@ cmd_inplace(int argc, char **argv)
 	size_t in_len;
 	uint8_t *in = read_file(in_path, &in_len);
 	delta_decode_result_t dr = delta_decode(in, in_len);
-	delta_validate_placed_commands(&dr.commands, r.size,
-	                               dr.version_size, dr.inplace);
 
 	if (dr.inplace) {
 		write_file(out_path, in, in_len);
 		printf("Delta is already in-place format; copied unchanged.\n");
 	} else {
+		// Converting a copy to an add reads R, so R must be the right
+		// file.
+		if (!source_matches(&r, dr.src_crc)) {
+			exit(1);
+		}
+		delta_validate_placed_commands(&dr.commands, r.size,
+		                               dr.version_size, false);
+
 		double t0 = seconds_now();
+		delta_inplace_stats_t ip;
 		delta_commands_t cmds = delta_unplace_commands(&dr.commands);
-		delta_placed_commands_t placed =
-		    delta_make_inplace(r.data, r.size, &cmds, policy);
+		delta_placed_commands_t placed = delta_make_inplace_stats(
+		    r.data, r.size, &cmds, policy, &ip);
 		double elapsed = seconds_now() - t0;
 
 		delta_buffer_t out = delta_encode_large(&placed, true,
 		    dr.version_size, dr.src_crc, dr.dst_crc, force_large);
 		write_file(out_path, out.data, out.len);
+
+		if (verbose) {
+			fprintf(stderr,
+			    "inplace: %zu copies, %zu CRWI edges, "
+			    "%zu cycles broken\n",
+			    ip.num_copies + ip.copies_converted, ip.edges,
+			    ip.cycles_broken);
+			if (ip.copies_converted > 0) {
+				fprintf(stderr,
+				    "  converted %zu copies -> adds "
+				    "(%zu bytes materialized)\n",
+				    ip.copies_converted, ip.bytes_converted);
+			}
+		}
 
 		delta_summary_t stats = delta_placed_summary(&placed);
 		printf("Reference:    %s (%zu bytes)\n", ref_path, r.size);
