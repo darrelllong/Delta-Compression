@@ -1,6 +1,9 @@
 package delta;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.math.BigInteger;
+import java.nio.ByteOrder;
 
 import static delta.Types.*;
 
@@ -159,7 +162,11 @@ public final class Hash {
         private Crc64() {}
 
         private static final long POLY = 0xC96C5795D7870F42L;
-        private static final long[] TABLE = new long[256];
+
+        // Slicing-by-8 (Kounavis and Berry, Intel, 2005): TABLE[k][b] is the
+        // CRC of byte b followed by k zero bytes, so eight bytes can be
+        // folded into the register at once.
+        private static final long[][] TABLE = new long[8][256];
 
         static {
             for (int i = 0; i < 256; i++) {
@@ -167,20 +174,39 @@ public final class Hash {
                 for (int j = 0; j < 8; j++) {
                     c = (c & 1) != 0 ? (c >>> 1) ^ POLY : c >>> 1;
                 }
-                TABLE[i] = c;
+                TABLE[0][i] = c;
+            }
+            for (int k = 1; k < 8; k++) {
+                for (int i = 0; i < 256; i++) {
+                    long c = TABLE[k - 1][i];
+                    TABLE[k][i] = TABLE[0][(int) (c & 0xFF)] ^ (c >>> 8);
+                }
             }
         }
 
+        private static final VarHandle LE64 =
+            MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
+
         /** Returns the CRC of data as 8 bytes, most significant first. */
         public static byte[] hash8(byte[] data) {
+            long[] t0 = TABLE[0], t1 = TABLE[1], t2 = TABLE[2], t3 = TABLE[3];
+            long[] t4 = TABLE[4], t5 = TABLE[5], t6 = TABLE[6], t7 = TABLE[7];
             long crc = ~0L;
-            for (byte b : data) {
-                crc = TABLE[(int) ((crc ^ b) & 0xFF)] ^ (crc >>> 8);
+            int i = 0;
+            for (; i + 8 <= data.length; i += 8) {
+                crc ^= (long) LE64.get(data, i);
+                crc = t7[(int) (crc & 0xFF)] ^ t6[(int) ((crc >>> 8) & 0xFF)]
+                    ^ t5[(int) ((crc >>> 16) & 0xFF)] ^ t4[(int) ((crc >>> 24) & 0xFF)]
+                    ^ t3[(int) ((crc >>> 32) & 0xFF)] ^ t2[(int) ((crc >>> 40) & 0xFF)]
+                    ^ t1[(int) ((crc >>> 48) & 0xFF)] ^ t0[(int) (crc >>> 56)];
+            }
+            for (; i < data.length; i++) {
+                crc = t0[(int) ((crc ^ data[i]) & 0xFF)] ^ (crc >>> 8);
             }
             crc = ~crc;
             byte[] out = new byte[DELTA_CRC_SIZE];
-            for (int i = 0; i < out.length; i++) {
-                out[i] = (byte) (crc >>> (56 - 8 * i));
+            for (int j = 0; j < out.length; j++) {
+                out[j] = (byte) (crc >>> (56 - 8 * j));
             }
             return out;
         }

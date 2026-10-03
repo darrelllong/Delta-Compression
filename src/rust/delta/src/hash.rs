@@ -129,9 +129,12 @@ impl SeedScanner {
     }
 }
 
-const fn make_crc64_table() -> [u64; 256] {
+/// The tables of the slicing-by-8 method (Kounavis and Berry, Intel, 2005):
+/// `TABLES[k][b]` is the CRC of byte `b` followed by `k` zero bytes, so eight
+/// bytes can be folded into the register at once.
+const fn make_crc64_tables() -> [[u64; 256]; 8] {
     const POLY: u64 = 0xC96C5795D7870F42; // ECMA-182, reflected
-    let mut table = [0u64; 256];
+    let mut t = [[0u64; 256]; 8];
     let mut i = 0;
     while i < 256 {
         let mut crc = i as u64;
@@ -144,21 +147,45 @@ const fn make_crc64_table() -> [u64; 256] {
             };
             bit += 1;
         }
-        table[i] = crc;
+        t[0][i] = crc;
         i += 1;
     }
-    table
+    let mut k = 1;
+    while k < 8 {
+        let mut i = 0;
+        while i < 256 {
+            let crc = t[k - 1][i];
+            t[k][i] = t[0][(crc & 0xFF) as usize] ^ (crc >> 8);
+            i += 1;
+        }
+        k += 1;
+    }
+    t
 }
 
-static CRC64_TABLE: [u64; 256] = make_crc64_table();
+static CRC64_TABLES: [[u64; 256]; 8] = make_crc64_tables();
 
 /// Returns the CRC-64/XZ of `data`, most significant byte first.
 ///
 /// The check value, for `b"123456789"`, is `0x995DC9BBDF1939FA`.
 pub fn crc64_xz(data: &[u8]) -> [u8; DELTA_CRC_SIZE] {
-    let crc = data.iter().fold(u64::MAX, |crc, &byte| {
-        CRC64_TABLE[((crc ^ byte as u64) & 0xFF) as usize] ^ (crc >> 8)
-    });
+    let t = &CRC64_TABLES;
+    let mut crc = u64::MAX;
+    let mut chunks = data.chunks_exact(8);
+    for chunk in &mut chunks {
+        crc ^= u64::from_le_bytes(chunk.try_into().unwrap());
+        crc = t[7][(crc & 0xFF) as usize]
+            ^ t[6][((crc >> 8) & 0xFF) as usize]
+            ^ t[5][((crc >> 16) & 0xFF) as usize]
+            ^ t[4][((crc >> 24) & 0xFF) as usize]
+            ^ t[3][((crc >> 32) & 0xFF) as usize]
+            ^ t[2][((crc >> 40) & 0xFF) as usize]
+            ^ t[1][((crc >> 48) & 0xFF) as usize]
+            ^ t[0][(crc >> 56) as usize];
+    }
+    for &byte in chunks.remainder() {
+        crc = t[0][((crc ^ byte as u64) & 0xFF) as usize] ^ (crc >> 8);
+    }
     (crc ^ u64::MAX).to_be_bytes()
 }
 
