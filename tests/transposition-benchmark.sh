@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 #
-# transposition-benchmark.sh — Measure delta compression on permuted block data
+# transposition-benchmark.sh: measure delta compression on permuted blocks.
 #
-# Generates two synthetic datasets:
-#   16 MB  (~32,000 blocks × 512 B mean) — benchmarks greedy, onepass, correcting
-#   1 GB (~8,000,000 blocks × 128 B mean) — benchmarks onepass, correcting
+# The inputs come from tests/gen_transpositions.py: V holds the blocks of R
+# in a different order.  Each dataset is generated at five permutation
+# levels, 0, 25, 50, 75 and 100%, and encoded with the Rust implementation.
+# The sections, in the order they are printed:
 #
-# Each dataset is generated at five permutation levels (0–100%) using
-# tests/gen_transpositions.py.  V contains the same blocks as R, with the
-# specified fraction displaced from their original positions.
+#   1. 16 MB (32,000 blocks, 512 B mean): greedy, onepass, correcting
+#   2. the same data, standard against in-place encoding (onepass,
+#      correcting): what in-place conversion costs as transpositions increase
+#   3. decode time of the deltas of section 2
+#   4. standard against in-place, correcting only, at 16, 32, 64, 128 and
+#      256 MB (512 B mean)
+#   5. 1 GB (8,000,000 blocks, 128 B mean): onepass, correcting
 #
-# A third section compares standard vs in-place encoding (16 MB dataset,
-# onepass and correcting) to show the cost of in-place conversion under
-# increasing transposition pressure.
-#
-# A fourth section measures apply (decode) time for standard vs in-place
-# deltas at each permutation level (16 MB, onepass and correcting).
+# All times are those the delta tool reports for itself.
 #
 # Usage:
 #   ./tests/transposition-benchmark.sh
@@ -23,8 +23,10 @@
 # Requirements:
 #   - Rust toolchain (cargo)
 #   - Python 3.6+
+#   - ~15 GB disk for the generated files, plus the deltas
 #
-# Generated files are cached in WORKDIR; re-runs skip generation.
+# The files are kept in $DELTA_BENCH_WORKDIR (default
+# /tmp/delta-transposition-benchmark); later runs skip the generation.
 
 set -euo pipefail
 
@@ -41,8 +43,9 @@ echo ""
 
 mkdir -p "$WORKDIR"
 
-# encode_and_measure <algo> <ref> <ver> <delta> [extra-flags...]
-# Prints: ratio copies adds time cycles_broken
+# encode_and_measure <algo> <ref> <ver> <delta> [extra-flags...]: encode and
+# print "ratio copies adds time cycles_broken", taken from the tool's
+# summary.  cycles_broken is 0 unless --inplace is given.
 encode_and_measure() {
     local algo="$1" ref="$2" ver="$3" delta="$4"
     shift 4
@@ -139,10 +142,7 @@ done
 echo ""
 echo ""
 
-# Measures decode time for standard vs in-place deltas produced above.
-# Uses the same delta files; writes decoded output to a scratch file.
-# Isolates the apply half of the encode+apply round trip.
-
+# Decode the standard and in-place deltas written by the section above.
 echo "=== Apply-phase performance (16 MB, onepass and correcting) ==="
 echo "    32,000 blocks × 512 B mean"
 echo ""

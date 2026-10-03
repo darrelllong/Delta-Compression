@@ -5,8 +5,8 @@ import (
 	"hash/crc64"
 )
 
-// The stdlib's ECMA table is the reflected ECMA-182 polynomial that CRC-64/XZ
-// uses, and crc64.Checksum applies the same all-ones initial value and final
+// crc64.ECMA is the reflected ECMA-182 polynomial that CRC-64/XZ uses, and
+// crc64.Checksum applies the same all-ones initial value and final
 // inversion.
 var crc64Table = crc64.MakeTable(crc64.ECMA)
 

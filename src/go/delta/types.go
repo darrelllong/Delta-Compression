@@ -9,7 +9,7 @@
 // "In-Place Reconstruction of Version Differences", IEEE TKDE 15(4), 2003.
 package delta
 
-// Algorithm parameters (Section 2.1.3).
+// Algorithm parameters (Sections 2.1.2 and 2.1.3).
 const (
 	SeedLen      = 16            // default seed length p, in bytes
 	TableSize    = 1048573       // default hash table size q: the largest prime below 2^20
@@ -52,17 +52,19 @@ const (
 type Algorithm int
 
 const (
-	// AlgorithmGreedy finds an optimal delta in O(|V|*|R|) time and O(|R|)
-	// space (Section 3).
+	// AlgorithmGreedy indexes every seed of R and takes the longest match
+	// at each position of V, in O(|V|*|R|) time and O(|R|) space (Section 3).
 	AlgorithmGreedy Algorithm = iota
-	// AlgorithmOnepass scans R and V together in linear time and constant
-	// space; it does not find blocks that have changed order (Section 4).
+	// AlgorithmOnepass scans R and V together in linear time and in space
+	// set by the table size; it does not find blocks that have changed order
+	// (Section 4).
 	AlgorithmOnepass
 	// AlgorithmCorrecting indexes checkpointed seeds of R, then scans V,
 	// revising earlier commands when a later match covers them (Sections 7-8).
 	AlgorithmCorrecting
 )
 
+// String returns the name of the algorithm as the command line spells it.
 func (a Algorithm) String() string {
 	switch a {
 	case AlgorithmGreedy:
@@ -89,6 +91,7 @@ const (
 	CyclePolicyConstant
 )
 
+// String returns the name of the policy as the command line spells it.
 func (p CyclePolicy) String() string {
 	switch p {
 	case CyclePolicyLocalmin:
@@ -171,7 +174,7 @@ func (m PlacedMove) Dst() int { return m.DstOff }
 
 // DiffOptions holds the parameters of the differencing algorithms.
 type DiffOptions struct {
-	P        int  // seed length: the fingerprint window and the shortest match (Section 2.1.3)
+	P        int  // seed length: the fingerprint window and the shortest match (Section 2.1.2)
 	Q        int  // hash table size; a floor, since tables grow with the reference
 	BufCap   int  // commands the correcting algorithm keeps open to revision (Section 5.2)
 	Verbose  bool // print statistics to standard error

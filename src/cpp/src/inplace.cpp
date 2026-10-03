@@ -10,6 +10,7 @@ namespace delta {
 
 namespace {
 
+/// A copy command: src is an offset in R, dst an offset in V.
 struct Copy {
     size_t src, dst, length;
 };
@@ -18,7 +19,8 @@ struct Copy {
 using Graph = std::vector<std::vector<size_t>>;
 
 /// Builds the CRWI digraph: an edge from i to j if copy i reads bytes that
-/// copy j writes.  O(n log n + E).
+/// copy j writes.  A copy that reads what it writes itself gets no edge; it
+/// is applied with memmove.  O(n log n + E).
 Graph build_crwi_digraph(const std::vector<Copy>& copies) {
     const size_t n = copies.size();
     Graph adj(n);
@@ -26,7 +28,7 @@ Graph build_crwi_digraph(const std::vector<Copy>& copies) {
     // The writes are disjoint, because each byte of V is written once.
     // Sorted by start, those that overlap a given read are therefore
     // consecutive: every write that starts inside the read, and possibly the
-    // one before them, if it ends inside the read.
+    // one before them, if it extends past the start of the read.
     std::vector<size_t> by_dst(n);
     std::iota(by_dst.begin(), by_dst.end(), 0);
     std::sort(by_dst.begin(), by_dst.end(),
@@ -141,6 +143,7 @@ public:
         }
     }
 
+    /// Reports that v has been removed.
     void remove(size_t v) {
         if (scc_of_[v] != NONE) { --live_[scc_of_[v]]; }
     }

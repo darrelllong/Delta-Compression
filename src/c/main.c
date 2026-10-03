@@ -374,7 +374,8 @@ cmd_decode(int argc, char **argv)
 	    : delta_apply_placed(r.data, &dr.commands, dr.version_size);
 	double elapsed = seconds_now() - t0;
 
-	// A version that fails its check is not written.
+	// A version that fails its check is not written, unless --ignore-hash
+	// is given.
 	uint8_t out_crc[DELTA_CRC_SIZE];
 	delta_crc64_xz(out.data, out.len, out_crc);
 	if (memcmp(out_crc, dr.dst_crc, DELTA_CRC_SIZE) != 0) {

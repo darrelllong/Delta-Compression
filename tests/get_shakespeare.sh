@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
-# Download Shakespeare's complete works (PG #100) and create mutated versions
-# for use as benchmark data.  Files are cached in WORKDIR.
+# Download Shakespeare's complete works (Project Gutenberg #100) and derive
+# mutated versions of it, for use as benchmark data.
 #
-# Output files (all in $WORKDIR):
-#   shakespeare.txt           — original, ~5.5 MB
-#   shakespeare-1pct.txt      — 1% single-byte substitutions
-#   shakespeare-2pct.txt      — 2%
-#   shakespeare-5pct.txt      — 5%
-#   shakespeare-10pct.txt     — 10%
-#   shakespeare-20pct.txt     — 20%
+# Usage: ./tests/get_shakespeare.sh
+# Requirements: curl, python3.
 #
-# Mutations are applied at the byte level using a deterministic seed so
-# results are reproducible.  The mutated files are binary but differ from
-# the original only in ~N% of bytes, giving realistic delta structure.
+# Output files, in WORKDIR (default /tmp/delta-kernel-test):
+#   shakespeare.txt           the original, ~5.4 MB
+#   shakespeare-1pct.txt      1% of the bytes overwritten
+#   shakespeare-2pct.txt      2%
+#   shakespeare-5pct.txt      5%
+#   shakespeare-10pct.txt     10%
+#   shakespeare-20pct.txt     20%
+#
+# A file that already exists is kept.  For N%, that fraction of the byte
+# positions is chosen without replacement and each is overwritten with a
+# random byte, so the result is no longer text and about 1 in 256 of the
+# chosen bytes is unchanged.  The generator is seeded from N, so the files
+# are the same on every run.
 set -euo pipefail
 
 WORKDIR="${WORKDIR:-/tmp/delta-kernel-test}"

@@ -164,9 +164,9 @@ fn test_binary_roundtrip() {
 }
 
 // The binary format.
+
 #[test]
 fn test_binary_encoding_roundtrip() {
-    // Build placed commands manually and verify encode/decode roundtrip
     let placed = vec![
         PlacedCommand::Add {
             dst: 0,
@@ -204,7 +204,6 @@ fn test_binary_encoding_inplace_flag() {
     assert!(!is_inplace_delta(&standard));
     assert!(is_inplace_delta(&inplace_enc));
 
-    // Both decode to the same commands
     let (d1, ip1, vs1, _, _) = decode_delta(&standard).unwrap();
     let (d2, ip2, vs2, _, _) = decode_delta(&inplace_enc).unwrap();
     assert!(!ip1);
@@ -222,7 +221,7 @@ fn test_binary_encoding_magic_small() {
 #[test]
 fn test_binary_encoding_wrong_magic_rejected() {
     let mut bad = encode_delta(&[], false, 0, &[0u8; 8], &[0u8; 8]).unwrap();
-    bad[3] = 0x02; // downgrade to v2
+    bad[3] = 0x02; // DLT\x02 is not a format the decoder reads
     assert!(matches!(
         decode_delta(&bad),
         Err(DeltaError::InvalidFormat(_))
@@ -835,7 +834,8 @@ fn test_localmin_picks_smallest() {
 
 #[test]
 fn test_correcting_checkpointing_tiny_table() {
-    // With a tiny table (q=7), checkpointing still produces correct output.
+    // q is a floor: R has 305 seeds, so the table has 41 slots, the first
+    // prime at or above 2 * 305 / 16, and one seed in 15 is a checkpoint.
     let r = b"ABCDEFGHIJKLMNOP".repeat(20); // 320 bytes
     let mut v = r[..160].to_vec();
     v.extend_from_slice(b"XXXXYYYY");
@@ -855,7 +855,8 @@ fn test_correcting_checkpointing_tiny_table() {
 
 #[test]
 fn test_correcting_checkpointing_various_sizes() {
-    // Correcting produces correct output across a range of table sizes.
+    // R has 1985 seeds, so every q below 2 * 1985 / 16 = 248 gives the same
+    // table of 251 slots; the last two give larger ones.
     let r: Vec<u8> = (0..=255u8).cycle().take(2000).collect();
     let mut v = r[..500].to_vec();
     v.extend_from_slice(&[0xFFu8; 50]);
@@ -877,8 +878,6 @@ fn test_correcting_checkpointing_various_sizes() {
 
 #[test]
 fn test_next_prime_is_prime() {
-    // Verify that next_prime always returns a prime, and that the TABLE_SIZE
-    // constant is itself prime.
     assert!(is_prime(TABLE_SIZE), "TABLE_SIZE should be prime");
     assert!(is_prime(next_prime(1048574)));
     assert_eq!(next_prime(1048573), 1048573);
@@ -902,12 +901,11 @@ fn test_correcting_without_lookback() {
     }
 }
 
-// The `delta inplace` subcommand converts a standard delta to inplace format
-// without re-encoding from source: decode, unplace, make_inplace, encode.
-// These tests verify that path is equivalent to the direct encode --inplace path.
+// The `delta inplace` subcommand converts a standard delta without the
+// version: decode, unplace_commands, make_inplace, encode.  These tests
+// check that the result is the same as that of `delta encode --inplace`.
 
-/// Simulate the `delta inplace` subcommand: encode a standard delta, then
-/// convert it via decode, unplace_commands, make_inplace, encode(inplace).
+// Encodes a standard delta and converts it as the subcommand does.
 fn via_inplace_subcommand(
     algo_fn: DiffFn,
     r: &[u8],
@@ -958,8 +956,9 @@ fn test_inplace_subcommand_roundtrip() {
 
 #[test]
 fn test_inplace_subcommand_idempotent() {
-    // Passing an already-inplace delta through the subcommand path should
-    // return byte-identical output (it's already inplace; just copy it).
+    // The subcommand copies a delta that is already in-place.  It knows one
+    // by the flag that decode_delta returns, which is all that is checked
+    // here.
     let r = b"ABCDEFGHIJ";
     let v = b"JIHGFEDCBA";
     for (_, algo_fn) in all_algos() {
@@ -970,8 +969,6 @@ fn test_inplace_subcommand_idempotent() {
             let dc = crc64_xz(v);
             let ip_delta = encode_delta(&ip, true, v.len(), &sc, &dc).unwrap();
 
-            // Feeding the inplace delta to the subcommand logic should detect
-            // is_ip=true and return the bytes unchanged.
             let (_, is_ip, _, sc2, dc2) = decode_delta(&ip_delta).unwrap();
             assert!(is_ip, "inplace delta should be detected as inplace");
             assert_eq!(sc2, sc);
@@ -982,9 +979,9 @@ fn test_inplace_subcommand_idempotent() {
 
 #[test]
 fn test_inplace_subcommand_equiv_direct() {
-    // The subcommand path (encode standard, then convert) and the direct path
-    // (encode --inplace directly) must produce byte-identical output, since
-    // both call make_inplace with the same reference and commands.
+    // Converting a standard delta and encoding in place directly give the
+    // same bytes, since both call make_inplace with the same reference and
+    // commands.
     let cases: &[(&[u8], &[u8])] = &[
         (b"ABCDEF", b"FEDCBA"),
         (b"AAABBBCCC", b"CCCBBBAAA"),
@@ -996,12 +993,10 @@ fn test_inplace_subcommand_equiv_direct() {
             for (_, pol) in all_policies() {
                 let sc = crc64_xz(r);
                 let dc = crc64_xz(v);
-                // Direct path
                 let cmds = algo_fn(r, v, &opts(2));
                 let (ip_direct, _) = make_inplace(r, &cmds, pol);
                 let direct_bytes = encode_delta(&ip_direct, true, v.len(), &sc, &dc).unwrap();
 
-                // Subcommand path
                 let subcommand_bytes = via_inplace_subcommand(algo_fn, r, v, pol, 2);
 
                 assert_eq!(
@@ -1082,7 +1077,7 @@ fn test_boundary_byte_mutations() {
     }
 }
 
-// |R| in [0, p): no seeds extractable, exercises all-add path.
+// With |R| < p there is no seed in R, so the delta is a single add.
 #[test]
 fn test_ref_shorter_than_seed() {
     let p = 8usize;
@@ -1100,7 +1095,8 @@ fn test_ref_shorter_than_seed() {
     }
 }
 
-// Sizes at 0, 1, p-1, p+1, and byte-width transitions; catches loop-bound off-by-ones.
+// Sizes around 0, p, and powers of two, where a loop bound that is off by
+// one would show.
 #[test]
 fn test_size_sweep() {
     let p = 4usize;
@@ -1141,7 +1137,9 @@ fn test_size_sweep() {
     }
 }
 
-// version_size at byte-sign-extension boundaries (128, 256, 32768, 65536, ...).
+// version_size around the powers of two at which a byte of the field
+// carries or its high bit turns on, which a sign-extending decoder would
+// get wrong.
 #[test]
 fn test_encoding_version_size_boundaries() {
     let zh = [0u8; 8];
@@ -1173,7 +1171,7 @@ fn test_encoding_version_size_boundaries() {
     }
 }
 
-// Copy/Add fields at byte-sign-extension boundaries.
+// The same for the fields of COPY and ADD.
 #[test]
 fn test_encoding_command_field_boundaries() {
     let zh = [0u8; 8];
@@ -1247,7 +1245,7 @@ fn test_encoding_command_field_boundaries() {
     }
 }
 
-// |V| = |R| + 1: write window extends one byte past the ref buffer.
+// |V| = |R| + 1: the version ends one byte past the reference.
 #[test]
 fn test_inplace_version_one_larger_tight() {
     for n in [1, 2, 3, 4, 7, 8, 15, 16, 17, 31, 32, 63, 64usize] {
@@ -1262,7 +1260,7 @@ fn test_inplace_version_one_larger_tight() {
     }
 }
 
-// |V| = |R| - 1: write window ends one byte short of the ref buffer.
+// |V| = |R| - 1: the version ends one byte short of the reference.
 #[test]
 fn test_inplace_version_one_smaller_tight() {
     for n in [2, 3, 4, 5, 8, 9, 15, 16, 17, 31, 32, 65usize] {
@@ -1276,7 +1274,8 @@ fn test_inplace_version_one_smaller_tight() {
     }
 }
 
-// |V| = |R|, half-swap: write window fixed; exercises same-size cycle-breaking.
+// |V| = |R| with the halves exchanged: copies of both halves, where the
+// algorithm finds them, form a cycle.
 #[test]
 fn test_inplace_version_same_size_tight() {
     for n in [2, 4, 8, 16, 32, 64, 128, 256usize] {
@@ -1293,7 +1292,8 @@ fn test_inplace_version_same_size_tight() {
     }
 }
 
-// v = 1 byte: copy (byte in R) and add (byte absent from R).
+// A version of one byte, which is a copy if the byte is in R and an add
+// if it is not.
 #[test]
 fn test_inplace_version_one_byte_min() {
     let r: Vec<u8> = (0u8..64).collect();
@@ -1307,7 +1307,8 @@ fn test_inplace_version_one_byte_min() {
     }
 }
 
-// p = 1, 2, |R|, |R|+1: exercises no-seed boundary.
+// p = 1, 2, |R|, for which R is a single seed, and |R| + 1, for which R
+// has none.
 #[test]
 fn test_seed_length_boundaries() {
     let r = b"ABCDEFGHIJKLMNOP";
@@ -1317,7 +1318,7 @@ fn test_seed_length_boundaries() {
             assert_eq!(apply_delta(r, &algo(r, v, &opts(p))), v, "p={}", p);
         }
     }
-    // p > |R| with varying v sizes
+    // p > |R| with V shorter and longer than p.
     for (_, algo) in all_algos() {
         assert_eq!(apply_delta(r, &algo(r, b"QW", &opts(r.len() + 1))), b"QW");
         assert_eq!(
@@ -1408,9 +1409,7 @@ fn test_encode_delta_rejects_add_dst_overflow() {
     );
 }
 
-// DLT\x04 tests.
-
-// Header
+// DLT\x04: the header.
 
 #[test]
 fn test_large_header_magic() {
@@ -1462,7 +1461,7 @@ fn test_large_decode_roundtrip_header() {
     assert_eq!(dc, dst_crc);
 }
 
-// COPY with fields that fit in u32.
+// DLT\x04: COPY with fields that fit in u32.
 
 #[test]
 fn test_large_copy_small_roundtrip() {
@@ -1486,14 +1485,14 @@ fn test_large_copy_u32_max_boundary() {
         dst: 0,
         length: 0,
     };
-    // A zero-length copy must encode and decode without an overflow error.
+    // u32::MAX still fits a COPY.  The length is 0 so that the destination
+    // stays within a version of no bytes.
     let bytes = encode_delta_large(std::slice::from_ref(&cmd), false, 0, &z, &z, false);
-    // decode validates dst+length <= version_size; length=0 so dst=0 is fine.
     let (cmds, _, _, _, _) = decode_delta(&bytes).unwrap();
     assert_eq!(cmds, vec![cmd]);
 }
 
-// ADD with fields that fit in u32.
+// DLT\x04: ADD with fields that fit in u32.
 
 #[test]
 fn test_large_add_small_roundtrip() {
@@ -1526,7 +1525,7 @@ fn test_large_add_payload_intact() {
     }
 }
 
-// MOVE / BIGMOVE
+// DLT\x04: MOVE.
 
 #[test]
 fn test_large_move_roundtrip() {
@@ -1555,8 +1554,8 @@ fn test_large_move_rejected_on_small() {
 
 #[test]
 fn test_small_rejects_large_command_bytes_with_diagnostic() {
-    // Inject a BIGCOPY byte (0x03) into a hand-crafted DLT\x03 stream.
-    // The decoder must say "requires DLT\x04", not "unknown command type".
+    // A BIGCOPY tag in a DLT\x03 stream: the decoder must say "requires
+    // DLT\x04", not "unknown command type".
     let mut bad = encode_delta(&[], false, 0, &[0u8; 8], &[0u8; 8]).unwrap();
     bad.pop(); // remove END
     bad.push(3); // DELTA_CMD_BIGCOPY
@@ -1575,7 +1574,7 @@ fn test_small_rejects_large_command_bytes_with_diagnostic() {
 
 #[test]
 fn test_large_move_apply_standard() {
-    // Encode: ADD "hello" at dst=0, MOVE src=0 dst=5 len=5 gives "hellohello"
+    // The MOVE reads what the ADD wrote.
     let z = [0u8; 8];
     let cmds = vec![
         PlacedCommand::Add {
@@ -1597,7 +1596,7 @@ fn test_large_move_apply_standard() {
 
 #[test]
 fn test_large_move_apply_inplace() {
-    // Encode: ADD "hello" at dst=0, MOVE src=0 dst=5 len=5 gives "hellohello"
+    // The MOVE reads what the ADD wrote.
     let cmds = vec![
         PlacedCommand::Add {
             dst: 0,
@@ -1635,12 +1634,13 @@ fn test_large_validate_move_out_of_range() {
     assert!(matches!(result, Err(DeltaError::InvalidFormat(_))));
 }
 
-// BIGCOPY and BIGADD with offsets above 2^32.
+// DLT\x04: BIG commands, with offsets of 2^32.
 
 #[test]
 fn test_large_bigcopy_roundtrip() {
     let z = [0u8; 8];
-    // 2^32 forces BIGCOPY.  With length 0 the copy stays within any version.
+    // A src of 2^32 forces BIGCOPY.  With length 0 the copy stays within
+    // any version.
     let big = (u32::MAX as usize) + 1;
     let cmd = PlacedCommand::Copy {
         src: big,
@@ -1655,10 +1655,7 @@ fn test_large_bigcopy_roundtrip() {
 
 #[test]
 fn test_large_bigadd_encoder_path() {
-    // Trigger the BIGADD encoder branch via a large dst (no 4 GiB allocation).
-    // The encoder selects BIGADD when dst > U32_MAX OR data.len() > U32_MAX;
-    // using dst = 2^32 with a 5-byte payload exercises the encoder path and
-    // round-trips through the BIGADD decoder without allocating huge memory.
+    // A dst of 2^32 forces BIGADD without a 4 GiB literal.
     let z = [0u8; 8];
     let big_dst = (u32::MAX as usize) + 1;
     let data = b"hello".to_vec();
@@ -1700,7 +1697,7 @@ fn test_large_bigmove_roundtrip() {
     assert_eq!(cmds, vec![cmd]);
 }
 
-// is_inplace_delta handles both magics
+// DLT\x04: the in-place flag.
 
 #[test]
 fn test_large_is_inplace_detected() {
@@ -1711,7 +1708,7 @@ fn test_large_is_inplace_detected() {
     assert!(is_inplace_delta(&inplace));
 }
 
-// Algorithm roundtrip through V4 encoding
+// DLT\x04: each algorithm, encoded, decoded and applied.
 
 #[test]
 fn test_large_algo_roundtrip_greedy() {
@@ -1754,7 +1751,7 @@ fn test_large_algo_roundtrip_onepass() {
 fn test_large_algo_roundtrip_correcting() {
     let r: Vec<u8> = (0u8..=127).cycle().take(512).collect();
     let mut v = r.clone();
-    v[100..150].copy_from_slice(&r[200..250]); // block transposition
+    v[100..150].copy_from_slice(&r[200..250]); // a block of R repeated out of place
     let z_r = crc64_xz(&r);
     let z_v = crc64_xz(&v);
     let placed = place_commands(diff_correcting(&r, &v, &DiffOptions::default()));

@@ -113,14 +113,12 @@ static std::string to_hex(const std::array<uint8_t, DELTA_CRC_SIZE>& h) {
 }
 
 TEST_CASE("crc64_xz empty input is all-zeros", "[hash]") {
-    // CRC-64/XZ of empty input = 0x0000000000000000.
     static const uint8_t kEmpty[1] = {};
     auto h = crc64_xz(kEmpty, 0);
     CHECK(to_hex(h) == "0000000000000000");
 }
 
 TEST_CASE("crc64_xz standard check value", "[hash]") {
-    // Standard check value: CRC-64/XZ of b"123456789" = 0x995DC9BBDF1939FA.
     static const uint8_t kCheck[] = {'1','2','3','4','5','6','7','8','9'};
     auto h = crc64_xz(kCheck, sizeof(kCheck));
     CHECK(to_hex(h) == "995dc9bbdf1939fa");

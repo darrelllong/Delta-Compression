@@ -61,7 +61,8 @@ void put_command(std::vector<uint8_t>& out, uint8_t op, uint8_t big_op,
     }
 }
 
-/// Reads big-endian fields from a delta, throwing DeltaError at its end.
+/// Reads big-endian fields from a delta, throwing DeltaError if it ends
+/// in the middle of one.
 class Reader {
 public:
     explicit Reader(std::span<const uint8_t> data) : data_(data) {}

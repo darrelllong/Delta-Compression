@@ -122,7 +122,7 @@ PlacedCommand = Union[PlacedCopy, PlacedAdd, PlacedMove]
 
 SEED_LEN = 16
 TABLE_SIZE = 1048573            # largest prime below 2^20
-MAX_TABLE_SIZE = 1_073_741_827  # a prime near 2^30
+MAX_TABLE_SIZE = 1_073_741_827  # smallest prime above 2^30
 HASH_BASE = 263                 # prime; with 256 the low bits would depend on the last byte only
 HASH_MOD = (1 << 61) - 1
 DELTA_BUF_CAP = 256
@@ -309,8 +309,8 @@ def diff_greedy(R: bytes, V: bytes,
 
     Indexes every seed of R, and at each position of V takes the longest
     match among all offsets of R with the same fingerprint; ties go to the
-    lowest offset.  Optimal under the simple cost measure (Section 3.3,
-    Theorem 1).  O(|V| * |R|) time in the worst case, O(|R|) space.
+    lowest offset.  Optimal under the simple cost measure when p <= 2
+    (Section 3.3).  O(|V| * |R|) time in the worst case, O(|R|) space.
 
     q is unused: the index is a dict.  It is accepted so that the three
     algorithms can be called alike.
@@ -497,7 +497,7 @@ def diff_correcting(R: bytes, V: bytes,
     checkpoint seed (Section 8.2, p. 349).
 
     |C| = next_prime(min(max_table, max(q, 2 * seeds in R // p))), which
-    makes m about p.
+    makes m about p when neither q nor max_table sets the size.
     """
     max_table = MAX_TABLE_SIZE
     if opts is not None:
@@ -512,8 +512,9 @@ def diff_correcting(R: bytes, V: bytes,
     C = _next_prime(min(max_table, max(q, 2 * num_seeds // p)))
     F = _next_prime(2 * num_seeds) if num_seeds > 0 else 1
     m = max(1, -(-F // C))
-    # k is the class of a seed from the middle of V, so that at least that
-    # seed is a checkpoint (p. 348).
+    # k is the class of a seed of V, so that at least that seed is a
+    # checkpoint (p. 348).  The paper picks the seed at random; the one in
+    # the middle of V keeps the output deterministic.
     k = _fingerprint(V, min(nV // 2, nV - p), p) % F % m if nV >= p else 0
 
     if verbose:
@@ -669,7 +670,10 @@ def place_commands(commands: list[Command]) -> list[PlacedCommand]:
 
 
 def unplace_commands(placed: list[PlacedCommand]) -> list[Command]:
-    """Return the copies and adds in destination order, without destinations."""
+    """Return the copies and adds in destination order, without destinations.
+
+    Moves are dropped: the algorithm commands have no form for them.
+    """
     commands: list[Command] = []
     for cmd in sorted(placed, key=lambda c: c.dst):
         if isinstance(cmd, PlacedCopy):
@@ -861,7 +865,7 @@ def decode_delta(data: bytes):
 
 def _decode_commands(data: bytes, pos: int, version_size: int,
                      large: bool) -> list[PlacedCommand]:
-    """Parse the command stream that starts at data[pos] and ends data."""
+    """Parse the command stream that runs from data[pos] to the end of data."""
     commands: list[PlacedCommand] = []
     end = len(data)
     while pos < end:
@@ -1105,13 +1109,13 @@ class _Cycles:
     state of the search for cycles in them as copies are removed.
 
     The search is a depth-first search of one component at a time that
-    resumes where it stopped, so finding every cycle costs O(n + edges)
-    in all rather than that much per cycle:
+    resumes where it stopped, so that after a cycle is found only the
+    path that led to it is searched again:
 
       - A vertex marked _DONE has no cycle reachable from it.  Removing
         vertices cannot create one, so the mark never has to be undone.
-      - Within a component, the search for the next cycle starts at the
-        vertex where the last one was found.
+      - Within a component, the search for the next cycle starts from the
+        vertex that the search for the last one started from.
     """
     def __init__(self, adj: list[list[int]], n: int):
         self.adj = adj
@@ -1337,6 +1341,7 @@ def _parse_size_suffix(s: str) -> int:
 
 
 def cmd_encode(args):
+    """Encode args.version against args.reference and write args.delta."""
     if args.seed_len < 1:
         raise SystemExit("error: --seed-len must be >= 1")
     opts = DiffOptions(p=args.seed_len, q=args.table_size,
@@ -1383,6 +1388,12 @@ def cmd_encode(args):
 
 
 def cmd_decode(args):
+    """Rebuild the version from args.reference and args.delta.
+
+    The reference is checked against the source CRC before the commands
+    run and the output against the destination CRC after; --ignore-hash
+    turns either failure into a warning.
+    """
     R, r_crc = _read_with_crc(args.reference)
     with open(args.delta, 'rb') as f:
         delta_bytes = f.read()
@@ -1426,6 +1437,7 @@ def cmd_decode(args):
 
 
 def cmd_info(args):
+    """Print the header and command statistics of args.delta."""
     with open(args.delta, 'rb') as f:
         delta_bytes = f.read()
     placed, inplace, version_size, src_crc, dst_crc = decode_delta(delta_bytes)
@@ -1443,6 +1455,10 @@ def cmd_info(args):
 
 
 def cmd_inplace(args):
+    """Convert a standard delta to an in-place one.
+
+    A delta that is already in-place is copied unchanged.
+    """
     with open(args.reference, 'rb') as f:
         R = f.read()
     with open(args.delta_in, 'rb') as f:

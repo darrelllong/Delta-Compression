@@ -8,9 +8,9 @@ namespace {
 
 constexpr uint64_t POLY = 0xC96C5795D7870F42ULL; // 0x42F0E1EBA9EA3693 reflected
 
-// Slicing-by-8 (Kounavis and Berry, Intel, 2005): table[k][b] is the CRC of
-// byte b followed by k zero bytes, so eight bytes can be folded into the
-// register at once.
+/// Slicing-by-8 (Kounavis and Berry, Intel, 2005): TABLE[k][b] is the
+/// register after byte b and then k zero bytes are shifted in, so eight
+/// bytes can be folded into the register at once.
 using Tables = std::array<std::array<uint64_t, 256>, 8>;
 
 constexpr Tables make_tables() {

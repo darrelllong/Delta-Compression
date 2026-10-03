@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Generate static radar SVG charts for ANALYSIS.md.
+"""Generate the radar charts of ANALYSIS.md as static SVG files.
 
 GitHub's Mermaid parser is inconsistent for radar charts with labels such as
-"C++".  These committed SVG assets avoid parser failures and keep rendering
-stable across viewers.
+"C++"; committed SVG files render the same in every viewer.
+
+Usage: python3 assets/generate_analysis_radars.py
+
+The files are written beside this script.  The numbers in main are copied by
+hand from the tables of ANALYSIS.md and must be updated when those change:
+the Shakespeare throughputs as they stand, the kernel times as speed scores,
+100 * fastest time / time on dyson.
 """
 
 from __future__ import annotations
@@ -13,6 +19,7 @@ import math
 from pathlib import Path
 
 
+# Canvas size and the centre and radius of the radar, in SVG user units.
 WIDTH = 760
 HEIGHT = 640
 CX = 300.0
@@ -27,14 +34,20 @@ SUBTEXT = "#5f574d"
 
 
 def polar(radius: float, angle: float) -> tuple[float, float]:
+    """Return the canvas point at a radius and angle (radians) from the centre.
+
+    SVG's y axis points down, so angles increase clockwise and -pi/2 is up.
+    """
     return (CX + radius * math.cos(angle), CY + radius * math.sin(angle))
 
 
 def fmt_points(points: list[tuple[float, float]]) -> str:
+    """Format points as the value of an SVG points attribute."""
     return " ".join(f"{x:.1f},{y:.1f}" for (x, y) in points)
 
 
 def label_anchor(x: float) -> str:
+    """Return the text-anchor that makes a label at x grow away from the centre."""
     if x < CX - 16:
         return "end"
     if x > CX + 16:
@@ -43,6 +56,7 @@ def label_anchor(x: float) -> str:
 
 
 def label_y(y: float) -> float:
+    """Return y adjusted so that a label near the top or bottom clears the chart."""
     if y < CY - RADIUS + 28:
         return y - 4
     if y > CY + RADIUS - 28:
@@ -59,6 +73,14 @@ def radar_svg(
     max_value: float,
     ring_labels: list[float],
 ) -> str:
+    """Return the SVG text of one radar chart.
+
+    labels names the axes, the first pointing up and the rest following
+    clockwise.  Each series is (name, colour, fill opacity, values), with
+    one value per axis; values are clamped to [0, max_value].  The rings
+    are evenly spaced and ring_labels only names them, so its values should
+    be equal steps up to max_value.
+    """
     n = len(labels)
     angles = [(-math.pi / 2.0) + (2.0 * math.pi * i / n) for i in range(n)]
     rings = [RADIUS * i / len(ring_labels) for i in range(1, len(ring_labels) + 1)]
@@ -143,6 +165,7 @@ def write_chart(
     max_value: float,
     ring_labels: list[float],
 ) -> None:
+    """Write the chart of radar_svg to the file name beside this script."""
     output = Path(__file__).with_name(name)
     output.write_text(
         radar_svg(

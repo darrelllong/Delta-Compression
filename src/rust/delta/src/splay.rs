@@ -39,11 +39,12 @@ impl<V> SplayTree<V> {
         }
     }
 
-    /// The number of keys in the tree.
+    /// Returns the number of keys in the tree.
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// Reports whether the tree has no keys.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }

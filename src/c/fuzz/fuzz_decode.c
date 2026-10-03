@@ -73,7 +73,6 @@ main(int argc, char **argv)
 		if (n == 0) {
 			continue;
 		}
-		// If delta_decode exits, AFL++ starts a new process.
 		delta_decode_result_t r = delta_decode(buf, n);
 		delta_decode_result_free(&r);
 	}

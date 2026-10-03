@@ -58,6 +58,7 @@ lower_bound(const dst_index_t *w, size_t lo, size_t hi, size_t key)
 // overlap, so with the copies sorted by destination, those whose writes
 // meet the read interval [src, src+length) are consecutive: the ones that
 // start inside it, and possibly the one just before, if it runs into it.
+// A copy that reads what it writes is no conflict: memmove applies it.
 static graph_t
 build_graph(const copy_t *copies, size_t n)
 {
@@ -250,8 +251,8 @@ typedef struct {
 	// what one search rules out stays ruled out: a vertex marked CLEAR is
 	// on no cycle for good, and the scan for a starting vertex in the
 	// component under search, sccs.verts[..][scan], never backs up.  The
-	// searches of one component therefore cost O(vertices + edges) plus
-	// the lengths of the cycles found.
+	// searches of one component therefore cost O(vertices + edges) plus,
+	// for each cycle found, a repeat of the path that led to it.
 	uint8_t *mark;       // UNSEEN, ON_PATH or CLEAR
 	frame_t *path;
 	size_t   comp;       // the first component that may still hold a cycle
@@ -427,8 +428,9 @@ pick_victim(order_t *o, delta_cycle_policy_t policy)
 		}
 		return victim;
 	}
-	// Not reached: the first component with a vertex left has no
-	// unfinished predecessor outside it, so it holds the cycle.
+	// Not reached: with no copy ready, every remaining copy has a
+	// remaining predecessor, so a cycle remains, and a cycle lies within
+	// one component.
 	return first_undone(o);
 }
 

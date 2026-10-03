@@ -2,9 +2,9 @@ package delta
 
 // SplayTree is a self-adjusting binary search tree keyed on fingerprints
 // (Sleator and Tarjan, "Self-Adjusting Binary Search Trees", JACM 32(3),
-// 1985). Every operation splays the node it touches to the root, so
-// operations take O(log n) amortized time and recently used keys are cheap
-// to reach again. The zero value is an empty tree.
+// 1985). Every lookup and insertion splays the node it touches to the root,
+// so each takes O(log n) amortized time and recently used keys are cheap to
+// reach again. The zero value is an empty tree.
 type SplayTree[V any] struct {
 	root *splayNode[V]
 	size int

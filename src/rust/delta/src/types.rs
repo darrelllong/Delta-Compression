@@ -10,13 +10,15 @@ use std::fmt;
 pub const SEED_LEN: usize = 16;
 /// Default hash table capacity floor q: the largest prime below 2^20.
 pub const TABLE_SIZE: usize = 1_048_573;
-/// Default ceiling for an auto-sized hash table: a prime near 2^30.
+/// Default ceiling for the correcting algorithm's table capacity: the
+/// smallest prime above 2^30.
 pub const MAX_TABLE_SIZE: usize = 1_073_741_827;
 /// Base of the Karp-Rabin polynomial.
 pub const HASH_BASE: u64 = 263;
 /// Modulus of the Karp-Rabin polynomial: the Mersenne prime 2^61 - 1.
 pub const HASH_MOD: u64 = (1 << 61) - 1;
-/// Default depth of the correcting algorithm's lookback buffer.
+/// Default depth, in commands, of the correcting algorithm's lookback
+/// buffer.
 pub const DELTA_BUF_CAP: usize = 256;
 
 /// Magic of the 32-bit format.
@@ -26,22 +28,28 @@ pub const DELTA_MAGIC_LARGE: &[u8; 4] = b"DLT\x04";
 /// Header flag bit: the commands are ordered for in-place application.
 pub const DELTA_FLAG_INPLACE: u8 = 0x01;
 
+/// Tag of END, which follows the last command.
 pub const DELTA_CMD_END: u8 = 0;
+/// Tag of COPY, which has u32 fields.
 pub const DELTA_CMD_COPY: u8 = 1;
+/// Tag of ADD, which has u32 fields.
 pub const DELTA_CMD_ADD: u8 = 2;
-/// COPY with u64 fields; `DLT\x04` only, as are the three that follow.
+/// Tag of BIGCOPY: COPY with u64 fields.  `DLT\x04` only.
 pub const DELTA_CMD_BIGCOPY: u8 = 3;
+/// Tag of BIGADD: ADD with u64 fields.  `DLT\x04` only.
 pub const DELTA_CMD_BIGADD: u8 = 4;
+/// Tag of MOVE, which has u32 fields.  `DLT\x04` only.
 pub const DELTA_CMD_MOVE: u8 = 5;
+/// Tag of BIGMOVE: MOVE with u64 fields.  `DLT\x04` only.
 pub const DELTA_CMD_BIGMOVE: u8 = 6;
 
 /// Bytes in a CRC-64 digest.
 pub const DELTA_CRC_SIZE: usize = 8;
-/// Bytes in a field of a `DLT\x03` command.
+/// Bytes in an offset or length of a COPY, ADD or MOVE command.
 pub const DELTA_U32_SIZE: usize = 4;
-/// Bytes in a field of a BIG command.
+/// Bytes in an offset or length of a BIG command.
 pub const DELTA_U64_SIZE: usize = 8;
-/// Header bytes: magic(4) + flags(1) + version_size(4) + two CRCs(16).
+/// `DLT\x03` header bytes: magic(4) + flags(1) + version_size(4) + two CRCs(16).
 pub const DELTA_HEADER_SIZE: usize = 25;
 /// `DLT\x04` header bytes: magic(4) + flags(1) + version_size(8) + two CRCs(16).
 pub const DELTA_HEADER_SIZE_LARGE: usize = 29;
@@ -118,13 +126,14 @@ impl fmt::Display for PlacedCommand {
 /// Differencing algorithm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Algorithm {
-    /// Optimal under the simple cost measure; O(|V| |R|) time, O(|R|) space
-    /// (Section 3).
+    /// Optimal under the simple cost measure if p <= 2; O(|V| |R|) time,
+    /// O(|R|) space (Section 3).
     Greedy,
-    /// Linear time, constant space; scans R and V together (Section 4).
+    /// Linear time, space set by the table size; scans R and V together
+    /// (Section 4).
     Onepass,
-    /// Near-optimal 1.5 passes, with fingerprint checkpointing
-    /// (Sections 7 and 8).
+    /// Indexes R, then scans V and corrects earlier commands when a later
+    /// match covers them; checkpointing bounds the index (Sections 7 and 8).
     Correcting,
 }
 
@@ -143,8 +152,9 @@ pub enum CyclePolicy {
 pub struct DiffOptions {
     /// Seed length: fingerprint window and minimum match length.  At least 1.
     pub p: usize,
-    /// Floor for the hash table capacity; the algorithms size the table
-    /// upward from the length of the reference.
+    /// Floor for the table capacity of the one-pass and correcting
+    /// algorithms, which size the table upward from the length of the
+    /// reference.  The greedy algorithm ignores it.
     pub q: usize,
     /// Number of commands the correcting algorithm can still revise
     /// (Section 5.2).
@@ -177,6 +187,7 @@ pub enum DeltaError {
     InvalidFormat(String),
     /// The data ends in the middle of a command.
     UnexpectedEof,
+    /// A file could not be read or written.
     IoError(std::io::Error),
 }
 
@@ -201,10 +212,15 @@ impl From<std::io::Error> for DeltaError {
 /// Counts and byte totals for a list of commands.
 #[derive(Debug)]
 pub struct DeltaSummary {
+    /// `num_copies + num_adds`.
     pub num_commands: usize,
+    /// Copies, and moves if the commands are placed.
     pub num_copies: usize,
+    /// Adds.
     pub num_adds: usize,
+    /// Total length of the copies.
     pub copy_bytes: usize,
+    /// Total length of the literals.
     pub add_bytes: usize,
     /// `copy_bytes + add_bytes`: the size of the reconstructed version.
     pub total_output_bytes: usize,

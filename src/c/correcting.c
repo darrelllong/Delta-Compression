@@ -23,7 +23,7 @@ typedef struct {
 
 // Checkpoint parameters (Section 8.1).  A fingerprint fp is reduced to
 // f = fp mod f_size; it is a checkpoint if f mod m == k, and its home slot
-// is then f / m.
+// is then f / m, which is below cap because m * cap >= f_size.
 typedef struct {
 	size_t   cap;    // table slots, |C| in the paper
 	uint64_t f_size; // |F|
@@ -62,8 +62,9 @@ choose_checkpoint(const uint8_t *v, size_t v_len, size_t num_seeds,
 	cp.f_size = num_seeds > 0 ? delta_next_prime(2 * num_seeds) : 1;
 	cp.m = (cp.f_size + cp.cap - 1) / cp.cap; // at least 1
 
-	// Any class would do for R alone.  Taking the class of a seed from
-	// the middle of V makes sure V has a checkpoint there (p. 348).
+	// Any class would do for R alone.  The class of a seed of V favours
+	// checkpoints that occur in V (p. 348).  The paper takes a seed at
+	// random; this takes the one in the middle.
 	cp.k = 0;
 	if (v_len >= p) {
 		size_t mid = v_len / 2 < v_len - p ? v_len / 2 : v_len - p;
@@ -81,7 +82,8 @@ typedef struct {
 typedef struct {
 	size_t passed; // seeds of R that are checkpoints
 	size_t stored;
-	size_t probes; // slots passed over, or seeds found already present
+	size_t probes; // hash table: slots passed over; tree: seeds whose
+	               // fingerprint was already present
 } build_stats_t;
 
 // table_store enters offset under fp unless fp is already present.

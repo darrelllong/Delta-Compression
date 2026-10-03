@@ -61,8 +61,9 @@ delta_buffer_free(delta_buffer_t *buf)
 
 // Encoding.
 
-// encoded_bound is the most bytes the commands can take: a type byte and
-// three 8-byte fields each, the literal data, and END.
+// encoded_bound is the most bytes a delta of the commands can take: the
+// large header, a type byte and three 8-byte fields for each command, the
+// literal data, and END.
 static size_t
 encoded_bound(const delta_placed_commands_t *cmds)
 {

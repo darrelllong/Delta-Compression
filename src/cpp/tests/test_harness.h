@@ -1,5 +1,10 @@
 #pragma once
 
+// A small test harness with the macros of Catch2 that the tests use:
+// TEST_CASE, CHECK, CHECK_FALSE, REQUIRE, CHECK_THROWS_AS and INFO.  A failed
+// CHECK is reported and the test continues; a failed REQUIRE ends the test.
+// The tags argument of TEST_CASE is ignored.
+
 #include <cstddef>
 #include <exception>
 #include <iostream>

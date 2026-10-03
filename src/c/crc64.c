@@ -42,7 +42,7 @@ delta_crc64_xz(const uint8_t *data, size_t len, uint8_t out[DELTA_CRC_SIZE])
 	uint64_t crc = ~0ULL;
 	for (; len >= 8; data += 8, len -= 8) {
 		uint64_t word;
-		memcpy(&word, data, 8); // the bytes in memory order: little-endian
+		memcpy(&word, data, 8); // to be read as a little-endian word
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
 		word = __builtin_bswap64(word);
 #endif

@@ -96,7 +96,7 @@ public final class Correcting {
     }
 
     /**
-     * The last bufCap commands, oldest first (Section 5.2).  A command that
+     * The last cap commands, oldest first (Section 5.2).  A command that
      * leaves at the front is final and goes to the output.
      */
     private static final class Lookback {
@@ -153,15 +153,17 @@ public final class Correcting {
         int p = opts.p;
         int numSeeds = Diff.seedCount(r, p);
 
-        // |C|: two slots for every p bytes of R, within [opts.q, maxTable].
+        // |C|: two slots for every p bytes of R, but at least opts.q and, with
+        // precedence, at most maxTable; then the next prime.
         // |F|: a prime of about twice the number of seeds (Section 8.1).
         int maxTable = opts.maxTable > 0 ? opts.maxTable : MAX_TABLE_SIZE;
         long wanted = numSeeds > 0 ? Math.max(opts.q, 2L * numSeeds / p) : opts.q;
         int cap = (int) Hash.nextPrime(Math.min(maxTable, wanted));
         long fSize = numSeeds > 0 ? Hash.nextPrime(2L * numSeeds) : 1;
         long m = fSize <= cap ? 1 : (fSize + cap - 1) / cap;
-        // k is taken from a seed in the middle of V, so that at least one
-        // seed of V is a checkpoint (p. 348).
+        // k is the residue of a seed of V, which favors the residues common
+        // in V (p. 348).  The paper takes a random seed; this takes the one
+        // in the middle of V, so that the delta is reproducible.
         long k = v.length >= p
             ? Hash.fingerprint(v, Math.min(v.length / 2, v.length - p), p) % fSize % m
             : 0;

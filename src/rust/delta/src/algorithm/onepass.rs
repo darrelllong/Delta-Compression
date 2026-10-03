@@ -1,3 +1,5 @@
+//! The one-pass algorithm (Section 4).
+
 use super::{common_prefix, index_name, percent, print_command_stats, seed_count};
 use crate::hash::{next_prime, SeedScanner};
 use crate::splay::SplayTree;

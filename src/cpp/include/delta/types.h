@@ -14,12 +14,12 @@
 
 namespace delta {
 
-// Fingerprinting (Section 2.1.3).
+// Fingerprinting (Section 2.1.3, where a fingerprint is called a footprint).
 inline constexpr size_t SEED_LEN = 16;                 // p: fingerprint window and minimum match length
 inline constexpr uint64_t HASH_BASE = 263;             // b: polynomial base
 inline constexpr uint64_t HASH_MOD = (1ULL << 61) - 1; // the Mersenne prime 2^61-1
 inline constexpr size_t TABLE_SIZE = 1048573;          // q: default table floor, the largest prime below 2^20
-inline constexpr size_t MAX_TABLE_SIZE = 1073741827;   // default table ceiling, a prime near 2^30
+inline constexpr size_t MAX_TABLE_SIZE = 1073741827;   // default table ceiling, the smallest prime above 2^30
 inline constexpr size_t DELTA_BUF_CAP = 256;           // default depth of the correcting lookback buffer
 
 // Wire format.  DLT\x03 has u32 fields and COPY and ADD only; DLT\x04 has a
@@ -91,9 +91,10 @@ struct PlacedMove {
 /// A command that names its destination, so that commands can be reordered.
 using PlacedCommand = std::variant<PlacedCopy, PlacedAdd, PlacedMove>;
 
+/// The differencing algorithms; see delta/algorithm.h.
 enum class Algorithm {
-    Greedy,     ///< Optimal; O(|V||R|) time, O(|R|) space (Section 3).
-    Onepass,    ///< Linear time, constant space; misses transpositions (Section 4).
+    Greedy,     ///< Longest match at every position; O(|V||R|) time, O(|R|) space (Section 3).
+    Onepass,    ///< Linear time; misses transpositions (Section 4).
     Correcting, ///< 1.5 passes with checkpointing; finds transpositions (Sections 7-8).
 };
 
@@ -111,6 +112,7 @@ public:
     using std::runtime_error::runtime_error;
 };
 
+/// Counts of the commands of a delta and of the bytes they write.
 struct DeltaSummary {
     size_t num_commands;
     size_t num_copies;         ///< Moves count as copies.
@@ -120,15 +122,19 @@ struct DeltaSummary {
     size_t total_output_bytes; ///< copy_bytes + add_bytes.
 };
 
+/// Summarizes the commands of a differencing algorithm.
 DeltaSummary delta_summary(const std::vector<Command>& commands);
+
+/// Summarizes placed commands.
 DeltaSummary placed_summary(const std::vector<PlacedCommand>& commands);
 
+/// Parameters of the differencing algorithms.
 struct DiffOptions {
     size_t p = SEED_LEN;       ///< Seed length; must be at least 1.
     size_t q = TABLE_SIZE;     ///< Table size floor; onepass and correcting grow the table with |R|.
     size_t buf_cap = DELTA_BUF_CAP; ///< Commands the correcting algorithm can still revise (Section 5.2).
     bool verbose = false;      ///< Print statistics to stderr.
-    bool use_splay = false;    ///< Look fingerprints up in a splay tree instead of a hash table.
+    bool use_splay = false;    ///< Look up fingerprints in a splay tree instead of a hash table.
     size_t max_table = MAX_TABLE_SIZE; ///< Table size ceiling for correcting.
 };
 

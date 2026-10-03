@@ -127,7 +127,8 @@ func (a *optionArgs) value(name string) (string, error) {
 	return a.next(), nil
 }
 
-// intValue is value for an option whose argument parse must accept.
+// intValue removes the argument of the option name and returns it as
+// parse converts it.
 func (a *optionArgs) intValue(name string, parse func(string) (int, error)) (int, error) {
 	s, err := a.value(name)
 	if err != nil {

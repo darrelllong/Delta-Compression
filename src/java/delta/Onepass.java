@@ -13,8 +13,8 @@ import static delta.Types.*;
  * of each in its own table and looking each new seed up in the other's.
  * After a match both scans jump past it and both tables are emptied, so the
  * algorithm never matches backwards: of two blocks that changed places
- * between R and V it finds one (Section 4.3).  O(n) time and O(q) space for
- * fixed p.
+ * between R and V it finds one (Section 4.1).  O(|R| + |V|) time for fixed
+ * p; each hash table has q slots.
  */
 public final class Onepass {
     private Onepass() {}

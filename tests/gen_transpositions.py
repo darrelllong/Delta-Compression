@@ -20,8 +20,8 @@ import os
 import random
 import sys
 
-# Block counts above this threshold use the memory-efficient path that
-# avoids holding all block data in memory at once.
+# Above this many blocks the files are written without holding all the
+# block data in memory, and the permutation is drawn differently (_gen_perm).
 _LARGE_N = 5_000_000
 
 
@@ -31,11 +31,14 @@ def _gen_sizes(rng, n, lo, hi):
 
 
 def _gen_perm(rng, n, k):
-    """
-    Return a permutation of range(n) with approximately k elements displaced.
+    """Return a permutation of range(n) built from the displacement count k.
 
-    For small n: uses random.sample + shuffle (exact, original algorithm).
-    For large n: uses k random transpositions scattered throughout the array.
+    For n <= _LARGE_N, k positions are chosen and their values shuffled
+    among themselves, so k elements are displaced less the fixed points
+    of the shuffle, of which one is expected.  For larger n, k random
+    transpositions are applied;
+    each displaces up to two elements, so about n * (1 - exp(-2k/n)) are
+    displaced: 39% of n rather than 25% when k = n/4, and 86% when k = n.
     """
     if n <= _LARGE_N:
         perm = list(range(n))
@@ -48,8 +51,6 @@ def _gen_perm(rng, n, k):
     else:
         perm = array.array('I', range(n))
         if k >= 2:
-            # k random transpositions distributed throughout the array;
-            # yields approximately k displaced elements for k << n.
             for _ in range(k):
                 i = rng.randrange(n)
                 j = rng.randrange(n)
@@ -59,7 +60,10 @@ def _gen_perm(rng, n, k):
 
 
 def _write_small(sizes, perm, ref_path, ver_path, rng):
-    """Write ref and ver files for small n (all block data fits in memory)."""
+    """Write the reference and version, building both in memory.
+
+    The block contents come from rng, so the files are the same on every run.
+    """
     blocks = []
     for sz in sizes:
         blocks.append(bytes(rng.getrandbits(8) for _ in range(sz)))
@@ -73,24 +77,25 @@ def _write_small(sizes, perm, ref_path, ver_path, rng):
 
 
 def _write_large(sizes, perm, ref_path, ver_path):
-    """
-    Write ref and ver files for large n using chunked I/O and mmap.
+    """Write the reference and version without holding either in memory.
 
-    Reference file content is generated with os.urandom (fast).
-    Version file is written by reading reference blocks in permuted order
-    via mmap, which lets the OS page cache absorb random-access patterns.
+    The reference is os.urandom output, which is faster than the seeded
+    generator but differs from run to run; only the block sizes and the
+    permutation are reproducible.  The version is assembled by reading
+    blocks of the reference, through a mapping, in permuted order.
+    Returns the size of each file in bytes.
     """
     n = len(perm)
 
-    # Cumulative byte offsets for each block in the reference file.
-    # Stored as uint64 in a bytearray to avoid per-element Python object overhead.
+    # offsets[i] is where block i starts in the reference; offsets[n] is the
+    # file size.  A uint64 view of a bytearray costs 8 bytes per entry, a
+    # list of ints several times that.
     off_buf = bytearray(8 * (n + 1))
     offsets = memoryview(off_buf).cast('Q')
     for i in range(n):
         offsets[i + 1] = offsets[i] + sizes[i]
     total = int(offsets[n])
 
-    # Write reference file in ~8 MB chunks of os.urandom output.
     CHUNK_BLOCKS = 50_000
     with open(ref_path, 'wb') as f:
         for start in range(0, n, CHUNK_BLOCKS):
@@ -98,8 +103,7 @@ def _write_large(sizes, perm, ref_path, ver_path):
             chunk_bytes = int(offsets[end]) - int(offsets[start])
             f.write(os.urandom(chunk_bytes))
 
-    # Write version file by reading reference in permuted block order.
-    FLUSH_BYTES = 64 * 1024 * 1024  # flush every 64 MB
+    FLUSH_BYTES = 64 * 1024 * 1024  # write the version in pieces of about this size
     with open(ref_path, 'rb') as ref_f, open(ver_path, 'wb') as ver_f:
         mm = mmap.mmap(ref_f.fileno(), 0, access=mmap.ACCESS_READ)
         buf = []
@@ -151,7 +155,7 @@ def main():
         displaced = sum(1 for i in range(n) if perm[i] != i)
     else:
         total = _write_large(sizes, perm, ref_path, ver_path)
-        displaced = k  # approximate for large n
+        displaced = k  # not counted; the true number is larger (see _gen_perm)
 
     print(f"blocks:     {n}")
     print(f"mean size:  {mean_size} bytes")

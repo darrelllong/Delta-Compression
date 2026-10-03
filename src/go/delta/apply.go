@@ -76,8 +76,9 @@ func ApplyDelta(r []byte, commands []Command) []byte {
 }
 
 // ApplyPlacedTo applies commands, reading from the reference r and writing
-// to out, which must be large enough. It returns the end of the highest
-// byte written. The commands must be valid; see ValidatePlacedCommands.
+// to out, which must be large enough. It returns the offset just past the
+// highest byte written. The commands must be valid; see
+// ValidatePlacedCommands.
 func ApplyPlacedTo(r []byte, commands []PlacedCommand, out []byte) int {
 	written := 0
 	for _, cmd := range commands {
@@ -121,10 +122,12 @@ func ApplyDeltaInplace(r []byte, commands []PlacedCommand, versionSize int) []by
 	return buf[:versionSize]
 }
 
-// ValidatePlacedCommands reports whether commands can be applied safely to
-// a reference of referenceSize bytes to produce a version of versionSize
-// bytes: every write must lie within the version and every read within its
-// source. For an in-place delta the source of a copy is the working buffer.
+// ValidatePlacedCommands returns an error unless commands can be applied
+// safely to a reference of referenceSize bytes to produce a version of
+// versionSize bytes: every write must lie within the version and every read
+// within its source. For an in-place delta the source of a copy is the
+// working buffer, which is as long as the larger of the reference and the
+// version. A move must read only output before its destination.
 func ValidatePlacedCommands(commands []PlacedCommand, referenceSize, versionSize int, inplace bool) error {
 	if referenceSize < 0 || versionSize < 0 {
 		return errors.New("negative buffer size")

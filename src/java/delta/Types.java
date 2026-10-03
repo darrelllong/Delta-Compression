@@ -15,6 +15,7 @@ public final class Types {
     public static final int  TABLE_SIZE     = 1048573;
     /** Default ceiling for an auto-sized table: a prime just above 2^30. */
     public static final int  MAX_TABLE_SIZE = 1073741827;
+    /** The base b of the fingerprint polynomial (Eq. 1). */
     public static final long HASH_BASE      = 263;
     /** The Mersenne prime 2^61 - 1. */
     public static final long HASH_MOD       = (1L << 61) - 1;
@@ -45,9 +46,9 @@ public final class Types {
 
     /** A differencing algorithm. */
     public enum Algorithm {
-        /** Optimal under the simple cost measure; O(|V| |R|) time, O(|R|) space (Section 3). */
+        /** Optimal under the simple cost measure if p &lt;= 2; O(|V| |R|) time, O(|R|) space (Section 3). */
         GREEDY,
-        /** Linear time, constant space; scans R and V together (Section 4). */
+        /** Linear time; scans R and V together, each once, and misses transposed blocks (Section 4). */
         ONEPASS,
         /** Near-optimal 1.5-pass with checkpointed fingerprints (Sections 7 and 8). */
         CORRECTING
@@ -98,7 +99,10 @@ public final class Types {
     public static final class DiffOptions {
         /** Seed length: the fingerprint window and the shortest match (Section 2.1.3). */
         public int     p        = SEED_LEN;
-        /** Smallest hash table to use; the algorithms grow it with the input. */
+        /**
+         * Smallest hash table, in slots.  Onepass and correcting use a larger
+         * one when |R| asks for it; greedy does not use q.
+         */
         public int     q        = TABLE_SIZE;
         /** Commands the correcting algorithm can still revise (Section 5.2). */
         public int     bufCap   = DELTA_BUF_CAP;
@@ -111,14 +115,8 @@ public final class Types {
     }
 
     /**
-     * Counts over a list of placed commands.  A MOVE counts as a copy.
-     *
-     * @param numCommands      copies plus adds
-     * @param numCopies        number of COPY and MOVE commands
-     * @param numAdds          number of ADD commands
-     * @param copyBytes        bytes produced by copies
-     * @param addBytes         literal bytes
-     * @param totalOutputBytes copyBytes + addBytes
+     * Counts over a list of placed commands.  A MOVE counts as a copy, and
+     * totalOutputBytes is copyBytes + addBytes.
      */
     public record PlacedSummary(
         int  numCommands,

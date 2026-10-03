@@ -187,7 +187,8 @@ var cmdNames = [...]string{
 	DeltaCmdBigMove: "bigmove",
 }
 
-// The fields of a command, in file order. An add has no src.
+// fieldNames names the fields of a command, in file order. An add has no
+// src.
 var fieldNames = [...]string{"src", "dst", "length"}
 
 // A decoder reads the fields of a delta file.
@@ -214,7 +215,8 @@ func (d *decoder) uint(width int) (int, error) {
 }
 
 // command reads the command of type t, which is not END. It checks that
-// the command writes within the version, but not what a copy reads.
+// the command writes within the version and that a move reads only output
+// before its destination, but not what a copy reads.
 func (d *decoder) command(t byte) (PlacedCommand, error) {
 	if int(t) >= len(cmdNames) {
 		return nil, fmt.Errorf("unknown command type: %d", t)
@@ -269,7 +271,7 @@ func (d *decoder) command(t byte) (PlacedCommand, error) {
 
 // DecodeDelta parses a delta file in either format. It checks that the
 // file is well formed and that every command writes within the version;
-// ValidatePlacedCommands checks the commands against a reference.
+// ValidatePlacedCommands checks what the commands read.
 func DecodeDelta(data []byte) (DecodeResult, error) {
 	var res DecodeResult
 	d := decoder{data: data}

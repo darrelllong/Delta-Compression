@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
-# Pilot-bench workload: one file-encode operation for one language implementation.
+# Pilot-bench workload: one encode, file to file, by one implementation.
 #
 # Usage: pilot_lang.sh <lang> <algo>
 #   lang: Python | Rust | Cpp | C | Java | Go
-#   algo: onepass | correcting
+#   algo: greedy | onepass | correcting
 #
-# Prints MiB/s (ref file size ÷ elapsed encode time) to stdout.
-# Pilot-bench calls this repeatedly until statistical confidence is reached.
+# Prints one number: the size of the reference in MiB divided by the
+# wall-clock seconds of the whole encode command, which include process
+# startup and file I/O.  Pilot-bench runs this script repeatedly until the
+# confidence interval is narrow enough.
 #
-# REF/VER are resolved in order:
-#   1. $PILOT_REF / $PILOT_VER  (set by bench_all.sh — Shakespeare and its 5% mutation)
-#   2. $WORKDIR/linux-5.1.tar and linux-5.1.1.tar  (kernel tarball fallback)
+# The reference and version are $PILOT_REF and $PILOT_VER, which bench_all.sh
+# sets to Shakespeare and its 5% mutation; otherwise the kernel tarballs
+# linux-5.1.tar and linux-5.1.1.tar in WORKDIR (default
+# /tmp/delta-kernel-test).  The implementation must already be built.
 set -euo pipefail
 
 LANG_ARG="${1:-}"
@@ -26,7 +29,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKDIR="${WORKDIR:-/tmp/delta-kernel-test}"
 DELTA_TMP="$WORKDIR/pilot-${LANG_ARG}-${ALGO}.delta"
 
-# Resolve input files: synthetic pair (from bench_all.sh) or kernel tarballs.
 REF="${PILOT_REF:-$WORKDIR/linux-5.1.tar}"
 VER="${PILOT_VER:-$WORKDIR/linux-5.1.1.tar}"
 
@@ -67,10 +69,8 @@ case "$LANG_ARG" in
         ;;
 esac
 
-# Args layout passed to the inner script:
-#   sys.argv[1:] = full command, ending with: <algo> <ref> <ver> <delta>
-# So sys.argv[-3] = REF, sys.argv[-2] = VER, sys.argv[-1] = DELTA.
-
+# sys.argv[1:] is the encode command; it ends <algo> <ref> <ver> <delta>, so
+# sys.argv[-3] is the reference.
 python3 - "${CMD[@]}" "$ALGO" "$REF" "$VER" "$DELTA_TMP" <<'PYEOF'
 import sys, subprocess, time, os
 t0 = time.perf_counter()

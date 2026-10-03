@@ -76,14 +76,13 @@ public class TestDelta {
         }
     }
 
-    /** Build a DiffOptions with seed length p and all other fields defaulted. */
+    /** Returns the default options with seed length p. */
     static DiffOptions opts(int p) {
         DiffOptions o = new DiffOptions();
         o.p = p;
         return o;
     }
 
-    /** Concatenate byte arrays. */
     static byte[] concat(byte[]... parts) {
         int total = 0;
         for (byte[] a : parts) total += a.length;
@@ -96,7 +95,6 @@ public class TestDelta {
         return out;
     }
 
-    /** Repeat a byte array n times. */
     static byte[] repeat(byte[] data, int n) {
         byte[] out = new byte[data.length * n];
         for (int i = 0; i < n; i++)
@@ -104,7 +102,7 @@ public class TestDelta {
         return out;
     }
 
-    /** ASCII/Latin-1 string to bytes. */
+    /** Returns the bytes of s, one per char (Latin-1). */
     static byte[] b(String s) {
         return s.getBytes(StandardCharsets.ISO_8859_1);
     }
@@ -157,10 +155,7 @@ public class TestDelta {
         return Encoding.encodeDelta(ip, true, res.versionSize(), ZERO_HASH, ZERO_HASH);
     }
 
-    /**
-     * Eight variable-length blocks with deterministic byte patterns.
-     * Block i has sizes[i] bytes, each byte = (i*37 + j) & 0xFF.
-     */
+    /** Returns eight blocks of different lengths; byte j of block i is (i * 37 + j) mod 256. */
     static List<byte[]> makeBlocks() {
         int[] sizes = {200, 500, 1234, 3000, 800, 4999, 1500, 2750};
         List<byte[]> blocks = new ArrayList<>();
@@ -173,12 +168,12 @@ public class TestDelta {
         return blocks;
     }
 
-    /** Concatenate all blocks into a single byte array. */
+    /** Returns the reference for the block tests: the blocks in order. */
     static byte[] blocksRef(List<byte[]> blocks) {
         return concat(blocks.toArray(new byte[0][]));
     }
 
-    /** Fisher-Yates in-place shuffle using the given Random. */
+    /** Shuffles arr in place (Fisher-Yates). */
     static void shuffle(int[] arr, Random rng) {
         for (int i = arr.length - 1; i > 0; i--) {
             int j = rng.nextInt(i + 1);
@@ -186,7 +181,7 @@ public class TestDelta {
         }
     }
 
-    /** Section 2.1.1 of Ajtai et al. 2002. */
+    /** The example of Section 2.1.1. */
     static void testPaperExample() {
         byte[] r = b("ABCDEFGHIJKLMNOP");
         byte[] v = b("QWIJKLMNOBCDEFGHZDEFGHIJKL");
@@ -207,7 +202,7 @@ public class TestDelta {
     }
 
     static void testCompletelyDifferent() {
-        // R = 0x00..0xFF repeated twice, V = reverse
+        // R is 0x00..0xFF twice and V is its reverse, so they share no 2-byte seed.
         byte[] r = new byte[512], v = new byte[512];
         for (int i = 0; i < 512; i++) {
             r[i] = (byte) (i & 0xFF);
@@ -290,7 +285,7 @@ public class TestDelta {
             "copy source out of range");
     }
 
-    /** The inplace flag bit in the header is set/clear independently of commands. */
+    /** The in-place flag is a header bit that the caller sets, whatever the commands are. */
     static void testBinaryEncodingInplaceFlag() {
         List<PlacedCommand> placed = new ArrayList<>();
         placed.add(new PlacedCopy(0, 10, 5));
@@ -330,7 +325,7 @@ public class TestDelta {
         assertArrayEquals(bigData, a.data(), "add data");
     }
 
-    /** Block shared by R and V is offset by a few bytes; backward extension must find it. */
+    /** R and V share a block at different offsets, with other bytes before it in each. */
     static void testBackwardExtension() {
         byte[] block = repeat(b("ABCDEFGHIJKLMNOP"), 20);
         byte[] r = concat(b("____"), block, b("____"));
@@ -350,7 +345,7 @@ public class TestDelta {
                 algo + " transposition");
     }
 
-    /** 100 random single-byte mutations in a 2000-byte array. */
+    /** V is 2000 random bytes of R with 100 of them overwritten at random. */
     static void testScatteredModifications() {
         Random rng = new Random(42);
         byte[] r = new byte[2000];
@@ -391,7 +386,7 @@ public class TestDelta {
                     algo + "/" + pol + " inplace simple transposition");
     }
 
-    /** |V| > |R|: in-place write window extends beyond reference. */
+    /** |V| > |R|: the buffer is longer than the reference. */
     static void testInplaceVersionLarger() {
         byte[] r = repeat(b("ABCDEFGH"), 50);
         byte[] v = concat(repeat(b("XXABCDEFGH"), 50), repeat(b("YYABCDEFGH"), 50));
@@ -401,7 +396,7 @@ public class TestDelta {
                     algo + "/" + pol + " inplace version larger");
     }
 
-    /** |V| < |R|: in-place write uses only a prefix of the reference buffer. */
+    /** |V| < |R|: the version is a prefix of the buffer. */
     static void testInplaceVersionSmaller() {
         byte[] r = repeat(b("ABCDEFGHIJKLMNOP"), 100);
         byte[] v = repeat(b("EFGHIJKL"), 50);
@@ -460,7 +455,7 @@ public class TestDelta {
         assertTrue(Encoding.isInplaceDelta(delta), "inplace delta should be detected");
     }
 
-    /** Random permutation of all 8 blocks. */
+    /** V is a random permutation of the 8 blocks. */
     static void testInplaceVarlenPermutation() {
         List<byte[]> blocks = makeBlocks();
         byte[] r = blocksRef(blocks);
@@ -476,7 +471,7 @@ public class TestDelta {
                     algo + "/" + pol + " varlen permutation");
     }
 
-    /** All 8 blocks in reverse order. */
+    /** V is the 8 blocks in reverse order. */
     static void testInplaceVarlenReverse() {
         List<byte[]> blocks = makeBlocks();
         byte[] r = blocksRef(blocks);
@@ -489,7 +484,7 @@ public class TestDelta {
                     algo + "/" + pol + " varlen reverse");
     }
 
-    /** Permuted blocks interleaved with random junk bytes. */
+    /** V is the 8 blocks permuted, each followed by 50 to 300 bytes that are not in R. */
     static void testInplaceVarlenJunk() {
         List<byte[]> blocks = makeBlocks();
         byte[] r = blocksRef(blocks);
@@ -511,7 +506,7 @@ public class TestDelta {
                     algo + "/" + pol + " varlen junk");
     }
 
-    /** Drop some blocks, duplicate others: V has 5 blocks drawn from R's 8. */
+    /** V drops some blocks and repeats others: 5 blocks drawn from the 8 of R. */
     static void testInplaceVarlenDropDup() {
         List<byte[]> blocks = makeBlocks();
         byte[] r = blocksRef(blocks);
@@ -523,7 +518,7 @@ public class TestDelta {
                     algo + "/" + pol + " varlen drop+dup");
     }
 
-    /** V is two independent shuffles of all 8 blocks concatenated (about twice the size of R). */
+    /** V is two independent shuffles of the 8 blocks, so |V| = 2 |R|. */
     static void testInplaceVarlenDoubleSized() {
         List<byte[]> blocks = makeBlocks();
         byte[] r = blocksRef(blocks);
@@ -540,7 +535,7 @@ public class TestDelta {
                     algo + "/" + pol + " varlen double-sized");
     }
 
-    /** V is just two of the eight blocks, much smaller than R. */
+    /** V is two of the 8 blocks, much shorter than R. */
     static void testInplaceVarlenSubset() {
         List<byte[]> blocks = makeBlocks();
         byte[] r = blocksRef(blocks);
@@ -551,7 +546,7 @@ public class TestDelta {
                     algo + "/" + pol + " varlen subset");
     }
 
-    /** Split each block in half to get 16 halves, then shuffle all 16. */
+    /** V is the 16 halves of the 8 blocks, shuffled. */
     static void testInplaceVarlenHalfBlockScramble() {
         List<byte[]> blocks = makeBlocks();
         byte[] r = blocksRef(blocks);
@@ -577,7 +572,7 @@ public class TestDelta {
             }
     }
 
-    /** 20 random trials: random subset of 3 to 8 blocks in random order. */
+    /** Twenty trials; in each, V is 3 to 8 distinct blocks in random order. */
     static void testInplaceVarlenRandomTrials() {
         List<byte[]> blocks = makeBlocks();
         byte[] r = blocksRef(blocks);
@@ -602,9 +597,7 @@ public class TestDelta {
                 }
     }
 
-    /**
-     * On blocks in reverse order, LOCALMIN adds no more literal bytes than CONSTANT.
-     */
+    /** On blocks in reverse order, LOCALMIN adds no more literal bytes than CONSTANT. */
     static void testLocalminPicksSmallest() {
         List<byte[]> blocks = makeBlocks();
         byte[] r = blocksRef(blocks);
@@ -626,7 +619,10 @@ public class TestDelta {
             "localmin (" + addLmin + ") should produce <= add bytes as constant (" + addConst + ")");
     }
 
-    /** A table of only 7 entries forces heavy checkpointing; output must still be correct. */
+    /**
+     * Checkpointing with a small table.  q is only a floor: |R| asks for 38
+     * slots, so the table has 41 and not 7, and m = 15.
+     */
     static void testCorrectingCheckpointingTinyTable() {
         byte[] r = repeat(b("ABCDEFGHIJKLMNOP"), 20);  // 320 bytes
         // v = r[0..160] + "XXXXYYYY" + r[160..]
@@ -642,7 +638,10 @@ public class TestDelta {
         assertArrayEquals(v, Apply.applyDelta(r, cmds), "correcting q=7 tiny table");
     }
 
-    /** Sweep q across several orders of magnitude; correctness must hold at each size. */
+    /**
+     * Several values of q.  q is only a floor: |R| asks for 248 slots, so
+     * 7, 31 and 101 all give the same table of 251.
+     */
     static void testCorrectingCheckpointingVariousSizes() {
         byte[] r = new byte[2000];
         for (int i = 0; i < 2000; i++) r[i] = (byte) (i & 0xFF);
@@ -667,9 +666,7 @@ public class TestDelta {
         assertEquals(1048573L, Hash.nextPrime(1048573L), "nextPrime of a prime is itself");
     }
 
-    /**
-     * A delta converted by the inplace subcommand applies in place to give V.
-     */
+    /** A delta converted by the inplace subcommand applies in place to give V. */
     static void testInplaceSubcommandRoundtrip() {
         byte[][] rs = {b("ABCDEF"), b("AAABBBCCC"), b("the quick brown fox"),
                        b("ABCDEF"), b("hello world"), new byte[0]};
@@ -726,7 +723,7 @@ public class TestDelta {
         }
     }
 
-    /** --splay must produce correct output for all three algorithms. */
+    /** With useSplay set, each algorithm still builds V. */
     static void testSplayRoundtrip() {
         byte[] r = repeat(b("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), 100);
         byte[] v = repeat(b("0123EFGHIJKLMNOPQRS456ABCDEFGHIJKL789"), 100);
@@ -768,7 +765,7 @@ public class TestDelta {
         }
     }
 
-    /** rLen in [0, p): no seeds extractable, exercises all-add path. */
+    /** A reference shorter than p has no seed, so V is all adds. */
     static void testRefShorterThanSeed() {
         int p = 8;
         byte[] v = {0x10, 0x11, 0x12, 0x13, (byte)0xAA, (byte)0xBB, (byte)0xCC, (byte)0xDD};
@@ -811,7 +808,7 @@ public class TestDelta {
         }
     }
 
-    /** version_size at byte-sign-extension boundaries (128, 256, 32768, 65536, ...). */
+    /** Version sizes on either side of byte boundaries, where a sign-extended byte would corrupt the field. */
     static void testEncodingVersionSizeBoundaries() {
         int[] sizes = {
             0, 1, 127, 128, 255, 256, 257,
@@ -829,11 +826,10 @@ public class TestDelta {
         }
     }
 
-    /** Copy/Add fields at byte-sign-extension boundaries. */
+    /** Copy and add fields on either side of the same boundaries. */
     static void testEncodingCommandFieldBoundaries() {
         int[] offsets = {0, 1, 127, 128, 255, 256, 257, 65535, 65536, 65537};
 
-        // src
         for (int src : offsets) {
             List<PlacedCommand> cmds = new ArrayList<>();
             cmds.add(new PlacedCopy(src, 0, 1));
@@ -844,7 +840,6 @@ public class TestDelta {
             assertEquals(1,   c.length(), "copy length at src=" + src);
         }
 
-        // dst
         for (int dst : offsets) {
             List<PlacedCommand> cmds = new ArrayList<>();
             cmds.add(new PlacedCopy(0, dst, 1));
@@ -853,7 +848,6 @@ public class TestDelta {
             assertEquals(dst, c.dst(), "copy dst=" + dst);
         }
 
-        // length
         for (int len : new int[]{1, 127, 128, 255, 256, 257, 65535, 65536}) {
             List<PlacedCommand> cmds = new ArrayList<>();
             cmds.add(new PlacedCopy(0, 0, len));
@@ -862,7 +856,6 @@ public class TestDelta {
             assertEquals(len, c.length(), "copy length=" + len);
         }
 
-        // add dst
         for (int dst : offsets) {
             List<PlacedCommand> cmds = new ArrayList<>();
             cmds.add(new PlacedAdd(dst, new byte[]{(byte) 0xFF}));
@@ -873,7 +866,7 @@ public class TestDelta {
         }
     }
 
-    /** |V| = |R| + 1: write window extends one byte past the ref buffer. */
+    /** |V| = |R| + 1: the buffer is one byte longer than the reference. */
     static void testInplaceVersionOneLargerTight() {
         for (int n : new int[]{1, 2, 3, 4, 7, 8, 15, 16, 17, 31, 32, 63, 64}) {
             byte[] r = new byte[n];
@@ -887,7 +880,7 @@ public class TestDelta {
         }
     }
 
-    /** |V| = |R| - 1: write window ends one byte short of the ref buffer. */
+    /** |V| = |R| - 1: the version stops one byte short of the buffer. */
     static void testInplaceVersionOneSmallerTight() {
         for (int n : new int[]{2, 3, 4, 5, 8, 9, 15, 16, 17, 31, 32, 65}) {
             byte[] r = new byte[n];
@@ -900,7 +893,7 @@ public class TestDelta {
         }
     }
 
-    /** |V| = |R|, half-swap: write window fixed; exercises same-size cycle-breaking. */
+    /** |V| = |R| with the halves exchanged; once a half holds a seed, the two copies form a cycle. */
     static void testInplaceVersionSameSizeTight() {
         for (int n : new int[]{2, 4, 8, 16, 32, 64, 128, 256}) {
             byte[] r = new byte[n];
@@ -916,13 +909,13 @@ public class TestDelta {
         }
     }
 
-    /** v = 1 byte: exercises both copy path (byte in R) and add path (byte absent). */
+    /** A version of one byte is shorter than the seed, so it is an add whether or not the byte is in R. */
     static void testInplaceVersionOneByteMin() {
         byte[] r = new byte[64];
         for (int i = 0; i < 64; i++) r[i] = (byte) i;
 
-        byte[] vCopy = {r[32]};           // in R, so a copy
-        byte[] vAdd  = {(byte) 0xAB};     // not in R, so an add
+        byte[] vCopy = {r[32]};           // occurs in R
+        byte[] vAdd  = {(byte) 0xAB};     // does not occur in R
 
         for (Algorithm algo : ALL_ALGOS)
             for (CyclePolicy pol : ALL_POLICIES) {
@@ -933,7 +926,7 @@ public class TestDelta {
             }
     }
 
-    /** p = 1, 2, |R| (one seed), |R|+1 (no seeds): exercises no-seed boundary. */
+    /** Seed lengths 1, 2, |R|, which leaves R one seed, and |R| + 1, which leaves it none. */
     static void testSeedLengthBoundaries() {
         byte[] r = b("ABCDEFGHIJKLMNOP");
         byte[] v = b("QWIJKLMNOBCDEFGHZDEFGHIJKL");
@@ -942,7 +935,7 @@ public class TestDelta {
                 assertArrayEquals(v, Apply.applyDelta(r, Diff.diff(algo, r, v, opts(p))),
                     algo + " p=" + p);
         }
-        // p > |R| with varying v sizes
+        // p > |R|, with V shorter and longer than p.
         byte[] vShort = b("QW");
         byte[] vLong  = b("QWIJKLMNOBCDEFGHZDEFGHIJKLMNOPQRSTUVWXYZ");
         for (Algorithm algo : ALL_ALGOS) {
@@ -1096,7 +1089,6 @@ public class TestDelta {
 
     static void testLargeHeaderSize() {
         byte[] d = Encoding.encodeDeltaLarge(List.of(), false, 0, ZERO_HASH, ZERO_HASH, false);
-        // 29-byte header + 1 byte END
         assertEquals(DELTA_HEADER_SIZE_LARGE + 1, d.length, "large header+END size");
     }
 
@@ -1164,7 +1156,6 @@ public class TestDelta {
     }
 
     static void testLargeMoveOverlapRejected() {
-        // Hand-craft DLT\x04 with MOVE where src+length > dst
         byte[] buf = new byte[DELTA_HEADER_SIZE_LARGE + DELTA_COPY_PAYLOAD + 2];
         buf[0] = 'D'; buf[1] = 'L'; buf[2] = 'T'; buf[3] = 0x04;
         buf[4] = 0; // flags
@@ -1209,7 +1200,7 @@ public class TestDelta {
         // version_size = 1 as u32 BE at bytes 5..8
         buf[8] = 1;
         // crcs 0 (bytes 9..24)
-        buf[DELTA_HEADER_SIZE] = (byte) DELTA_CMD_BIGCOPY; // illegal in small format
+        buf[DELTA_HEADER_SIZE] = (byte) DELTA_CMD_BIGCOPY; // not a DLT\x03 command
         buf[DELTA_HEADER_SIZE + 1] = (byte) DELTA_CMD_END;
         assertRejects("BIGCOPY in small format", () -> Encoding.decodeDelta(buf), null);
     }
@@ -1227,11 +1218,11 @@ public class TestDelta {
     }
 
     static void testLargeU64OverflowRejected() {
-        // Hand-craft DLT\x04 with version_size = Long.MIN_VALUE (top bit set = negative long)
+        // version_size = 2^63, which a long holds as a negative number.
         byte[] buf = new byte[DELTA_HEADER_SIZE_LARGE + 1];
         buf[0] = 'D'; buf[1] = 'L'; buf[2] = 'T'; buf[3] = 0x04;
         buf[4] = 0;
-        buf[5] = (byte) 0x80; // version_size has its top bit set
+        buf[5] = (byte) 0x80;
         buf[DELTA_HEADER_SIZE_LARGE] = (byte) DELTA_CMD_END;
         assertRejects("oversized version_size", () -> Encoding.decodeDelta(buf), null);
     }

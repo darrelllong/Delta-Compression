@@ -33,8 +33,9 @@ public:
         return *this;
     }
 
-    /// The value stored under key, or nullptr.  The pointer is valid until
-    /// the entry is overwritten or the tree is cleared or destroyed.
+    /// The value stored under key, or nullptr.  Nodes are never moved or
+    /// freed singly, so the pointer is valid until the tree is cleared or
+    /// destroyed.
     V* find(uint64_t key) {
         if (!root_) { return nullptr; }
         splay(key);
@@ -64,6 +65,7 @@ public:
         add_root(key, std::move(value));
     }
 
+    /// Removes every entry.
     void clear() {
         // Rotating each left child up turns the tree into a list as it is
         // freed, so no stack is needed however deep the tree is.

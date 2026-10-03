@@ -11,9 +11,9 @@ import static delta.Types.*;
  * The greedy algorithm (Section 3.1, Figure 2).
  *
  * Indexes every seed of R, then at each position of V takes the longest
- * match that any seed there offers.  The delta is optimal under the simple
- * cost measure (Section 3.3, Theorem 1).  O(|V| |R|) time in the worst
- * case, O(|R|) space.
+ * match that any seed there offers.  For p &lt;= 2 the delta is optimal under
+ * the simple cost measure (Section 3.3); a larger p misses matches shorter
+ * than p.  O(|V| |R|) time in the worst case, O(|R|) space.
  */
 public final class Greedy {
     private Greedy() {}

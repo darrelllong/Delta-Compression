@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# correctness.sh — build every implementation and run every test suite.
+# correctness.sh: build every implementation and run every test suite.
 #
 # Each language's unit tests run first.  The C suite (src/c/test_delta.sh)
 # comes last because it also checks that the implementations produce

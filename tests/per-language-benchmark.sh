@@ -1,22 +1,26 @@
 #!/usr/bin/env bash
 #
-# per-language-benchmark.sh — Compare delta encoding speed across compiled implementations
+# per-language-benchmark.sh: compare the encode time of the compiled
+# implementations.
 #
-# Encodes the Linux 5.1.0 → 5.1.1 kernel tarballs (~871 MB each) with onepass
-# and correcting using each compiled implementation in sequence to avoid SSD
-# contention.  Tarballs are shared with kernel-delta-test.sh (same WORKDIR).
+# Builds the Rust, C++, C, Java and Go implementations, then encodes the
+# Linux 5.1.0 -> 5.1.1 kernel tarballs (~871 MB each) with onepass and with
+# correcting.  Each encode is run and timed once, one after another so that
+# they do not compete for the disk.  The tarballs are those of
+# kernel-delta-test.sh (same WORKDIR, default /tmp/delta-kernel-test).
 #
-# Python is intentionally excluded — 871 MB is an unreasonable workload for an
-# interpreted implementation; use bench_all.sh (Shakespeare, ~5 MB) instead.
+# Python is left out: 871 MB is too much for the interpreted implementation.
 #
 # Usage:
 #   ./tests/per-language-benchmark.sh
 #
 # Requirements:
-#   - Compiled language toolchains installed (Rust, C, C++, Java, Go)
-#   - curl, gunzip (to download tarballs if not already cached)
-#   - ~2 GB disk in WORKDIR (two ~1 GB tarballs)
-#   - ~2.5 GB RAM (auto-sized hash tables for 871 MB kernel tarballs)
+#   - Rust, C, C++ (with cmake), Go and make; Java is skipped if no JDK is
+#     found
+#   - python3 (for sub-second timing)
+#   - curl, gunzip (to download the tarballs if they are not cached)
+#   - ~2 GB disk in WORKDIR for the two tarballs, plus the deltas
+#   - ~2.5 GB RAM (the hash tables are sized from the 871 MB reference)
 
 set -euo pipefail
 
@@ -25,9 +29,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKDIR="${WORKDIR:-/tmp/delta-kernel-test}"
 KERNEL_BASE="https://cdn.kernel.org/pub/linux/kernel/v5.x"
 
-# Prefer the Homebrew openjdk@17 install; fall back to PATH.  Derive JAVAC
-# from the same prefix as JAVA so both point at the same JDK.
-
+# Prefer Homebrew's openjdk@17 when it is installed; java and javac must
+# come from the same JDK.
 JAVA=/opt/homebrew/opt/openjdk@17/bin/java
 if [[ ! -x "$JAVA" ]]; then
     JAVA=$(command -v java 2>/dev/null || true)
@@ -85,8 +88,8 @@ echo ""
 REF="$WORKDIR/linux-5.1.tar"
 VER="$WORKDIR/linux-5.1.1.tar"
 
-# time_encode <cmd...>
-# Runs the given command and prints elapsed seconds to one decimal place.
+# time_encode <cmd...>: run the command and print its wall-clock seconds to
+# one decimal place.
 time_encode() {
     python3 - "$@" <<'EOF'
 import sys, subprocess, time
@@ -103,9 +106,9 @@ echo ""
 printf "  %-12s  %10s  %12s\n" "Language" "onepass" "correcting"
 printf "  %-12s  %10s  %12s\n" "--------" "-------" "----------"
 
-# run_lang <display-name> <encode-cmd...>
-# The encode-cmd should be everything up to and including "encode"; this
-# function appends: <algo> <ref> <ver> <delta-file>
+# run_lang <display-name> <encode-cmd...>: print one table row.  The command
+# is everything up to and including "encode"; <algo> <ref> <ver> <delta-file>
+# are appended to it.
 run_lang() {
     local name="$1"; shift
 

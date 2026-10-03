@@ -177,6 +177,11 @@ fn check_range(start: usize, length: usize, limit: usize, name: &str) -> Result<
 
 /// Applies unplaced commands, writing the version to the front of `out`.
 /// Returns the number of bytes written.
+///
+/// # Panics
+///
+/// Panics if `out` is shorter than the version or a copy reaches outside
+/// `r`.
 pub fn apply_delta_to(r: &[u8], commands: &[Command], out: &mut [u8]) -> usize {
     let mut pos = 0;
     for cmd in commands {
@@ -195,6 +200,10 @@ pub fn apply_delta_to(r: &[u8], commands: &[Command], out: &mut [u8]) -> usize {
 }
 
 /// Returns the version that the commands produce from `r`.
+///
+/// # Panics
+///
+/// Panics if a copy reaches outside `r`.
 pub fn apply_delta(r: &[u8], commands: &[Command]) -> Vec<u8> {
     let mut out = vec![0u8; output_size(commands)];
     apply_delta_to(r, commands, &mut out);
@@ -203,6 +212,10 @@ pub fn apply_delta(r: &[u8], commands: &[Command]) -> Vec<u8> {
 
 /// Returns the version that in-place commands produce from `r`, working in
 /// a copy of `r` resized to hold the larger of the two.
+///
+/// # Panics
+///
+/// Panics if a command reaches outside that buffer.
 pub fn apply_delta_inplace(r: &[u8], commands: &[PlacedCommand], version_size: usize) -> Vec<u8> {
     let mut buf = vec![0u8; r.len().max(version_size)];
     buf[..r.len()].copy_from_slice(r);

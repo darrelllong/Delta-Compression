@@ -1,26 +1,30 @@
 #!/usr/bin/env bash
 #
-# kernel-delta-test.sh — Measure delta compression on Linux kernel tarballs
+# kernel-delta-test.sh: measure delta compression on Linux kernel tarballs.
 #
-# Downloads Linux 5.1.0 through 5.1.7 from kernel.org, decompresses the
-# gzip layer (leaving .tar files), then encodes deltas in three modes:
+# Downloads Linux 5.1.0 through 5.1.7 from kernel.org, gunzips them to .tar
+# files, and encodes deltas with the Rust implementation in three ways:
 #
-#   1. From base: 5.1.0 → 5.1.{1..7}  (fixed reference)
-#   2. Successive: 5.1.{n} → 5.1.{n+1}  (chain/successive deltas)
-#   3. From 5.1.1: 5.1.1 → 5.1.{2..7}  (divergence from a non-zero base)
+#   1. From base:   5.1.0 -> 5.1.{1..7}   one reference, later and later versions
+#   2. Successive:  5.1.n -> 5.1.n+1      each release against the one before
+#   3. From 5.1.1:  5.1.1 -> 5.1.{2..7}   as 1, from a different reference
 #
-# Reports compression ratio for onepass and correcting algorithms.
+# For onepass and correcting it prints the delta size, its ratio to the
+# version, and the encode time.  It ends by decoding one delta and comparing
+# the result with the original.
 #
 # Usage:
 #   ./tests/kernel-delta-test.sh
 #
 # Requirements:
-#   - curl, gunzip, bc, python3 (for sub-second timing)
+#   - curl, gunzip, bc, awk, python3 (for sub-second timing)
 #   - Rust toolchain (builds the delta binary via cargo)
-#   - ~8 GB disk in WORKDIR (eight ~1 GB tarballs)
-#   - ~2.5 GB RAM (auto-sized hash tables for 871 MB kernel tarballs)
+#   - ~8 GB disk in WORKDIR (eight ~871 MB tarballs, the deltas, and one
+#     recovered tarball)
+#   - ~2.5 GB RAM (the hash tables are sized from the 871 MB reference)
 #
-# The tarballs are cached in WORKDIR so re-runs skip the download.
+# WORKDIR defaults to /tmp/delta-kernel-test.  The tarballs are kept there,
+# so later runs skip the download.
 
 set -euo pipefail
 

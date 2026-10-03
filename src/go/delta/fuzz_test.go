@@ -5,28 +5,24 @@ import (
 	"testing"
 )
 
-// FuzzDecode feeds arbitrary bytes to DecodeDelta.
-//
-// Invariant: DecodeDelta must never panic regardless of input.
-// Returning an error is the expected rejection path for malformed data.
-//
-// Run:
+// FuzzDecode feeds arbitrary bytes to DecodeDelta, which must return an
+// error for malformed input and never panic.
 //
 //	go test -fuzz=FuzzDecode -fuzztime=300s
 func FuzzDecode(f *testing.F) {
-	// Seed corpus: valid V3 empty-to-empty delta.
+	// A DLT\x03 delta from an empty reference to an empty version.
 	f.Add([]byte("\x44\x4c\x54\x03\x00" +
 		"\x00\x00\x00\x00" +
 		"\x00\x00\x00\x00\x00\x00\x00\x00" +
 		"\x00\x00\x00\x00\x00\x00\x00\x00" +
 		"\x00"))
-	// Seed corpus: valid V4 empty-to-empty delta.
+	// The same in DLT\x04.
 	f.Add([]byte("\x44\x4c\x54\x04\x00" +
 		"\x00\x00\x00\x00\x00\x00\x00\x00" +
 		"\x00\x00\x00\x00\x00\x00\x00\x00" +
 		"\x00\x00\x00\x00\x00\x00\x00\x00" +
 		"\x00"))
-	// Seed corpus: truncated magic, bad magic, empty.
+	// A bare magic, a bad magic, and no input.
 	f.Add([]byte("DLT\x03"))
 	f.Add([]byte("DLT\x04"))
 	f.Add([]byte("\xde\xad\xbe\xef"))
@@ -40,17 +36,13 @@ func FuzzDecode(f *testing.F) {
 // FuzzRoundtrip encodes a delta with the greedy algorithm, decodes and
 // applies it, and checks that the version is reconstructed exactly.
 //
-// Input layout: [split_byte | reference... | version...]
-//
-//	split = 1 + (split_byte * (len-1)) / 256
-//
-// Inputs are capped at 4 KiB; diffGreedy is O(|ref|*|ver|).
-//
-// Run:
+// The first byte of the input divides the rest into a reference and a
+// version: the reference is data[1:split] and the version data[split:],
+// where split = 1 + data[0]*(len(data)-1)/256. Inputs longer than 4 KiB are
+// skipped because the greedy algorithm takes O(|V|*|R|) time.
 //
 //	go test -fuzz=FuzzRoundtrip -fuzztime=300s
 func FuzzRoundtrip(f *testing.F) {
-	// A few interesting (ref, ver) pairs as seeds.
 	f.Add([]byte{128, 'h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd'})
 	f.Add([]byte{0})
 	f.Add([]byte{255, 'a', 'b', 'c'})

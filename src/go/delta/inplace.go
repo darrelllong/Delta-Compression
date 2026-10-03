@@ -299,10 +299,10 @@ func (s *scheduler) shortest(vs []int) int {
 // findCycle returns the vertices of a cycle among the unsettled copies of
 // the current component, or nil if there is none.
 //
-// All calls for one component together take time linear in its size. The
-// search follows only edges inside the component. A vertex found acyclic
-// stays so, because settling copies only removes edges. And the scan for a
-// search root resumes where the previous call stopped.
+// The search follows only edges inside the component. A vertex found
+// acyclic stays so, because settling copies only removes edges, and the scan
+// for a search root resumes where the previous call stopped. So successive
+// calls repeat no work except on the path that led to the previous cycle.
 func (s *scheduler) findCycle() []int {
 	scc := s.sccs[s.scc]
 	for ; s.scan < len(scc); s.scan++ {
@@ -329,9 +329,9 @@ func (s *scheduler) findCycle() []int {
 				s.color[w] = onPath
 				path = append(path, dfsFrame{v: w})
 			case onPath:
-				// The cycle is the path from w onward. Converting the
-				// victim may break the path anywhere, so all of it must
-				// be searched again.
+				// The cycle is the path from w onward. The search stops
+				// here, so the whole path returns to unexplored; the
+				// next call searches it again without the victim.
 				for _, f := range path {
 					s.color[f.v] = unexplored
 				}

@@ -194,6 +194,8 @@ public final class Hash {
             long crc = ~0L;
             int i = 0;
             for (; i + 8 <= data.length; i += 8) {
+                // The CRC is reflected: its low byte meets the first byte of
+                // data, so the eight bytes are read little-endian.
                 crc ^= (long) LE64.get(data, i);
                 crc = t7[(int) (crc & 0xFF)] ^ t6[(int) ((crc >>> 8) & 0xFF)]
                     ^ t5[(int) ((crc >>> 16) & 0xFF)] ^ t4[(int) ((crc >>> 24) & 0xFF)]

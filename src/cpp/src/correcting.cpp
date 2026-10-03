@@ -13,8 +13,8 @@ namespace {
 
 /// Checkpointing (Section 8.1): fingerprints are reduced to the range
 /// [0, f_size), and only those in one residue class mod m, the checkpoints,
-/// are stored or looked up.  A checkpoint f has table slot f / m, so the
-/// table needs f_size / m slots however long R is.
+/// are stored or looked up.  A checkpoint f has table slot f / m, which is
+/// below cap because m >= f_size / cap.
 struct Checkpoints {
     size_t cap;      ///< |C|, the table capacity.
     uint64_t f_size; ///< |F|.
@@ -28,9 +28,9 @@ struct Checkpoints {
         cap = next_prime(std::min(opts.max_table, std::max(opts.q, 2 * seeds / p)));
         f_size = seeds > 0 ? next_prime(2 * seeds) : 1;
         m = (f_size + cap - 1) / cap;
-        // k is taken from a seed in the middle of V, so that at least that
-        // seed is a checkpoint and, if V resembles R, so are its copies in R
-        // (p. 348).
+        // k is taken from a seed of V, which favors a residue class that is
+        // common in V (p. 348).  The paper picks the seed at random; the
+        // middle one is used here, so that the output is deterministic.
         k = 0;
         if (v.size() >= p) {
             size_t mid = std::min(v.size() / 2, v.size() - p);

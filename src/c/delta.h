@@ -9,8 +9,9 @@
 // in-place application, and encoded.
 //
 // Functions that return a structure return one the caller owns and releases
-// with the matching _free function.  Malformed deltas and exhausted memory
-// are fatal: the library prints a message to stderr and exits.
+// with the matching _free function; it shares no storage with the arguments.
+// A malformed delta is fatal: the library prints a message to stderr and
+// exits with status 1.  So is exhausted memory, on which it aborts.
 
 #ifndef DELTA_H
 #define DELTA_H
@@ -19,7 +20,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// Defaults (Section 2.1.3).
+// Defaults.  The seed length is that of Section 2.1.3 and the buffer that of
+// Section 9.1.
 #define DELTA_SEED_LEN       16           // bytes in a seed
 #define DELTA_TABLE_SIZE     1048573UL    // largest prime below 2^20
 #define DELTA_MAX_TABLE_SIZE 1073741827UL // smallest prime above 2^30
@@ -33,8 +35,8 @@
 // Algorithms.
 
 typedef enum {
-	ALGO_GREEDY,     // Section 3: optimal; O(|V| |R|) time, O(|R|) space.
-	ALGO_ONEPASS,    // Section 4: linear time, constant space.
+	ALGO_GREEDY,     // Section 3: optimal if p <= 2; quadratic time.
+	ALGO_ONEPASS,    // Section 4: linear time, space set by the table size.
 	ALGO_CORRECTING  // Sections 7-8: 1.5 passes with checkpointing.
 } delta_algorithm_t;
 
@@ -67,6 +69,8 @@ typedef struct {
 } delta_commands_t;
 
 void delta_commands_init(delta_commands_t *c);
+
+// delta_commands_push appends cmd.  The list takes over an add's data.
 void delta_commands_push(delta_commands_t *c, delta_command_t cmd);
 void delta_commands_free(delta_commands_t *c);
 
@@ -92,6 +96,8 @@ typedef struct {
 } delta_placed_commands_t;
 
 void delta_placed_commands_init(delta_placed_commands_t *c);
+
+// delta_placed_commands_push appends cmd.  The list takes over an add's data.
 void delta_placed_commands_push(delta_placed_commands_t *c,
                                 delta_placed_command_t cmd);
 void delta_placed_commands_free(delta_placed_commands_t *c);
@@ -135,7 +141,8 @@ void delta_rh_roll(delta_rolling_hash_t *rh, uint8_t old_byte,
 
 // delta_rh_advance returns the fingerprint of the window at target.  *valid
 // and *rh_pos are the caller's record of whether rh holds a window and where;
-// start with *valid zero.  A step of one byte rolls; any other restarts.
+// start with *valid zero.  A step of one byte forward rolls; any other move
+// computes the fingerprint afresh.
 uint64_t delta_rh_advance(delta_rolling_hash_t *rh, int *valid,
                           size_t *rh_pos, const uint8_t *data,
                           size_t target, size_t p);
@@ -178,6 +185,8 @@ void *delta_splay_insert_or_get(delta_splay_t *t, uint64_t key,
 // delta_splay_insert stores *value under key, replacing any earlier value.
 void  delta_splay_insert(delta_splay_t *t, uint64_t key, const void *value);
 
+// delta_splay_clear empties the tree, which may then be used again.
+// delta_splay_free does the same.
 void  delta_splay_clear(delta_splay_t *t);
 void  delta_splay_free(delta_splay_t *t);
 
@@ -213,15 +222,19 @@ delta_flag_clear(delta_flags_t s, delta_opt_flag_t f)
 typedef struct {
 	size_t p;         // Seed length: the shortest match found.  At least 1.
 	size_t q;         // Least number of hash table slots; tables grow with |R|.
-	size_t buf_cap;   // Commands the correcting algorithm can still revise.
-	size_t max_table; // Most slots the correcting table may have; 0 means
-	                  // DELTA_MAX_TABLE_SIZE.
+	                  // The greedy algorithm does not read it.
+	size_t buf_cap;   // Commands the correcting algorithm can still revise;
+	                  // 0 is taken as 1.
+	size_t max_table; // Bound on the slots of the correcting table, before
+	                  // rounding up to a prime; 0 means DELTA_MAX_TABLE_SIZE.
 	delta_flags_t flags;
 } delta_diff_options_t;
 
 #define DELTA_DIFF_OPTIONS_DEFAULT \
 	{ DELTA_SEED_LEN, DELTA_TABLE_SIZE, DELTA_BUF_CAP, DELTA_MAX_TABLE_SIZE, 0 }
 
+// Each differencing function returns commands that rebuild v from r.  opts
+// must not be NULL.
 delta_commands_t delta_diff_greedy(
 	const uint8_t *r, size_t r_len,
 	const uint8_t *v, size_t v_len,
@@ -237,6 +250,7 @@ delta_commands_t delta_diff_correcting(
 	const uint8_t *v, size_t v_len,
 	const delta_diff_options_t *opts);
 
+// delta_diff runs the algorithm named.
 delta_commands_t delta_diff(
 	delta_algorithm_t algo,
 	const uint8_t *r, size_t r_len,
@@ -261,7 +275,7 @@ void delta_print_command_stats(const delta_commands_t *cmds);
 //
 // DLT\x03 has only END, COPY and ADD.
 
-#define DELTA_FLAG_INPLACE 0x01
+#define DELTA_FLAG_INPLACE 0x01 // header flag: commands are in in-place order
 
 #define DELTA_CMD_END     0
 #define DELTA_CMD_COPY    1
@@ -276,7 +290,8 @@ void delta_print_command_stats(const delta_commands_t *cmds);
 #define DELTA_HEADER_SIZE_LARGE 29
 
 // delta_crc64_xz writes the CRC-64/XZ of data to out, most significant byte
-// first.  The CRC of "123456789" is 995dc9bbdf1939fa.
+// first.  The CRC of "123456789" is 995dc9bbdf1939fa.  The first call fills
+// the tables and must not race with another.
 void delta_crc64_xz(const uint8_t *data, size_t len,
                     uint8_t out[DELTA_CRC_SIZE]);
 

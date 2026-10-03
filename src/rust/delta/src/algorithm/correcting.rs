@@ -1,3 +1,6 @@
+//! The correcting 1.5-pass algorithm (Section 7) with correction
+//! (Section 5) and checkpointing (Section 8).
+
 use std::collections::VecDeque;
 use std::time::Instant;
 
@@ -10,7 +13,8 @@ use crate::types::{Command, DiffOptions};
 /// of R until they fit the table.
 ///
 /// A fingerprint `fp` has footprint `f = fp mod |F|`.  The seed is a
-/// checkpoint if `f mod m == k`, and then its home slot is `f / m`.
+/// checkpoint if `f mod m == k`, and then its home slot is `f / m`, which is
+/// less than |C| because `m >= |F| / |C|`.
 struct Checkpoints {
     /// |F|, the size of the footprint universe: a prime near twice the
     /// number of seeds in R.
@@ -198,8 +202,9 @@ impl Lookback {
 /// corrected (Section 5.1).
 ///
 /// The table has |C| slots: a prime, at least `opts.q` and at least two for
-/// every `p` bytes of R, but no more than `opts.max_table`, so that the
-/// checkpoint spacing is about `p`.
+/// every `p` bytes of R, which makes the checkpoint spacing about `p`.  The
+/// first prime at or above `opts.max_table` caps it, and the spacing grows
+/// to fit.
 pub fn diff_correcting(r: &[u8], v: &[u8], opts: &DiffOptions) -> Vec<Command> {
     let p = opts.p;
     let mut commands = Vec::new();
@@ -219,8 +224,9 @@ pub fn diff_correcting(r: &[u8], v: &[u8], opts: &DiffOptions) -> Vec<Command> {
         1
     };
     let m = f_size.div_ceil(cap as u64);
-    // k is the class of the seed in the middle of V, which biases the choice
-    // toward a class that occurs in V (p. 348).
+    // k is the class of a seed of V, which biases the choice toward a class
+    // that occurs in V (p. 348).  The paper takes a seed at random; the one
+    // in the middle of V makes the delta reproducible.
     let k = if v.len() >= p {
         fingerprint(v, (v.len() / 2).min(v.len() - p), p) % f_size % m
     } else {

@@ -1,6 +1,7 @@
 // The greedy algorithm (Section 3.1, Figure 2): index every seed of R, then
 // at each position of V take the longest match that any seed with the same
-// fingerprint begins.  Optimal, and quadratic in the worst case.
+// fingerprint begins.  Optimal if p <= 2 (Section 3.3); a longer seed misses
+// the matches shorter than itself.  Quadratic in the worst case.
 
 #include "internal.h"
 
@@ -63,6 +64,7 @@ index_build(seed_index_t *ix, const uint8_t *r, size_t num_seeds, size_t p,
 	if (use_splay) {
 		delta_splay_init(&ix->tree, sizeof(chain_t));
 	} else {
+		// About one bucket for each p seeds.
 		ix->nbuckets = delta_next_prime(num_seeds / p + 1);
 		ix->head = delta_malloc(ix->nbuckets * sizeof(*ix->head));
 		ix->tail = delta_malloc(ix->nbuckets * sizeof(*ix->tail));

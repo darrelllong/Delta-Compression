@@ -393,10 +393,10 @@ done
 
 section "Real-data cross-language validation (pseudo-Shakespeare)"
 
-# About 64 KB of generated text and a version of it with a third of the
-# paragraphs exchanged and some words replaced: long matches, moved blocks,
-# and enough copies of differing length that the order of an in-place delta
-# is determined by the ordering rule and not by accident.
+# About 55 KB of generated text and a version of it with two thirds of the
+# paragraphs exchanged in pairs and some words replaced: long matches, moved
+# blocks, and enough copies of differing length that the order of an in-place
+# delta is determined by the ordering rule and not by accident.
 sh_ref="$tmpdir/sh-ref.txt"
 sh_ver="$tmpdir/sh-ver.txt"
 
@@ -475,8 +475,8 @@ else
     echo "  (skipped: python3 not found)"
 fi
 
-# The remaining sections decode deltas written by hand, so that they test the
-# decoders and not the encoders.  All carry correct CRCs unless noted.
+# The next three sections decode deltas written by hand, so that they test
+# the decoders and not the encoders.  All carry correct CRCs unless noted.
 have_fixtures=false
 if command -v python3 >/dev/null 2>&1; then
     python3 - "$tmpdir" <<'PYEOF'
@@ -517,18 +517,18 @@ def write(name, data):
     with open(os.path.join(sys.argv[1], name), 'wb') as f:
         f.write(data)
 
-# DLT\x03, which no encoder writes any longer.
+# DLT\x03, which the decoders accept and no encoder writes.
 write('hello-ref.bin', b'hello ')
 write('v3-copy.delta', v3(b'hello ', b'hello world') +
       copy(0, 0, 6) + add(6, b'world') + END)
 write('v3-add.delta', v3(b'', b'hello world') + add(0, b'hello world') + END)
-# In place: the copy's source and destination differ, so applying it as a
-# standard delta would give a different result.
+# In place: the working buffer grows from 6 bytes to 9, and the copy's source
+# and destination overlap in it.
 write('v3-inplace-ref.bin', b'abcabc')
 write('v3-inplace.delta', v3(b'abcabc', b'abcabcabc', inplace=True) +
       add(0, b'abc') + copy(0, 3, 6) + END)
 
-# DLT\x04: every command type.
+# DLT\x04: ADD, the commands that DLT\x03 lacks, and a magic that is neither.
 write('v4-add.delta', v4(b'', b'hello world') + add(0, b'hello world') + END)
 write('v4-move.delta', v4(b'', b'hellohello') +
       add(0, b'hello') + move(0, 5, 5) + END)

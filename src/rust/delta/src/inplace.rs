@@ -32,6 +32,7 @@ pub struct InplaceStats {
     pub num_adds: usize,
     /// Edges in the digraph of conflicts between copies.
     pub edges: usize,
+    /// Cycles broken, each by replacing one copy with an add.
     pub cycles_broken: usize,
     /// Copies replaced by adds, one for each cycle broken.
     pub copies_converted: usize,
@@ -149,10 +150,10 @@ enum Color {
 /// conversion.
 ///
 /// A cycle lies within a strongly connected component of more than one
-/// vertex, so only those are searched, one at a time.  The search of a
-/// component resumes where the last one stopped and never revisits a
-/// vertex colored `Done`, so all the searches together take time linear in
-/// the size of the graph.
+/// vertex, so only those are searched, one at a time.  A search never
+/// revisits a vertex colored `Done`, but it does walk again the path that
+/// led to the cycle before, so the searches together are not linear in the
+/// worst case.  The paper's bound for this policy is O(|V|^2) (Section 4.5).
 struct CycleFinder {
     /// The components with more than one vertex.
     sccs: Vec<Vec<usize>>,

@@ -16,6 +16,8 @@ size_t destination(const PlacedCommand& cmd) {
     return std::visit([](const auto& c) { return c.dst; }, cmd);
 }
 
+/// Throws unless [start, start+length) lies within [0, limit).  The test is
+/// written so that start + length cannot wrap around.
 void check_range(size_t start, size_t length, size_t limit, const char* what) {
     if (start > limit || length > limit - start) {
         throw DeltaError(std::string(what) + " out of range");

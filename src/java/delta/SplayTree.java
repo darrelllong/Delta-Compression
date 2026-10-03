@@ -4,8 +4,8 @@ package delta;
  * A splay tree from long keys to values (Sleator and Tarjan, "Self-Adjusting
  * Binary Search Trees", JACM 32(3), 1985).
  *
- * Every operation moves the key it touches to the root, so keys used often
- * stay near the top.  Operations take O(log n) amortized time.
+ * Every lookup or insertion moves the key it touches to the root, so keys
+ * used often stay near the top.  Each takes O(log n) amortized time.
  *
  * @param <V> the value type; null is not a useful value, since find returns
  *            null for a missing key

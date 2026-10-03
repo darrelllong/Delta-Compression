@@ -1,3 +1,5 @@
+//! The greedy algorithm (Section 3).
+
 use std::collections::HashMap;
 
 use super::{common_prefix, index_name, print_command_stats, seed_count};
@@ -41,9 +43,10 @@ impl SeedIndex {
 /// The greedy algorithm (Section 3.1, Figure 2).
 ///
 /// At each position of V it takes the longest match that begins anywhere in
-/// R, which is optimal under the simple cost measure (Section 3.3,
-/// Theorem 1).  It indexes every seed of R, so it takes O(|R|) space and
-/// O(|V| |R|) time in the worst case.
+/// R, which is optimal under the simple cost measure if p <= 2 (Section
+/// 3.3); a longer seed misses the matches shorter than itself.  It indexes
+/// every seed of R, so it takes O(|R|) space and O(|V| |R|) time in the
+/// worst case.
 pub fn diff_greedy(r: &[u8], v: &[u8], opts: &DiffOptions) -> Vec<Command> {
     let p = opts.p;
     let mut commands = Vec::new();

@@ -1,6 +1,6 @@
 #pragma once
 
-// Not installed.
+// The overloaded-lambda idiom for std::visit.  Not installed.
 
 namespace delta::detail {
 

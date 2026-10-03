@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+"""Plot the output of the kernel benchmarks as PNG files.
+
+Usage:
+  python3 tests/plot_benchmarks.py --kernel K --per-language P --out-dir DIR
+
+K is the saved output of tests/kernel-delta-test.sh and P that of
+tests/per-language-benchmark.sh.  Three files are written to DIR:
+benchmark_per_language.png, benchmark_kernel_ratios.png and
+benchmark_kernel_times.png.  Requires matplotlib.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +18,8 @@ import pathlib
 import re
 from typing import Dict, List, Tuple
 
+# Matplotlib wants writable configuration and cache directories, and reads
+# these variables when it is imported.
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/mplconfig")
 os.environ.setdefault("XDG_CACHE_HOME", "/tmp")
 
@@ -23,9 +35,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
+# The table rows that the two scripts print.  The kernel labels are a version
+# ("5.1.3") or a transition ("5.1.2→5.1.3"); only single-digit patch levels
+# match.
 PER_LANGUAGE_ROW = re.compile(r"^\s{2}([A-Za-z+]+)\s+([0-9.]+)s\s+([0-9.]+)s\s*$")
 KERNEL_ROW = re.compile(r"^(5\.1\.[0-9]|5\.1\.[0-9]→5\.1\.[0-9])\s+([0-9,]+)\s+([0-9,]+)\s+([.0-9]+)%\s+([0-9.]+)s\s*$")
 
+# Section headings of kernel-delta-test.sh, exactly as it prints them with
+# MAXVER=7.
 KERNEL_SECTIONS = {
     "=== From base: 5.1.0 → 5.1.{1..7} ===": "base",
     "=== Successive: 5.1.n → 5.1.n+1 ===": "successive",
@@ -48,6 +65,7 @@ COLORS = {
 
 
 def parse_per_language(path: pathlib.Path) -> List[Tuple[str, float, float]]:
+    """Return (language, onepass seconds, correcting seconds) for each row."""
     rows: List[Tuple[str, float, float]] = []
     for line in path.read_text().splitlines():
         match = PER_LANGUAGE_ROW.match(line)
@@ -61,6 +79,11 @@ def parse_per_language(path: pathlib.Path) -> List[Tuple[str, float, float]]:
 
 
 def parse_kernel(path: pathlib.Path) -> Dict[str, Dict[str, List[Tuple[str, float, float]]]]:
+    """Return data[section][algorithm] = [(version, ratio in percent, seconds)].
+
+    The version is the target of the delta: for a transition row, the
+    release after the arrow.  Raises ValueError if any table is missing.
+    """
     data: Dict[str, Dict[str, List[Tuple[str, float, float]]]] = {
         "base": {"onepass": [], "correcting": []},
         "successive": {"onepass": [], "correcting": []},
@@ -97,6 +120,7 @@ def parse_kernel(path: pathlib.Path) -> Dict[str, Dict[str, List[Tuple[str, floa
 
 
 def style() -> None:
+    """Set the matplotlib style shared by all the plots."""
     plt.style.use("seaborn-v0_8-whitegrid")
     plt.rcParams.update(
         {
@@ -114,6 +138,7 @@ def style() -> None:
 
 
 def plot_per_language(rows: List[Tuple[str, float, float]], out_path: pathlib.Path) -> None:
+    """Draw encode time by implementation as paired bars on a log scale."""
     names = [row[0] for row in rows]
     onepass = [row[1] for row in rows]
     correcting = [row[2] for row in rows]
@@ -147,6 +172,11 @@ def plot_kernel_metric(
     title: str,
     out_path: pathlib.Path,
 ) -> None:
+    """Draw one line per section for each algorithm, side by side.
+
+    metric_index selects the value plotted from the tuples of parse_kernel:
+    1 is the ratio, 2 the time.
+    """
     fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharex=False)
 
     for axis, algo in zip(axes, ["onepass", "correcting"]):

@@ -38,9 +38,10 @@ func (x *seedIndex) offsets(fp uint64) []int {
 
 // diffGreedy is the greedy algorithm (Section 3.1, Figure 2). It indexes
 // every seed of R, then at each position of V takes the longest match that
-// any seed with the same fingerprint offers. The result is optimal under the
-// simple cost measure (Theorem 1). It takes O(|V|*|R|) time in the worst
-// case and O(|R|) space.
+// any seed with the same fingerprint offers. The delta has minimum cost
+// under the simple cost measure if p <= 2; a larger p misses matches shorter
+// than p (Section 3.3). It takes O(|V|*|R|) time in the worst case and
+// O(|R|) space.
 func diffGreedy(r, v []byte, opts DiffOptions) []Command {
 	if len(v) == 0 {
 		return nil

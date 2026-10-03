@@ -114,7 +114,6 @@ TEST_CASE("identical strings produce only copies", "[integration]") {
 TEST_CASE("completely different strings", "[integration]") {
     std::vector<uint8_t> r(512), v(512);
     std::iota(r.begin(), r.end(), 0);
-    // Reverse
     std::copy(r.rbegin(), r.rend(), v.begin());
     for (auto& [name, algo] : all_algos()) {
         auto result = apply_delta(r, algo(r, v, opts(2)));
@@ -177,7 +176,6 @@ TEST_CASE("binary encoding magic v3", "[integration]") {
     std::vector<PlacedCommand> placed = {PlacedCopy{0, 0, 1}};
     std::array<uint8_t, DELTA_CRC_SIZE> zh{};
     auto encoded = encode_delta(placed, false, 1, zh, zh);
-    // First 4 bytes must be DLT\x03
     REQUIRE(encoded.size() >= 4);
     CHECK(encoded[0] == 'D');
     CHECK(encoded[1] == 'L');
@@ -189,7 +187,7 @@ TEST_CASE("binary encoding wrong magic rejected", "[integration]") {
     std::vector<PlacedCommand> placed = {PlacedCopy{0, 0, 1}};
     std::array<uint8_t, DELTA_CRC_SIZE> zh{};
     auto encoded = encode_delta(placed, false, 1, zh, zh);
-    encoded[3] = 0x02; // corrupt magic to v2
+    encoded[3] = 0x02; // DLT\x02 is not a known format
     CHECK_THROWS_AS(decode_delta(encoded), DeltaError);
 }
 
@@ -773,7 +771,7 @@ TEST_CASE("boundary byte mutations", "[edge]") {
     }
 }
 
-// rLen in [0, p): no seeds extractable, exercises all-add path.
+// |R| < p: R has no seeds, so V can only be added.
 TEST_CASE("ref shorter than seed", "[edge]") {
     const size_t p = 8;
     std::vector<uint8_t> v = {0x10, 0x11, 0x12, 0x13, 0xAA, 0xBB, 0xCC, 0xDD};
@@ -785,7 +783,7 @@ TEST_CASE("ref shorter than seed", "[edge]") {
     }
 }
 
-// Sizes at 0, 1, p-1, p+1 and around powers of two, where loop bounds go wrong.
+// Sizes 0 and 1, around p and around powers of two, where loop bounds go wrong.
 TEST_CASE("size sweep", "[edge]") {
     const size_t p = 4;
     const size_t sizes[] = {0, 1, 2, 3, 4, 5, 7, 8, 9,
@@ -826,31 +824,27 @@ TEST_CASE("encoding version-size boundaries", "[edge]") {
     }
 }
 
-// Copy/Add fields at byte-sign-extension boundaries.
+// Copy and add fields where a byte or a sign bit is crossed.
 TEST_CASE("encoding command field boundaries", "[edge]") {
     std::array<uint8_t, DELTA_CRC_SIZE> zh{};
     const size_t offsets[] = {0, 1, 127, 128, 255, 256, 257, 65535, 65536, 65537};
 
-    // src
     for (size_t src : offsets) {
         auto [dec, ip, vs, sc, dc] = decode_delta(encode_delta({PlacedCopy{src, 0, 1}}, false, 1, zh, zh));
         auto* c = std::get_if<PlacedCopy>(&dec[0]);
         REQUIRE(c); CHECK(c->src == src); CHECK(c->dst == 0); CHECK(c->length == 1);
     }
-    // dst
     for (size_t dst : offsets) {
         auto [dec, ip, vs, sc, dc] = decode_delta(encode_delta({PlacedCopy{0, dst, 1}}, false, dst + 1, zh, zh));
         auto* c = std::get_if<PlacedCopy>(&dec[0]);
         REQUIRE(c); CHECK(c->dst == dst);
     }
-    // length
     for (size_t len : {size_t{1}, size_t{127}, size_t{128}, size_t{255},
                        size_t{256}, size_t{257}, size_t{65535}, size_t{65536}}) {
         auto [dec, ip, vs, sc, dc] = decode_delta(encode_delta({PlacedCopy{0, 0, len}}, false, len, zh, zh));
         auto* c = std::get_if<PlacedCopy>(&dec[0]);
         REQUIRE(c); CHECK(c->length == len);
     }
-    // add dst
     for (size_t dst : offsets) {
         auto [dec, ip, vs, sc, dc] = decode_delta(encode_delta({PlacedAdd{dst, {0xFF}}}, false, dst + 1, zh, zh));
         auto* a = std::get_if<PlacedAdd>(&dec[0]);
@@ -859,7 +853,7 @@ TEST_CASE("encoding command field boundaries", "[edge]") {
     }
 }
 
-// |V| = |R| + 1: write window extends one byte past the ref buffer.
+// |V| = |R| + 1: the last byte written lies past the end of R.
 TEST_CASE("inplace |V|=|R|+1 tight", "[edge]") {
     for (size_t n : {size_t{1},  size_t{2},  size_t{3},  size_t{4},
                      size_t{7},  size_t{8},  size_t{15}, size_t{16},
@@ -874,7 +868,7 @@ TEST_CASE("inplace |V|=|R|+1 tight", "[edge]") {
     }
 }
 
-// |V| = |R| - 1: write window ends one byte short of the ref buffer.
+// |V| = |R| - 1: the last byte of R is not written.
 TEST_CASE("inplace |V|=|R|-1 tight", "[edge]") {
     for (size_t n : {size_t{2},  size_t{3},  size_t{4},  size_t{5},
                      size_t{8},  size_t{9},  size_t{15}, size_t{16},
@@ -888,7 +882,8 @@ TEST_CASE("inplace |V|=|R|-1 tight", "[edge]") {
     }
 }
 
-// |V| = |R|, half-swap: write window fixed; exercises same-size cycle-breaking.
+// V is R with its halves exchanged.  If both halves are copied, each copy
+// reads what the other writes: a cycle that must be broken.
 TEST_CASE("inplace |V|=|R| same-size swap", "[edge]") {
     for (size_t n : {size_t{2},  size_t{4},   size_t{8},   size_t{16},
                      size_t{32}, size_t{64},  size_t{128}, size_t{256}}) {
@@ -904,12 +899,13 @@ TEST_CASE("inplace |V|=|R| same-size swap", "[edge]") {
     }
 }
 
-// v = 1 byte: copy (byte in R) and add (byte absent from R).
+// A one-byte V is shorter than a seed (p = 2), so it is encoded as an add
+// whether or not the byte occurs in R.
 TEST_CASE("inplace v=1 byte", "[edge]") {
     std::vector<uint8_t> r(64);
     std::iota(r.begin(), r.end(), 0);
-    std::vector<uint8_t> v_copy = {r[32]};  // in R: a copy
-    std::vector<uint8_t> v_add  = {0xAB};   // not in R: an add
+    std::vector<uint8_t> v_copy = {r[32]};  // occurs in R
+    std::vector<uint8_t> v_add  = {0xAB};   // does not occur in R
     for (auto& [name, algo] : all_algos())
         for (auto pol : all_policies()) {
             REQUIRE(inplace_roundtrip(algo, r, v_copy, pol, 2) == v_copy);
@@ -917,7 +913,7 @@ TEST_CASE("inplace v=1 byte", "[edge]") {
         }
 }
 
-// p = 1, 2, |R|, |R|+1: exercises no-seed boundary.
+// p = 1, 2, |R| and |R| + 1; the last leaves R with no seeds.
 TEST_CASE("seed length boundaries", "[edge]") {
     std::vector<uint8_t> r = {'A','B','C','D','E','F','G','H',
                               'I','J','K','L','M','N','O','P'};
@@ -928,7 +924,7 @@ TEST_CASE("seed length boundaries", "[edge]") {
         for (auto& [name, algo] : all_algos())
             REQUIRE(apply_delta(r, algo(r, v, opts(p))) == v);
     }
-    // p > |R| with varying v sizes
+    // p > |R|, with V shorter and longer than R.
     std::vector<uint8_t> v_short = {'Q','W'};
     std::vector<uint8_t> v_long  = {'Q','W','I','J','K','L','M','N','O',
                                     'B','C','D','E','F','G','H','Z','D',
@@ -1023,7 +1019,6 @@ TEST_CASE("large format BIGADD command byte", "[large]") {
 }
 
 TEST_CASE("large format MOVE roundtrip", "[large]") {
-    // Write "hello" via ADD to offset 0, then MOVE it to offset 5.
     std::vector<uint8_t> hello = {'h','e','l','l','o'};
     std::vector<PlacedCommand> cmds = {
         PlacedAdd{0, hello},
@@ -1043,7 +1038,7 @@ TEST_CASE("large format MOVE command byte", "[large]") {
         PlacedMove{0, 1, 1},
     };
     auto delta_bytes = encode_delta_large(cmds, false, 2, zh, zh);
-    // Second command (after ADD): ADD=1B+4B+4B+1B=10B, then MOVE command byte
+    // The ADD before it takes 10 bytes: opcode, dst(4), len(4), one data byte.
     size_t move_off = DELTA_HEADER_SIZE_LARGE + 1 + DELTA_ADD_HEADER + 1;
     CHECK(delta_bytes[move_off] == DELTA_CMD_MOVE);
 }
@@ -1056,7 +1051,6 @@ TEST_CASE("large format BIGMOVE command byte", "[large]") {
 }
 
 TEST_CASE("large format MOVE overlap rejected on decode", "[large]") {
-    // Hand-craft a DLT\x04 delta with MOVE where src+length > dst.
     std::vector<uint8_t> buf;
     buf.insert(buf.end(), DELTA_MAGIC_LARGE, DELTA_MAGIC_LARGE + DELTA_MAGIC_SIZE);
     buf.push_back(0); // flags
@@ -1064,7 +1058,7 @@ TEST_CASE("large format MOVE overlap rejected on decode", "[large]") {
     for (int i = 7; i >= 0; --i) buf.push_back(i == 0 ? 10 : 0);
     for (int i = 0; i < 16; ++i) buf.push_back(0); // crcs
     buf.push_back(DELTA_CMD_MOVE);
-    // MOVE: src=5, dst=8, length=4, so src+length=9 > dst=8
+    // src=5, dst=8, length=4: the source runs one byte into the destination.
     auto pu32 = [&](uint32_t v) {
         buf.push_back(v >> 24); buf.push_back(v >> 16);
         buf.push_back(v >> 8);  buf.push_back(v);
@@ -1075,7 +1069,6 @@ TEST_CASE("large format MOVE overlap rejected on decode", "[large]") {
 }
 
 TEST_CASE("small format rejects large command bytes", "[large]") {
-    // Hand-craft a DLT\x03 delta with BIGCOPY command byte (3).
     std::vector<uint8_t> buf;
     buf.insert(buf.end(), DELTA_MAGIC, DELTA_MAGIC + DELTA_MAGIC_SIZE);
     buf.push_back(0); // flags

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for delta.py — differential compression with in-place reconstruction.
+"""Tests for delta.py.
 
 Run:  python3 test_delta.py [-v]
 """
@@ -27,7 +27,7 @@ from delta import (
 
 
 def roundtrip(algo_fn, R, V, p=2, q=TABLE_SIZE):
-    """Standard encode → binary → decode → apply, return recovered bytes."""
+    """Diff, encode as DLT\\x03, decode and apply; return the result."""
     cmds = algo_fn(R, V, p=p, q=q)
     placed = place_commands(cmds)
     delta = encode_delta(placed, inplace=False, version_size=len(V),
@@ -41,14 +41,14 @@ def roundtrip(algo_fn, R, V, p=2, q=TABLE_SIZE):
 
 
 def inplace_roundtrip(algo_fn, R, V, policy='localmin', p=4):
-    """Encode → make_inplace → apply_inplace, return recovered bytes."""
+    """Diff, convert to in-place and apply in a copy of R; return the result."""
     cmds = algo_fn(R, V, p=p)
     ip = make_inplace(R, cmds, policy=policy)
     return apply_placed_inplace(R, ip, len(V))
 
 
 def inplace_binary_roundtrip(algo_fn, R, V, policy='localmin', p=4):
-    """Encode → make_inplace → binary → decode → apply, return recovered."""
+    """As inplace_roundtrip, but through an encoded in-place DLT\\x03 delta."""
     cmds = algo_fn(R, V, p=p)
     ip = make_inplace(R, cmds, policy=policy)
     delta = encode_delta(ip, inplace=True, version_size=len(V),
@@ -62,7 +62,7 @@ def inplace_binary_roundtrip(algo_fn, R, V, policy='localmin', p=4):
 
 
 class TestPaperExample(unittest.TestCase):
-    """Section 2.1.1 of Ajtai et al. 2002."""
+    """The example strings of Section 2.1.1 of Ajtai et al. 2002."""
 
     R = b"ABCDEFGHIJKLMNOP"
     V = b"QWIJKLMNOBCDEFGHZDEFGHIJKL"
@@ -143,7 +143,7 @@ class TestBinaryRoundTrip(unittest.TestCase):
 
 
 class TestBinaryEncoding(unittest.TestCase):
-    """Unified binary format encode/decode roundtrip."""
+    """DLT\\x03 encoding and decoding of placed commands."""
 
     _src = b'\x00' * 8
     _dst = b'\xff' * 8
@@ -226,6 +226,7 @@ class TestBinaryEncodingErrors(unittest.TestCase):
 
 
 class TestLargeCopy(unittest.TestCase):
+    """A copy with large field values in DLT\\x03; not the DLT\\x04 format."""
 
     _sh = b'\x01' * 8
     _dh = b'\x02' * 8
@@ -242,6 +243,7 @@ class TestLargeCopy(unittest.TestCase):
 
 
 class TestLargeAdd(unittest.TestCase):
+    """A 1024-byte add in DLT\\x03; not the DLT\\x04 format."""
 
     _sh = b'\x03' * 8
     _dh = b'\x04' * 8
@@ -494,7 +496,11 @@ class TestInPlaceFormatDetection(unittest.TestCase):
 
 
 def _make_blocks():
-    """8 blocks with distinct byte patterns and varying sizes (200–5000)."""
+    """Return eight blocks of 200 to 4999 bytes.
+
+    Each is the same 256-byte ramp at a different phase, so matches are
+    not confined to block boundaries.
+    """
     sizes = [200, 500, 1234, 3000, 800, 4999, 1500, 2750]
     return [bytes((i * 37 + j) & 0xFF for j in range(sz))
             for i, sz in enumerate(sizes)]
@@ -575,7 +581,7 @@ class TestInPlaceVarlenJunk(unittest.TestCase):
 
 
 class TestInPlaceVarlenDropDup(unittest.TestCase):
-    """Drop some blocks, duplicate others — |V| != |R|."""
+    """Drop some blocks, duplicate others: |V| != |R|."""
 
     @classmethod
     def setUpClass(cls):
@@ -595,7 +601,7 @@ class TestInPlaceVarlenDropDup(unittest.TestCase):
 
 
 class TestInPlaceVarlenDoubleSized(unittest.TestCase):
-    """Version is 2x the reference — all blocks appear twice in shuffled order."""
+    """Version is twice the reference: every block appears twice, shuffled."""
 
     @classmethod
     def setUpClass(cls):
@@ -618,7 +624,7 @@ class TestInPlaceVarlenDoubleSized(unittest.TestCase):
 
 
 class TestInPlaceVarlenSubset(unittest.TestCase):
-    """Version is much smaller — just two blocks."""
+    """Version is much smaller: two blocks."""
 
     @classmethod
     def setUpClass(cls):
@@ -667,7 +673,7 @@ class TestInPlaceVarlenHalfBlockScramble(unittest.TestCase):
     def test_correcting_const(self): self._run(diff_correcting, 'constant')
     def test_correcting_lmin(self):  self._run(diff_correcting, 'localmin')
 
-    # binary round-trip too (hardest case)
+    # The same through the binary format.
     def test_greedy_const_bin(self):    self._run_binary(diff_greedy, 'constant')
     def test_greedy_lmin_bin(self):     self._run_binary(diff_greedy, 'localmin')
     def test_onepass_const_bin(self):   self._run_binary(diff_onepass, 'constant')
@@ -677,7 +683,7 @@ class TestInPlaceVarlenHalfBlockScramble(unittest.TestCase):
 
 
 class TestInPlaceVarlenRandomTrials(unittest.TestCase):
-    """20 random trials: random subset of 3–8 blocks in random order."""
+    """20 random trials: random subset of 3 to 8 blocks in random order."""
 
     @classmethod
     def setUpClass(cls):
@@ -706,19 +712,17 @@ class TestInPlaceVarlenRandomTrials(unittest.TestCase):
 
 
 def generate_transposed(num_blocks, block_size, num_transpositions, seed=42):
-    """Generate reference and version data with controlled transpositions.
+    """Return (R, V, swaps) where V is R with its blocks permuted.
 
-    Creates num_blocks distinct blocks of block_size bytes each.  The version
-    is formed by applying num_transpositions random adjacent-pair swaps to
-    the block ordering.  Each swap of adjacent same-sized blocks in place
-    creates a CRWI cycle (copy A→B and copy B→A each read what the other
-    writes), so this directly controls the number of cycles the in-place
-    converter must break.
-
-    Returns (R, V, num_swaps_applied).
+    R is num_blocks blocks of block_size bytes.  V is R after
+    num_transpositions swaps of two blocks chosen at random; swaps counts
+    those that chose two different blocks.  Swapping two equal-sized
+    blocks makes a CRWI cycle of two copies, each reading what the other
+    writes.  Later swaps compose with earlier ones, so the number of
+    cycles is not simply the number of swaps.
     """
     rng = random.Random(seed)
-    # Generate distinct blocks (different first bytes guarantee uniqueness)
+    # Each block starts with its index, so no two are equal (num_blocks <= 256).
     blocks = []
     for i in range(num_blocks):
         blk = bytes([i % 256] * 4) + bytes(rng.getrandbits(8) for _ in range(block_size - 4))
@@ -726,11 +730,9 @@ def generate_transposed(num_blocks, block_size, num_transpositions, seed=42):
 
     R = b''.join(blocks)
 
-    # Build version by applying transpositions to a permutation
     perm = list(range(num_blocks))
     swaps_applied = 0
     for _ in range(num_transpositions):
-        # Pick a random pair (not necessarily adjacent — any swap)
         a = rng.randint(0, num_blocks - 1)
         b = rng.randint(0, num_blocks - 1)
         if a != b:
@@ -742,22 +744,21 @@ def generate_transposed(num_blocks, block_size, num_transpositions, seed=42):
 
 
 class TestInPlaceTranspositions(unittest.TestCase):
-    """Test in-place reconstruction with increasing numbers of transpositions.
+    """In-place reconstruction with increasing numbers of transpositions.
 
-    Each transposition of equal-sized blocks creates a potential CRWI cycle,
-    forcing the in-place converter to break cycles by converting copies to
-    adds.  This verifies correctness under cycle-heavy workloads.
+    Transposed equal-sized blocks make CRWI cycles, which the converter
+    must break by turning copies into adds.
     """
 
     BLOCK_SIZE = 200
     CONFIGS = [
         # (num_blocks, num_transpositions, seed)
-        (8,   1,  100),   # 1 swap — 1 cycle
-        (8,   4,  101),   # 4 swaps — multiple cycles
-        (16,  8,  102),   # larger with many swaps
-        (32, 16,  103),   # 32 blocks, 16 swaps
-        (32, 31,  104),   # near-total scramble
-        (64, 50,  105),   # 64 blocks, heavy scramble
+        (8,   1,  100),
+        (8,   4,  101),
+        (16,  8,  102),
+        (32, 16,  103),
+        (32, 31,  104),
+        (64, 50,  105),
     ]
 
     @classmethod
@@ -785,7 +786,7 @@ class TestInPlaceTranspositions(unittest.TestCase):
 
 
 class TestInPlaceTranspositionsBinary(unittest.TestCase):
-    """Same as above but through the full binary encode/decode path."""
+    """The cases of TestInPlaceTranspositions through the binary format."""
 
     @classmethod
     def setUpClass(cls):
@@ -812,8 +813,7 @@ class TestInPlaceTranspositionsBinary(unittest.TestCase):
 
 
 class TestBothPoliciesCorrectOnTranspositions(unittest.TestCase):
-    """Both cycle policies produce correct output on cycle-heavy workloads
-    with variable-sized blocks."""
+    """Both cycle policies on transposed blocks of unequal sizes."""
 
     @classmethod
     def setUpClass(cls):
@@ -842,8 +842,8 @@ class TestBothPoliciesCorrectOnTranspositions(unittest.TestCase):
 
 
 class TestLocalminPicksSmallest(unittest.TestCase):
-    """When blocks have different sizes, localmin should convert fewer bytes
-    than constant (or at worst the same)."""
+    """On the reversed blocks, localmin converts no more bytes to adds than
+    constant does."""
 
     @classmethod
     def setUpClass(cls):
@@ -861,7 +861,7 @@ class TestLocalminPicksSmallest(unittest.TestCase):
 
 
 class TestGetDR(unittest.TestCase):
-    """Factor n into d * 2^r."""
+    """_get_d_r factors n into d * 2^r with d odd."""
 
     def test_power_of_two(self):
         self.assertEqual(_get_d_r(8), (1, 3))
@@ -880,22 +880,21 @@ class TestGetDR(unittest.TestCase):
 
 
 class TestWitness(unittest.TestCase):
-    """The witness loop correctly identifies composites and primes."""
+    """_witness finds a witness for a composite and none for a prime."""
 
     def test_composite_has_witness(self):
-        # 2 is always a witness for even composites and many odd ones
-        self.assertTrue(_witness(2, 9))     # 9 = 3^2
+        self.assertTrue(_witness(2, 9))
 
     def test_prime_has_no_witness(self):
-        # For a true prime, no a in [2, n-1) is a witness
+        # A prime has no witness in [2, n-1).
         for a in range(2, 12):
             self.assertFalse(_witness(a, 13), f"a={a} should not be a witness for 13")
 
 
 class TestIsPrime(unittest.TestCase):
-    """Deterministic Miller-Rabin primality."""
+    """_is_prime, the deterministic Miller-Rabin test."""
 
-    # First 50 primes
+    # The first 50 primes.
     KNOWN_PRIMES = [
         2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47,
         53, 59, 61, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113,
@@ -916,8 +915,7 @@ class TestIsPrime(unittest.TestCase):
             self.assertFalse(_is_prime(c), f"{c} should be composite")
 
     def test_large_primes(self):
-        # Large primes used as hash table sizes
-        self.assertTrue(_is_prime(1048573))    # largest prime < 2^20
+        self.assertTrue(_is_prime(1048573))    # TABLE_SIZE, the largest prime < 2^20
         self.assertTrue(_is_prime(2097143))    # largest prime < 2^21
         self.assertTrue(_is_prime(104729))     # 10000th prime
 
@@ -929,7 +927,6 @@ class TestIsPrime(unittest.TestCase):
             self.assertFalse(_is_prime(c), f"Carmichael number {c} should be composite")
 
     def test_mersenne_primes(self):
-        # 2^p - 1 for known Mersenne prime exponents
         for p in [2, 3, 5, 7, 13, 17, 19]:
             mp = (1 << p) - 1
             self.assertTrue(_is_prime(mp), f"2^{p}-1 = {mp} should be prime")
@@ -944,7 +941,7 @@ class TestIsPrime(unittest.TestCase):
 
 
 class TestNextPrime(unittest.TestCase):
-    """next_prime(n) returns the smallest prime >= n."""
+    """_next_prime(n) returns the smallest prime >= n."""
 
     def test_exact_prime(self):
         self.assertEqual(_next_prime(7), 7)
@@ -963,25 +960,28 @@ class TestNextPrime(unittest.TestCase):
         self.assertEqual(_next_prime(1000), 1009)
 
     def test_consecutive(self):
-        # Verify next_prime produces a monotonically non-decreasing
-        # sequence of primes
+        # The results are primes, each >= its argument, and never decrease.
+        # That no prime is skipped is not checked here.
         p = 2
         for n in range(2, 500):
             np = _next_prime(n)
             self.assertGreaterEqual(np, n)
             self.assertTrue(_is_prime(np), f"next_prime({n}) = {np} should be prime")
-            # No prime was skipped
             if n > p:
                 self.assertGreaterEqual(np, p)
             p = np
 
 
 class TestCheckpointing(unittest.TestCase):
-    """Correcting algorithm uses checkpointing (Section 8) for bounded memory."""
+    """The correcting algorithm with checkpointing (Section 8).
+
+    q is only a floor on the table size |C|, which grows with |R|; the
+    comments below give the |C| and m that each case really gets.
+    """
 
     def test_tiny_table_roundtrip(self):
-        """With a tiny table (q=7), checkpointing still produces correct output."""
-        R = b'ABCDEFGHIJKLMNOP' * 20   # 320 bytes
+        """A small table (q=7) with checkpointing produces correct output."""
+        R = b'ABCDEFGHIJKLMNOP' * 20   # 320 bytes: |C| = 41, m = 15
         V = R[:160] + b'XXXXYYYY' + R[160:]
         cmds = diff_correcting(R, V, p=16, q=7)
         recovered = apply_delta(R, cmds)
@@ -992,6 +992,7 @@ class TestCheckpointing(unittest.TestCase):
         rng = random.Random(42)
         R = bytes(rng.getrandbits(8) for _ in range(2000))
         V = R[:500] + bytes(rng.getrandbits(8) for _ in range(50)) + R[500:]
+        # |C| = 251 (m = 16) for the first three, then q itself (m = 4, 1).
         for q in [7, 31, 101, 1009, TABLE_SIZE]:
             cmds = diff_correcting(R, V, p=16, q=q)
             recovered = apply_delta(R, cmds)
@@ -1006,8 +1007,8 @@ class TestCheckpointing(unittest.TestCase):
         self.assertEqual(recovered, V)
 
     def test_checkpoint_long_matches(self):
-        """Checkpointing finds long matches even with tiny tables."""
-        # 10 KB of data with a 100-byte insertion in the middle
+        """Checkpointing on long matches with a small table (q=31)."""
+        # A 100-byte insertion in the middle; |C| = 1279, m = 17.
         R = bytes(range(256)) * 40  # 10240 bytes
         V = R[:5000] + b'X' * 100 + R[5000:]
         cmds = diff_correcting(R, V, p=16, q=31)
@@ -1016,7 +1017,7 @@ class TestCheckpointing(unittest.TestCase):
 
 
 class TestCrc64(unittest.TestCase):
-    """CRC-64/XZ helper correctness and check values."""
+    """_crc64_xz against the CRC-64/XZ check values."""
 
     def test_output_length(self):
         self.assertEqual(len(_crc64_xz(b'')), DELTA_CRC_SIZE)
@@ -1029,17 +1030,17 @@ class TestCrc64(unittest.TestCase):
         self.assertNotEqual(_crc64_xz(b'hello'), _crc64_xz(b'world'))
 
     def test_empty_input(self):
-        # CRC-64/XZ of empty input is 0x0000000000000000.
+        # The CRC-64/XZ of empty input is 0.
         self.assertEqual(_crc64_xz(b''), bytes(8))
 
     def test_check_value(self):
-        # CRC-64/XZ standard check value: CRC of b"123456789" = 0x995DC9BBDF1939FA.
+        # The standard check value: the CRC of b"123456789" is 0x995DC9BBDF1939FA.
         expected = bytes.fromhex('995dc9bbdf1939fa')
         self.assertEqual(_crc64_xz(b'123456789'), expected)
 
 
 class TestCrcEmbeddedInDelta(unittest.TestCase):
-    """CRC values round-trip correctly through the binary format."""
+    """The CRCs in the header survive encoding and decoding."""
 
     def test_real_crc_roundtrip(self):
         R = b"reference data for testing " * 5
@@ -1071,21 +1072,21 @@ class TestCrcEmbeddedInDelta(unittest.TestCase):
 
 
 class TestSingleByte(unittest.TestCase):
-    """p=1 with 1-byte inputs exercises the minimum-seed-length path."""
+    """One-byte inputs with p=1, the shortest seed."""
 
     def _run(self, fn):
-        # identical single bytes → at least one copy, no adds
+        # Identical bytes: no adds.
         cmds = fn(b'\xAB', b'\xAB', p=1)
         self.assertEqual(apply_delta(b'\xAB', cmds), b'\xAB')
         self.assertFalse(any(isinstance(c, AddCmd) for c in cmds))
 
-        # different single bytes → correct output
+        # Different bytes.
         self.assertEqual(apply_delta(b'\xAB', fn(b'\xAB', b'\xCD', p=1)), b'\xCD')
 
-        # v empty → zero commands
+        # Empty V: no commands.
         self.assertEqual(fn(b'\xAB', b'', p=1), [])
 
-        # r empty → correct output (all-add)
+        # Empty R.
         self.assertEqual(apply_delta(b'', fn(b'', b'\xAB', p=1)), b'\xAB')
 
     def test_greedy(self):     self._run(diff_greedy)
@@ -1094,7 +1095,7 @@ class TestSingleByte(unittest.TestCase):
 
 
 class TestBoundaryByteMutations(unittest.TestCase):
-    """Flip the first/last byte, append, and drop — covers prefix/suffix match paths."""
+    """Changes at the first and last byte of V: flip, append, drop."""
 
     _base = bytes(range(64))
 
@@ -1114,7 +1115,7 @@ class TestBoundaryByteMutations(unittest.TestCase):
 
 
 class TestRefShorterThanSeed(unittest.TestCase):
-    """When |R| < p the encoder has no seeds and falls back to all-adds."""
+    """When |R| < p there are no seeds in R and the delta is all adds."""
 
     def _run(self, fn):
         p = 16
@@ -1129,7 +1130,7 @@ class TestRefShorterThanSeed(unittest.TestCase):
 
 
 class TestSizeSweep(unittest.TestCase):
-    """Roundtrip at sizes spanning zero, one, seed boundaries, and power-of-2 edges."""
+    """Round trips at sizes around zero, the seed length and powers of two."""
 
     def _run(self, fn):
         p = 4
@@ -1145,7 +1146,7 @@ class TestSizeSweep(unittest.TestCase):
 
 
 class TestEncodingVersionSizeBoundaries(unittest.TestCase):
-    """version_size at byte and power-of-two boundaries round-trips intact."""
+    """version_size survives encoding at byte and power-of-two boundaries."""
 
     _z = b'\x00' * 8
 
@@ -1159,7 +1160,7 @@ class TestEncodingVersionSizeBoundaries(unittest.TestCase):
 
 
 class TestEncodingCommandFieldBoundaries(unittest.TestCase):
-    """Copy and add command fields at encoding boundary values round-trip intact."""
+    """Copy and add fields survive encoding at byte and power-of-two boundaries."""
 
     _z = b'\x00' * 8
 
@@ -1198,7 +1199,7 @@ class TestEncodingCommandFieldBoundaries(unittest.TestCase):
 
 
 class TestInplaceVersionOneLargerTight(unittest.TestCase):
-    """|V| = |R| + 1 exercises in-place when the version is one byte longer."""
+    """In-place reconstruction when |V| = |R| + 1."""
 
     def _run(self, fn, pol):
         for n in [1, 2, 3, 4, 7, 8, 15, 16, 17, 31, 32, 63, 64]:
@@ -1217,7 +1218,7 @@ class TestInplaceVersionOneLargerTight(unittest.TestCase):
 
 
 class TestInplaceVersionOneSmallerTight(unittest.TestCase):
-    """|V| = |R| - 1 exercises in-place when the version is one byte shorter."""
+    """In-place reconstruction when |V| = |R| - 1."""
 
     def _run(self, fn, pol):
         for n in [2, 3, 4, 5, 8, 9, 15, 16, 17, 31, 32, 65]:
@@ -1236,7 +1237,7 @@ class TestInplaceVersionOneSmallerTight(unittest.TestCase):
 
 
 class TestInplaceVersionSameSizeTight(unittest.TestCase):
-    """|V| = |R|: in-place reconstruction with the halves swapped."""
+    """In-place reconstruction when |V| = |R|: the halves of R swapped."""
 
     def _run(self, fn, pol):
         for n in [2, 4, 8, 16, 32, 64, 128, 256]:
@@ -1256,13 +1257,13 @@ class TestInplaceVersionSameSizeTight(unittest.TestCase):
 
 
 class TestInplaceVersionOneByteMin(unittest.TestCase):
-    """V = 1 byte: minimum version size for in-place reconstruction."""
+    """In-place reconstruction of a one-byte version."""
 
     def _run(self, fn, pol):
-        # copy path: R contains the target byte
+        # A copy: R contains the byte.
         self.assertEqual(
             inplace_roundtrip(fn, b'\xAB' * 16, b'\xAB', policy=pol, p=1), b'\xAB')
-        # add path: p=2 means no seed fits in a 1-byte V
+        # An add: with p=2 a one-byte V has no seed.
         self.assertEqual(
             inplace_roundtrip(fn, b'\x00' * 16, b'\xFF', policy=pol, p=2), b'\xFF')
 
@@ -1276,7 +1277,7 @@ class TestInplaceVersionOneByteMin(unittest.TestCase):
 
 
 class TestSeedLengthBoundaries(unittest.TestCase):
-    """p = 1, 2, |R|, and |R|+1 exercise seed-length edge cases."""
+    """Seed lengths 1, 2, |R| and |R| + 1."""
 
     _R = bytes(range(16)) * 4                          # 64 bytes, repeating
     _V = bytes(range(16)) * 3 + bytes(range(15, -1, -1))  # last block reversed
@@ -1294,7 +1295,7 @@ class TestSeedLengthBoundaries(unittest.TestCase):
 
 
 class TestRealDataRoundTrip(unittest.TestCase):
-    """Roundtrip actual repository files instead of synthetic byte literals."""
+    """Round trip from README.md to HOWTO.md, the repository's own files."""
 
     @classmethod
     def setUpClass(cls):
@@ -1315,7 +1316,7 @@ def _zero_crc():
 
 
 def _roundtrip_large(commands, version_size, R=b''):
-    """Encode large format, decode, apply; return recovered bytes."""
+    """Encode as DLT\\x04, decode and apply to R; return the result."""
     delta = encode_delta_large(commands, version_size=version_size,
                                src_crc=_zero_crc(), dst_crc=_zero_crc())
     cmds2, is_ip, vs, _, _ = decode_delta(delta)
@@ -1327,7 +1328,7 @@ def _roundtrip_large(commands, version_size, R=b''):
 
 
 class TestDltLargeHeader(unittest.TestCase):
-    """DLT\x04 header: magic, u64 version_size, flags."""
+    """The DLT\\x04 header: magic, flags, u64 version size."""
 
     def test_magic_large(self):
         delta = encode_delta_large([], version_size=0,
@@ -1340,7 +1341,6 @@ class TestDltLargeHeader(unittest.TestCase):
         self.assertEqual(delta[:4], DELTA_MAGIC)
 
     def test_version_size_u64_large(self):
-        # version_size > 2^32 stored and recovered correctly
         big = 2**32 + 999
         delta = encode_delta_large([], version_size=big,
                                    src_crc=_zero_crc(), dst_crc=_zero_crc())
@@ -1348,7 +1348,7 @@ class TestDltLargeHeader(unittest.TestCase):
         self.assertEqual(vs, big)
 
     def test_header_size_large(self):
-        # Empty delta: 29-byte header + 1-byte END = 30 bytes
+        # header (29) + END byte (1)
         delta = encode_delta_large([], version_size=0,
                                    src_crc=_zero_crc(), dst_crc=_zero_crc())
         self.assertEqual(len(delta), 30)
@@ -1361,7 +1361,7 @@ class TestDltLargeHeader(unittest.TestCase):
 
 
 class TestDltLargeCopy(unittest.TestCase):
-    """COPY vs BIGCOPY selection and round-trip."""
+    """The choice between COPY and BIGCOPY."""
 
     def test_copy_small_fields(self):
         R = b'ABCDEFGH'
@@ -1370,17 +1370,15 @@ class TestDltLargeCopy(unittest.TestCase):
         self.assertEqual(result, R)
 
     def test_bigcopy_large_src(self):
-        # src > U32_MAX forces BIGCOPY; we can't actually allocate that,
-        # so verify the command type byte is 0x03
+        # A src above 2^32 - 1 needs BIGCOPY.  No reference that large is
+        # allocated; only the command's type byte is checked.
         big_src = 2**32 + 1
         cmds = [PlacedCopy(src=big_src, dst=0, length=1)]
         delta = encode_delta_large(cmds, version_size=1,
                                    src_crc=_zero_crc(), dst_crc=_zero_crc())
-        # Find the command byte after the 29-byte header
         self.assertEqual(delta[29], 3)  # DELTA_CMD_BIGCOPY = 3
 
     def test_bigcopy_roundtrip_decode(self):
-        # Decode a hand-crafted BIGCOPY and verify fields
         header = DELTA_MAGIC_LARGE + bytes([0]) + struct.pack('>Q', 100)
         header += _zero_crc() + _zero_crc()
         big_src = 2**32 + 7
@@ -1397,7 +1395,7 @@ class TestDltLargeCopy(unittest.TestCase):
 
 
 class TestDltLargeAdd(unittest.TestCase):
-    """ADD vs BIGADD selection and round-trip."""
+    """The choice between ADD and BIGADD."""
 
     def test_add_small(self):
         cmds = [PlacedAdd(dst=0, data=b'hello')]
@@ -1413,10 +1411,9 @@ class TestDltLargeAdd(unittest.TestCase):
 
 
 class TestDltLargeMove(unittest.TestCase):
-    """MOVE and BIGMOVE commands."""
+    """MOVE and BIGMOVE, which copy from the output already written."""
 
     def test_move_basic(self):
-        # Write "ABC" then MOVE it to position 3 → "ABCABC"
         R = b''
         cmds = [
             PlacedAdd(dst=0, data=b'ABC'),
@@ -1442,16 +1439,16 @@ class TestDltLargeMove(unittest.TestCase):
         self.assertEqual(apply_placed(b'', cmds), b'ABCABC')
 
     def test_move_overlap_rejected(self):
-        # src + length > dst: decoder must reject
+        # A move may read only what is already written: src + length <= dst.
         header = DELTA_MAGIC_LARGE + bytes([0]) + struct.pack('>Q', 10)
         header += _zero_crc() + _zero_crc()
-        # MOVE src=5 dst=7 length=4 → src+length=9 > dst=7
+        # MOVE src=5 dst=7 length=4: 5 + 4 > 7.
         body = bytes([5]) + struct.pack('>III', 5, 7, 4) + bytes([0])
         with self.assertRaises(ValueError):
             decode_delta(header + body)
 
     def test_move_chained(self):
-        # ADD "X", then MOVE to fill a repeated pattern
+        # Each move doubles the output.
         cmds = [
             PlacedAdd(dst=0, data=b'X'),
             PlacedMove(src=0, dst=1, length=1),
@@ -1463,7 +1460,7 @@ class TestDltLargeMove(unittest.TestCase):
 
 
 class TestDltLargeRejected(unittest.TestCase):
-    """DLT\x03 decoders reject v4 commands; v3 encoder rejects PlacedMove."""
+    """DLT\\x04 commands are rejected in a DLT\\x03 delta, by encoder and decoder."""
 
     def test_v3_encoder_rejects_move(self):
         cmds = [PlacedMove(src=0, dst=3, length=3)]
@@ -1472,7 +1469,6 @@ class TestDltLargeRejected(unittest.TestCase):
                          src_crc=_zero_crc(), dst_crc=_zero_crc())
 
     def test_bigcopy_in_v3_stream_rejected(self):
-        # Hand-craft a DLT\x03 file with a BIGCOPY byte — must be rejected
         header = DELTA_MAGIC + bytes([0]) + struct.pack('>I', 10)
         header += _zero_crc() + _zero_crc()
         body = bytes([3]) + struct.pack('>QQQ', 0, 0, 5) + bytes([0])
@@ -1487,7 +1483,7 @@ class TestDltLargeRejected(unittest.TestCase):
 
 
 class TestDltLargeAlgoRoundtrip(unittest.TestCase):
-    """Full algo → encode v4 → decode → apply round-trips."""
+    """Each algorithm round trips through DLT\\x04."""
 
     def _roundtrip_algo(self, algo_fn, R, V):
         cmds = algo_fn(R, V, p=4)

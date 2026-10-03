@@ -14,10 +14,10 @@ import static delta.Types.*;
  * An in-place delta rebuilds V in the buffer that holds R, so a copy must
  * run before any command that overwrites the bytes it reads.  Copies are the
  * vertices of a digraph with an edge from i to j when i reads what j writes
- * (a CRWI digraph), and they are emitted in a topological order of it.  The
- * digraph can have cycles; each is broken by turning one of its copies into
- * an add, whose bytes are taken from R now and so no longer depend on the
- * buffer.  Adds read nothing and run last.
+ * (a CRWI digraph, Section 4.2), and they are emitted in a topological order
+ * of it.  The digraph can have cycles; each is broken by turning one of its
+ * copies into an add, whose bytes are taken from R at conversion and so do
+ * not depend on the buffer.  Adds read nothing and run last.
  *
  * Among the copies that are ready, the shortest goes first, and of equally
  * short ones the first in V; this fixes the order, which is otherwise free.
@@ -53,7 +53,7 @@ final class Inplace {
 
     // Where the search for the next cycle resumes.  Components before
     // sccCursor, and vertices of sccs[sccCursor] before scanPos, are done with.
-    private final byte[] color;
+    private final byte[] color; // UNVISITED, ON_PATH or DONE
     private int sccCursor, scanPos;
     private int firstLeft; // no vertex below this index remains
 
@@ -296,9 +296,9 @@ final class Inplace {
      * component, starting from its vertices at scanPos and after.  Leaves
      * the cycle in path[0..k) and returns k, or returns 0 if there is none.
      *
-     * Over all calls for a component the work is linear in its size: a
-     * vertex marked DONE is never entered again, and a start vertex that
-     * yields no cycle is never tried again.
+     * A vertex marked DONE is never entered again, and a start vertex that
+     * yields no cycle is never tried again, so from one call to the next
+     * only the path that led to a cycle is searched a second time.
      */
     private int findCycle(int[] scc, int id) {
         for (; scanPos < scc.length; scanPos++) {

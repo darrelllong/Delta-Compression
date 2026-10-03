@@ -1,17 +1,27 @@
 #!/usr/bin/env bash
-# Run all language implementations through pilot-bench and emit a Markdown table.
-# Columns: language, algorithm, MiB/s (throughput), CI width (95%), runs-to-CI
-# The CI column is the full width of the 95% confidence interval, as
-# pilot-bench prints it after "Reading CI"; the interval is the mean plus or
-# minus half of it.
+# Measure the encode throughput of the Rust, C, C++, Java and Go
+# implementations with pilot-bench and print a Markdown table.
+#
+# Usage: ./tests/bench_all.sh
+#
+# Columns: language, algorithm, mean MiB/s, CI width, runs.  The CI column is
+# the full width of the 95% confidence interval, as pilot-bench prints it
+# after "Reading CI"; the interval is the mean plus or minus half of it.
+#
+# Workload: Shakespeare's complete works (~5.4 MB) as the reference and a
+# copy with 5% of its bytes overwritten as the version, encoded with onepass
+# and with correcting.  tests/get_shakespeare.sh fetches both into WORKDIR
+# (default /tmp/delta-kernel-test) if they are not already there.
+#
+# Requirements:
+#   - pilot-bench, at $PILOT_BENCH_CLI or ~/pilot-bench/build/cli/bench
+#   - the implementations already built; tests/per-language-benchmark.sh and
+#     tests/correctness.sh both build them.  Java is skipped if there is no
+#     java on PATH, Go if its binary is missing.
 #
 # Optional CPU pinning (Linux): PIN_SINGLE is a taskset CPU list for the
 # single-threaded implementations (Rust, C, C++), PIN_MULTI one for those whose
 # runtimes start threads of their own (Java, Go).
-#
-# Workload: Shakespeare's complete works (~5.4 MB, ~5% byte mutations),
-#           onepass and correcting.
-# Build first: run tests/per-language-benchmark.sh (builds all implementations).
 set -euo pipefail
 
 BENCH="${PILOT_BENCH_CLI:-$HOME/pilot-bench/build/cli/bench}"

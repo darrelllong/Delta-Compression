@@ -49,7 +49,6 @@ CORPORA = {
     "devere":      "devere-norm.txt",
 }
 
-# Display labels for output
 LABELS = {
     "shakespeare": "Shakespeare",
     "marlowe":     "Marlowe",
@@ -60,14 +59,14 @@ LABELS = {
 
 DEFAULT_N_VALUES = [50, 100, 200, 500]
 
-# Tokenization artifacts to exclude from top-N words.
-# re.findall('[a-zA-Z]+') splits "king's" → ["king", "s"], making bare "s"
-# the ~10th most common token.  It is not a stylistic word choice.
+# Tokens dropped by tokenize.  The pattern [a-zA-Z]+ splits "king's" into
+# "king" and "s", which makes a bare "s" one of the most common tokens; it
+# is an artifact of tokenizing, not a choice of word.
 EXCLUDE = {"s"}
 
 
 def tokenize(path: Path) -> list[str]:
-    """Return list of lowercase alphabetic tokens from a text file."""
+    """Return the lowercase alphabetic tokens of a text file, less EXCLUDE."""
     text = path.read_text(encoding="utf-8-sig", errors="replace")
     tokens = re.findall(r"[a-zA-Z]+", text.lower())
     return [t for t in tokens if t not in EXCLUDE]
@@ -85,10 +84,11 @@ def compute_zscores(
     freqs_by_corpus: dict[str, dict[str, float]],
     words: list[str],
 ) -> dict[str, dict[str, float]]:
-    """
-    Compute z-scores using population std (Burrows 2002 convention).
-    z(corpus, word) = (freq - mean_freq) / std_freq
-    If std == 0 (word has identical frequency everywhere), z = 0.
+    """Return {corpus: {word: z}} with z = (freq - mean) / std.
+
+    The mean and the population standard deviation of a word's frequency
+    are taken across the corpora.  A word with the same frequency in every
+    corpus has z = 0.
     """
     names = list(freqs_by_corpus)
     n = len(names)
@@ -107,7 +107,7 @@ def linear_delta(
     zs_b: dict[str, float],
     words: list[str],
 ) -> float:
-    """Argamon linear Delta: mean |z_A(w) - z_B(w)|."""
+    """Return Burrows' Delta, the mean of |z_A(w) - z_B(w)| over words."""
     return sum(abs(zs_a[w] - zs_b[w]) for w in words) / len(words)
 
 def cosine_delta(
@@ -115,13 +115,17 @@ def cosine_delta(
     zs_b: dict[str, float],
     words: list[str],
 ) -> float:
-    """Euclidean distance of z-score vectors (Argamon cosine Delta)."""
+    """Return the Euclidean distance between the z-score vectors.
+
+    Despite the name this is not the cosine of the angle between them; it
+    is the square root of Argamon's quadratic Delta.
+    """
     return math.sqrt(sum((zs_a[w] - zs_b[w]) ** 2 for w in words))
 
 
 def print_matrix(title: str, names: list[str], labels: dict[str, str],
                  matrix: dict[tuple[str, str], float]) -> None:
-    """Print a labelled distance matrix."""
+    """Print a labelled square matrix of distances between corpora."""
     col_w = max(len(labels[n]) for n in names)
     row_w = col_w
 
@@ -137,7 +141,7 @@ def print_matrix(title: str, names: list[str], labels: dict[str, str],
 
 def print_ranking(names: list[str], labels: dict[str, str],
                   ref: str, matrix: dict[tuple[str, str], float]) -> None:
-    """Print candidates ranked by distance from ref."""
+    """Print the other corpora in order of increasing distance from ref."""
     others = [(n, matrix[(ref, n)]) for n in names if n != ref]
     others.sort(key=lambda x: x[1])
     print(f"  Nearest to {labels[ref]} (linear Delta, ascending):")
@@ -182,7 +186,8 @@ def main() -> None:
 
     names = list(tokens)
 
-    # Combined counter for top-N selection (all corpora equally)
+    # Raw counts are summed, so the larger corpora weigh more in the choice
+    # of the top-N words.
     combined: Counter = Counter()
     for c in counters.values():
         combined.update(c)
@@ -190,7 +195,7 @@ def main() -> None:
     print()
 
 
-    rank_table: dict[int, list[tuple[str, float]]] = {}   # n → sorted (name, delta)
+    rank_table: dict[int, list[tuple[str, float]]] = {}   # n -> [(name, linear Delta to Shakespeare)], nearest first
 
     for n in sorted(args.top_n):
         words = top_n_words(combined, n)
@@ -199,11 +204,11 @@ def main() -> None:
             print(f"Top {n} words: {words}")
             print()
 
-        # Zero-frequency check for small corpora
+        # This loop has no effect; the zero-frequency note is printed below.
         for key in names:
             zeros = sum(1 for w in words if counters[key][w] == 0)
             if zeros > 0 and key == "devere":
-                pass   # reported at end of section
+                pass
 
         freqs = {key: relative_freqs(counters[key], totals[key], words)
                  for key in names}
@@ -219,7 +224,6 @@ def main() -> None:
         print(f"=== Burrows' Delta  (top {n} words, population std) ===")
         print()
 
-        # Zero-frequency note for de Vere
         if "devere" in names:
             zeros = sum(1 for w in words if counters["devere"][w] == 0)
             if zeros:
@@ -233,7 +237,7 @@ def main() -> None:
         if "shakespeare" in names:
             print_ranking(names, LABELS, "shakespeare", lin)
 
-        # Store ranking for summary
+        # Needs Shakespeare among the corpora loaded.
         others = [(k, lin[("shakespeare", k)]) for k in names if k != "shakespeare"]
         others.sort(key=lambda x: x[1])
         rank_table[n] = others

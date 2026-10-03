@@ -39,7 +39,7 @@ uint64_t power_mod(uint64_t base, uint64_t exp, uint64_t n) {
     return result;
 }
 
-// Reports whether a proves the odd number n composite.
+/// Reports whether a proves the odd number n composite.
 bool witness(uint64_t a, uint64_t n) {
     // n - 1 = d * 2^r with d odd.
     uint64_t d = n - 1;
