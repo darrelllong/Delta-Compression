@@ -1,0 +1,28 @@
+Fri Oct  2 17:01:07 PDT 2026
+17:01  up 5 days,  3:47, 1 user, load averages: 3.12 2.95 3.13
+Building all implementations...
+
+  Rust    — cargo build --release
+  C++     — cmake
+  C       — make
+  Java    — make
+  Go      — make
+
+Fetching Linux 5.1.0 and 5.1.1 kernel tarballs...
+  Downloading https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.1.tar.gz
+  Downloading https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.1.1.tar.gz
+
+=== Per-language: linux-5.1.0 → 5.1.1 (~871 MB) ===
+
+  Language         onepass    correcting
+  --------         -------    ----------
+  Rust                5.9s         12.3s
+  C++                 5.3s         14.4s
+  C                   5.2s         20.2s
+  Java                6.5s         14.2s
+  Go                  1.9s         15.6s
+
+Working directory preserved at /Users/darrell/bench-2026-10-02/kernel
+To clean up:  rm -rf /Users/darrell/bench-2026-10-02/kernel
+Fri Oct  2 17:03:09 PDT 2026
+17:03  up 5 days,  3:49, 1 user, load averages: 3.65 3.81 3.50

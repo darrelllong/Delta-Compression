@@ -45,3 +45,14 @@ code of that time) and of 2026-09-28 (baase, Pilot `475063f`, code at
   under 1% on most sessions elsewhere.
 
 Every session converged with status 0.
+
+## Kernel tarballs
+
+`per-language.txt` in the dyson, wigner and dmz directories is the output of
+`tests/per-language-benchmark.sh` (linux-5.1 → 5.1.1, 871 MB each, one run
+per implementation and algorithm) on 2026-10-02, 17:01–17:04 PDT, run on the
+three at the same time with the tarballs downloaded to each machine's
+internal SSD. All fifteen runs produced the same 5,075,535-byte onepass delta
+and 6,948,688-byte correcting delta. These are the kernel tarball tables in
+ANALYSIS.md. baase was not run: it has no javac or Go, and the script builds
+with both.

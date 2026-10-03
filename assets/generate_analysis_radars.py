@@ -162,8 +162,8 @@ def main() -> None:
         "kernel-onepass-speed-radar.svg",
         "Onepass speed score (faster is larger, max=100) - linux-5.1 -> 5.1.1",
         "Kernel onepass speed score by language. Scores normalize encode time to the fastest implementation.",
-        ["C", "Rust", "C++", "Go", "Java"],
-        [("Speed score", "#0f766e", 0.22, [100.0, 88.9, 88.9, 81.6, 66.7])],
+        ["Go", "C", "C++", "Java", "Rust"],
+        [("Speed score", "#0f766e", 0.22, [100.0, 44.4, 37.2, 34.8, 30.2])],
         100.0,
         [20, 40, 60, 80, 100],
     )
@@ -171,8 +171,8 @@ def main() -> None:
         "kernel-correcting-speed-radar.svg",
         "Correcting speed score (faster is larger, max=100) - linux-5.1 -> 5.1.1",
         "Kernel correcting speed score by language. Scores normalize encode time to the fastest implementation.",
-        ["Rust", "Java", "Go", "C", "C++"],
-        [("Speed score", "#8b5cf6", 0.22, [100.0, 80.5, 70.2, 51.6, 51.0])],
+        ["Java", "Rust", "C++", "Go", "C"],
+        [("Speed score", "#8b5cf6", 0.22, [100.0, 97.1, 92.6, 82.6, 66.2])],
         100.0,
         [20, 40, 60, 80, 100],
     )

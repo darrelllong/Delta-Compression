@@ -1,0 +1,28 @@
+Fri Oct  2 17:01:06 PDT 2026
+17:01  up 8 days,  1:06, 4 users, load averages: 5.15 6.20 7.94
+Building all implementations...
+
+  Rust    — cargo build --release
+  C++     — cmake
+  C       — make
+  Java    — make
+  Go      — make
+
+Fetching Linux 5.1.0 and 5.1.1 kernel tarballs...
+  Downloading https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.1.tar.gz
+  Downloading https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.1.1.tar.gz
+
+=== Per-language: linux-5.1.0 → 5.1.1 (~871 MB) ===
+
+  Language         onepass    correcting
+  --------         -------    ----------
+  Rust                5.3s         10.3s
+  C++                 4.3s         10.8s
+  C                   3.6s         15.1s
+  Java                4.6s         10.0s
+  Go                  1.6s         12.1s
+
+Working directory preserved at /private/tmp/claude-501/-Users-darrell-Delta-Compression/79f80565-8023-4cb0-981f-50fe22a4e34a/scratchpad/dyson/../kernel
+To clean up:  rm -rf /private/tmp/claude-501/-Users-darrell-Delta-Compression/79f80565-8023-4cb0-981f-50fe22a4e34a/scratchpad/dyson/../kernel
+Fri Oct  2 17:02:47 PDT 2026
+17:02  up 8 days,  1:08, 4 users, load averages: 5.06 6.20 7.77
