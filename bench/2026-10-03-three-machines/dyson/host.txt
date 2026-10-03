@@ -1,0 +1,23 @@
+== uname
+Darwin dyson 27.0.0 Darwin Kernel Version 27.0.0: Tue Aug 11 21:05:48 PDT 2026; root:xnu-13432.1.9~1/RELEASE_ARM64_T6041 arm64
+== cpu
+Apple M4 Pro
+12
+== memory
+== os
+ProductName:		macOS
+ProductVersion:		27.0.1
+BuildVersion:		26A434
+== compilers
+Apple clang version 21.0.0 (clang-2100.3.34.2)
+Apple clang version 21.0.0 (clang-2100.3.34.2)
+rustc 1.93.1 (01f6ddf75 2026-02-11)
+java version "19.0.1" 2022-10-18
+javac 19.0.1
+go version go1.27.1 darwin/arm64
+Python 3.9.6
+cmake version 4.4.3
+== pilot-bench
+a6e6e77
+== governor
+n/a

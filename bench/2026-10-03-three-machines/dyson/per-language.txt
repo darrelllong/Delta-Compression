@@ -1,0 +1,26 @@
+10:45  up 29 mins, 5 users, load averages: 3.17 5.46 13.24
+Building all implementations...
+
+  Rust    — cargo build --release
+  C++     — cmake
+  C       — make
+  Java    — make
+  Go      — make
+
+Fetching Linux 5.1.0 and 5.1.1 kernel tarballs...
+  linux-5.1.tar (cached)
+  linux-5.1.1.tar (cached)
+
+=== Per-language: linux-5.1.0 → 5.1.1 (~871 MB) ===
+
+  Language         onepass    correcting
+  --------         -------    ----------
+  Rust                2.0s          7.1s
+  C++                 1.6s          8.3s
+  C                   1.4s         12.4s
+  Java                1.8s          7.5s
+  Go                  1.5s         11.9s
+
+Working directory preserved at /private/tmp/claude-501/-Users-darrell-Delta-Compression/f32e9ca5-e11d-4763-8942-9273de07aa5d/scratchpad/kernel
+To clean up:  rm -rf /private/tmp/claude-501/-Users-darrell-Delta-Compression/f32e9ca5-e11d-4763-8942-9273de07aa5d/scratchpad/kernel
+10:46  up 30 mins, 5 users, load averages: 3.15 4.99 12.53

@@ -2,8 +2,10 @@
 
 Raw output of `tests/bench_rust.sh` (`bench_rust.md`) and `tests/bench_all.sh`
 (`bench_all.md`) on dyson, wigner, dmz and baase, with Pilot `a6e6e77` and
-the code at `a10ab04`. These are the four columns of the two Pilot tables in
-[ANALYSIS.md](../../ANALYSIS.md), replacing the columns of March 2026
+the code at `a10ab04`. These were the four columns of the two Pilot tables in
+[ANALYSIS.md](../../ANALYSIS.md) until the measurements of
+[2026-10-03](../2026-10-03-three-machines/README.md) replaced them; they
+replaced the columns of March 2026
 (dyson, wigner, dmz; Pilot before `f01eec4`, arithmetic means of rates, the
 code of that time) and of 2026-09-28 (baase, Pilot `475063f`, code at
 `1b38241`).
@@ -53,6 +55,6 @@ Every session converged with status 0.
 per implementation and algorithm) on 2026-10-02, 17:01–17:04 PDT, run on the
 three at the same time with the tarballs downloaded to each machine's
 internal SSD. All fifteen runs produced the same 5,075,535-byte onepass delta
-and 6,948,688-byte correcting delta. These are the kernel tarball tables in
-ANALYSIS.md. baase was not run: it has no javac or Go, and the script builds
+and 6,948,688-byte correcting delta. These were the kernel tarball tables in
+ANALYSIS.md until 2026-10-03. baase was not run: it has no javac or Go, and the script builds
 with both.

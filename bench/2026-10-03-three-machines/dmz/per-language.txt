@@ -1,0 +1,26 @@
+ 10:28:21 up 17 days, 38 min,  3 users,  load average: 1.08, 0.71, 0.41
+Building all implementations...
+
+  Rust    — cargo build --release
+  C++     — cmake
+  C       — make
+  Java    — make
+  Go      — make
+
+Fetching Linux 5.1.0 and 5.1.1 kernel tarballs...
+  linux-5.1.tar (cached)
+  linux-5.1.1.tar (cached)
+
+=== Per-language: linux-5.1.0 → 5.1.1 (~871 MB) ===
+
+  Language         onepass    correcting
+  --------         -------    ----------
+  Rust                3.5s         20.0s
+  C++                 3.1s         21.0s
+  C                   2.6s         24.4s
+  Java                5.4s         29.3s
+  Go                  3.5s         27.1s
+
+Working directory preserved at /home/darrell/bench-2026-10-02/kernel
+To clean up:  rm -rf /home/darrell/bench-2026-10-02/kernel
+ 10:30:42 up 17 days, 40 min,  3 users,  load average: 1.15, 0.85, 0.51
