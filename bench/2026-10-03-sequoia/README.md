@@ -88,3 +88,11 @@ All runs produced the same 5,075,535-byte onepass delta and the same
   rate the disks deliver the data, less than half the warm rate.
 - Java onepass still runs out of heap on this input with the default
   maximum heap.
+
+## After the rolling hash was inlined
+
+At `d23229e` the C fingerprint functions are `static inline`. The C encoder
+alone, three runs each as above, 19:23–19:25 UTC: onepass is unchanged
+(0.75 s of differencing in a command of 1.48 s); correcting takes 7.25 s of
+differencing in a command of 7.97 s, where it took 8.65 s in 9.38 s. The
+deltas are identical.

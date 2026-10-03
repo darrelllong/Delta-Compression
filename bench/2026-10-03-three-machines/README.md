@@ -2,8 +2,10 @@
 
 Raw output of `tests/bench_rust.sh` (`bench_rust.md`) and `tests/bench_all.sh`
 (`bench_all.md`) on dyson, dmz and baase, with Pilot `a6e6e77` and the code
-at `efa83c6`. These are the three columns of the two Pilot tables in
-[ANALYSIS.md](../../ANALYSIS.md), replacing those of
+at `efa83c6`. These were the three columns of the two Pilot tables in
+[ANALYSIS.md](../../ANALYSIS.md) until the run of that afternoon
+([2026-10-03-inlined-hash](../2026-10-03-inlined-hash/README.md)); they
+replaced those of
 [2026-10-02](../2026-10-02-four-machines/README.md), which were measured at
 `a10ab04`, before C, C++, Rust and Java computed CRC-64 by slicing-by-8.
 wigner (Apple M1 Max) is no longer measured.
@@ -53,7 +55,8 @@ per implementation and algorithm), on dmz at 10:28–10:30 PDT and on dyson
 at 10:45–10:46, each after that machine's Pilot suites, with the tarballs
 on the internal SSD and in the page cache. All ten runs of each algorithm
 produced the same 5,075,535-byte onepass delta and 6,948,688-byte correcting
-delta. These are the kernel tarball tables in ANALYSIS.md. baase was not
+delta. These were the kernel tarball tables in ANALYSIS.md until that
+afternoon. baase was not
 run: it has no javac or Go, and the script builds with both.
 
 Against 2026-10-02 the four implementations whose CRC changed are 1.9 to

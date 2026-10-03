@@ -1,0 +1,31 @@
+== uname
+Linux baase 7.0.0-1019-nvidia #19~24.04.2-Ubuntu SMP PREEMPT_DYNAMIC Sun Sep  6 18:35:11 UTC 2 aarch64 aarch64 aarch64 GNU/Linux
+== cpu
+CPU(s):                                  20
+Model name:                              Cortex-X925
+CPU(s) scaling MHz:                      100%
+CPU max MHz:                             3900.0000
+CPU min MHz:                             1378.0000
+Model name:                              Cortex-A725
+CPU(s) scaling MHz:                      100%
+CPU max MHz:                             2808.0000
+CPU min MHz:                             338.0000
+== memory
+Mem:           121Gi        92Gi       5.8Gi       2.4Gi        27Gi        29Gi
+== os
+PRETTY_NAME="Ubuntu 24.04.5 LTS"
+== compilers
+cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+rustc 1.95.0 (59807616e 2026-04-14)
+openjdk version "21.0.12.1" 2026-08-18
+zsh:7: command not found: javac
+javac: classes compiled on dyson with javac 19.0.1 --release 17
+zsh:7: command not found: go
+go: cross-compiled on dyson with go1.27.1
+Python 3.12.3
+cmake version 3.28.3
+== pilot-bench
+a6e6e77
+== governor
+performance

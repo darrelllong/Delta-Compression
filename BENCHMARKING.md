@@ -168,8 +168,8 @@ of deterministic LCG-generated data with ~5 % single-byte mutations.  Metric:
 | `decode_1m` | Apply a pre-encoded onepass delta | 100 |
 | `inplace_1m` | Convert standard delta to in-place format | 10 |
 
-> **Note:** Greedy is O(n²).  At 1 MiB one operation took 81 ms on the
-> Apple M4 Pro (12.42 MiB/s) and 319 ms on the Cortex-X925 (3.13 MiB/s),
+> **Note:** Greedy is O(n²).  At 1 MiB one operation took 79 ms on the
+> Apple M4 Pro (12.62 MiB/s) and 322 ms on the Cortex-X925 (3.109 MiB/s),
 > both on 2026-10-03.  Do not use it on multi-MB files; use
 > `encode_onepass_1m` and `encode_correcting_1m` for large-file comparisons.
 

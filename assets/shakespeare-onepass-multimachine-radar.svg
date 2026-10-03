@@ -35,24 +35,24 @@
   <text class="label" x="160.1" y="486.5" text-anchor="end">C++</text>
   <text class="label" x="73.6" y="210.5" text-anchor="end">Java</text>
 
-  <polygon points="300.0,105.7 462.5,227.2 383.2,394.6 222.4,386.8 222.9,254.9" fill="#0f766e" fill-opacity="0.18" stroke="#0f766e" stroke-width="2" />
-  <circle cx="300.0" cy="105.7" r="2.3" fill="#0f766e" />
-  <circle cx="462.5" cy="227.2" r="2.3" fill="#0f766e" />
-  <circle cx="383.2" cy="394.6" r="2.3" fill="#0f766e" />
-  <circle cx="222.4" cy="386.8" r="2.3" fill="#0f766e" />
-  <circle cx="222.9" cy="254.9" r="2.3" fill="#0f766e" />
-  <polygon points="300.0,230.4 336.1,268.3 328.0,318.5 268.9,322.9 272.5,271.1" fill="#1d4ed8" fill-opacity="0.14" stroke="#1d4ed8" stroke-width="2" />
-  <circle cx="300.0" cy="230.4" r="2.3" fill="#1d4ed8" />
-  <circle cx="336.1" cy="268.3" r="2.3" fill="#1d4ed8" />
-  <circle cx="328.0" cy="318.5" r="2.3" fill="#1d4ed8" />
-  <circle cx="268.9" cy="322.9" r="2.3" fill="#1d4ed8" />
+  <polygon points="300.0,100.7 454.8,229.7 411.5,433.5 222.9,386.1 223.7,255.2" fill="#0f766e" fill-opacity="0.18" stroke="#0f766e" stroke-width="2" />
+  <circle cx="300.0" cy="100.7" r="2.3" fill="#0f766e" />
+  <circle cx="454.8" cy="229.7" r="2.3" fill="#0f766e" />
+  <circle cx="411.5" cy="433.5" r="2.3" fill="#0f766e" />
+  <circle cx="222.9" cy="386.1" r="2.3" fill="#0f766e" />
+  <circle cx="223.7" cy="255.2" r="2.3" fill="#0f766e" />
+  <polygon points="300.0,230.0 336.0,268.3 329.5,320.6 269.1,322.5 272.5,271.1" fill="#1d4ed8" fill-opacity="0.14" stroke="#1d4ed8" stroke-width="2" />
+  <circle cx="300.0" cy="230.0" r="2.3" fill="#1d4ed8" />
+  <circle cx="336.0" cy="268.3" r="2.3" fill="#1d4ed8" />
+  <circle cx="329.5" cy="320.6" r="2.3" fill="#1d4ed8" />
+  <circle cx="269.1" cy="322.5" r="2.3" fill="#1d4ed8" />
   <circle cx="272.5" cy="271.1" r="2.3" fill="#1d4ed8" />
-  <polygon points="300.0,176.7 375.1,255.6 346.9,344.5 243.4,357.9 244.6,262.0" fill="#be123c" fill-opacity="0.14" stroke="#be123c" stroke-width="2" />
-  <circle cx="300.0" cy="176.7" r="2.3" fill="#be123c" />
-  <circle cx="375.1" cy="255.6" r="2.3" fill="#be123c" />
-  <circle cx="346.9" cy="344.5" r="2.3" fill="#be123c" />
-  <circle cx="243.4" cy="357.9" r="2.3" fill="#be123c" />
-  <circle cx="244.6" cy="262.0" r="2.3" fill="#be123c" />
+  <polygon points="300.0,178.2 375.4,255.5 347.8,345.8 244.2,356.8 246.4,262.6" fill="#be123c" fill-opacity="0.14" stroke="#be123c" stroke-width="2" />
+  <circle cx="300.0" cy="178.2" r="2.3" fill="#be123c" />
+  <circle cx="375.4" cy="255.5" r="2.3" fill="#be123c" />
+  <circle cx="347.8" cy="345.8" r="2.3" fill="#be123c" />
+  <circle cx="244.2" cy="356.8" r="2.3" fill="#be123c" />
+  <circle cx="246.4" cy="262.6" r="2.3" fill="#be123c" />
 
   <text class="label" x="20" y="556">Onepass throughput by machine (MiB/s) - Shakespeare</text>
   <text class="small" x="20" y="576">Axes are categorical (languages); polygon edges connect axis values only.</text>

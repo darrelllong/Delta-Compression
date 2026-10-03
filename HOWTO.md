@@ -232,7 +232,7 @@ behavior and diagnosing performance.
 delta encode onepass old.bin new.bin delta.bin --verbose
 delta encode correcting old.bin new.bin delta.bin --verbose
 
-# Rust only: also on the inplace subcommand (shows CRWI edges and cycles broken)
+# Also on the inplace subcommand (shows CRWI edges and cycles broken)
 delta inplace old.bin standard.delta inplace.delta --verbose
 ```
 
@@ -295,7 +295,8 @@ Decode verifies two CRC-64/XZ checksums embedded in every delta file:
 the reference file CRC (pre-check, before reconstruction) and the output
 CRC (post-check, after reconstruction).  A mismatch aborts with an
 error.  When the post-check fails, the C and C++ tools write no output
-file; the others leave the bad output in place.  To attempt recovery
+file and the Python tool removes the one it wrote; Rust, Java and Go
+leave the bad output in place.  To attempt recovery
 from a corrupted or mismatched delta, pass `--ignore-hash`; both checks
 are replaced with warnings and decoding proceeds:
 
@@ -337,7 +338,7 @@ delta inplace old.bin standard.delta inplace.delta
 # With another cycle-breaking policy
 delta inplace old.bin standard.delta inplace.delta --policy constant
 
-# Rust only: verbose output (shows CRWI edge count and cycles broken)
+# Verbose output (shows CRWI edge count and cycles broken)
 delta inplace old.bin standard.delta inplace.delta --verbose
 
 # Python
@@ -348,6 +349,10 @@ java -cp out delta.Delta inplace old.bin standard.delta inplace.delta
 ```
 
 If the input delta is already in-place format, it is copied unchanged.
+Otherwise the reference is checked against the CRC in the delta before
+anything is written, since a copy that becomes an add takes its bytes
+from the reference; the wrong reference is an error.  A delta that
+contains a MOVE command cannot be converted and is also an error.
 
 ## Inspecting a delta file
 
