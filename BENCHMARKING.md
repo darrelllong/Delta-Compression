@@ -163,14 +163,14 @@ of deterministic LCG-generated data with ~5 % single-byte mutations.  Metric:
 | Operation | Description | Internal reps |
 |-----------|-------------|:---:|
 | `encode_greedy_1m` | Greedy diff (O(n²), optimal ratio) | 10 |
-| `encode_onepass_1m` | Onepass diff (O(n) time, O(1) space) | 10 |
+| `encode_onepass_1m` | Onepass diff (O(n) time) | 10 |
 | `encode_correcting_1m` | Correcting diff (O(n) with checkpointing) | 5 |
 | `decode_1m` | Apply a pre-encoded onepass delta | 100 |
 | `inplace_1m` | Convert standard delta to in-place format | 10 |
 
 > **Note:** Greedy is O(n²).  At 1 MiB one operation took 81 ms on the
-> Apple M4 Pro (12.41 MiB/s) and 323 ms on the Cortex-X925 (3.1 MiB/s),
-> both on 2026-10-02.  Do not use it on multi-MB files; use
+> Apple M4 Pro (12.42 MiB/s) and 319 ms on the Cortex-X925 (3.13 MiB/s),
+> both on 2026-10-03.  Do not use it on multi-MB files; use
 > `encode_onepass_1m` and `encode_correcting_1m` for large-file comparisons.
 
 ### `tests/bench_all.sh` — multi-language file-encode (`tests/pilot_lang.sh`)
@@ -183,10 +183,10 @@ elapsed encode time).
 The Shakespeare workload was chosen because it is text the delta algorithms
 can match, where random data produces no matches and reduces all algorithms to
 serialization.  With 5% of its bytes replaced at random (one in 20 on
-average), the deltas are large: on 2026-09-28 every
+average), the deltas are large: every
 implementation produced a 4,016,248-byte onepass delta and a 4,092,873-byte
 correcting delta for the 5,638,480-byte version, 71.2% and 72.6% of its
-size.  For I/O-dominated large-file results,
+size.  For large-file results,
 see `tests/per-language-benchmark.sh` (871 MB kernel tarballs, single run).
 
 | Operation | Description |

@@ -1,10 +1,10 @@
 # Pilot benchmarks on baase — 2026-09-28
 
 Raw output of `tests/bench_rust.sh` (`bench_rust.md`) and `tests/bench_all.sh`
-(`bench_all.md`) on `baase`, with Pilot `475063f`. These are the Cortex-X925
-columns of the two Pilot tables in [ANALYSIS.md](../../ANALYSIS.md); the other
-columns there are from March 2026, produced with Pilot before `f01eec4`, and
-could not be taken again.
+(`bench_all.md`) on `baase`, with Pilot `475063f`. These were the Cortex-X925
+columns of the two Pilot tables in [ANALYSIS.md](../../ANALYSIS.md) until
+[2026-10-02](../2026-10-02-four-machines/README.md); the other columns there
+were then from March 2026, produced with Pilot before `f01eec4`.
 
 ## Machine and method
 

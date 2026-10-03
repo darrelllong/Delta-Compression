@@ -80,9 +80,17 @@ delta/delta decode old.bin delta.bin recovered.bin
 
 | Algorithm | Time | Space | Best for |
 |---|---|---|---|
-| `onepass` | O(n) | O(1) | General use — fast, good compression |
+| `onepass` | O(n) | O(q) | General use — fast, good compression |
 | `correcting` | ~O(n) | O(q) | Data with rearranged/moved blocks |
-| `greedy` | O(n^2) | O(n) | Smallest possible delta (optimal) |
+| `greedy` | O(n^2) | O(n) | Longest match at every position — small inputs |
+
+Here q is the number of hash table slots.  The paper fixes q, which makes
+the space constant; these implementations grow the table with the
+reference (about one slot for every `--seed-len` bytes for onepass, two
+for correcting, up to `--max-table`).  Greedy takes the longest match at
+every position.  The paper proves that optimal when matches of every
+length are found; with a seed of p bytes, matches shorter than p are
+missed.
 
 All three use Karp-Rabin rolling hashes (Karp & Rabin 1987) with a
 Mersenne prime (2^61-1) for fingerprinting and a polynomial base of 263
@@ -91,11 +99,10 @@ for good bit mixing.  Hash tables are auto-sized based on input length
 the hash table with a Sleator-Tarjan splay tree.  Frequently accessed
 fingerprints are splayed to the root and stay there, giving O(log(n/f))
 access for a fingerprint with frequency f — the same reason LRU caching
-works in practice.  For correcting, `--splay` also improves compression
-slightly: the hash table discards fingerprints that collide to the same
-slot, while the splay tree stores every checkpoint-passing seed.  See
-`HOWTO.md` for benchmark data.  Use `--verbose` to see hash table sizing
-and match statistics on stderr.
+works in practice.  On the inputs measured the correcting delta is the
+same either way, the onepass delta differs by a few bytes at most, and
+the hash table is faster (see `ANALYSIS.md`).  Use `--verbose` to
+see hash table sizing and match statistics on stderr.
 
 See [`HOWTO.md`](HOWTO.md) for tuning parameters, library API examples,
 checkpointing internals, and benchmark results.
@@ -121,36 +128,49 @@ digraph where an edge from command i to j means "i must execute before j"
 (because i reads from a region j will overwrite).  Kahn's algorithm
 (Kahn 1962) gives a topological sort with deterministic ordering via a
 min-heap keyed on (copy length, index).  Cycles are broken by converting
-copy commands to literal add commands.
+copy commands to literal add commands.  The copies come first in the
+delta, in that order, and the adds after them.
 
 Cycle-breaking policies:
 
 - **`localmin`** (default) — converts the smallest copy in each cycle.
   Minimizes compression loss.
-- **`constant`** — converts any vertex in the cycle.  Slightly faster,
-  marginally worse compression.
+- **`constant`** — converts the lowest-numbered copy still waiting,
+  without looking for the cycle.  Faster to decide, usually worse
+  compression.
 
 ## Binary delta format
 
-Unified format used by all six implementations:
+One format, read and written by all six implementations.  The tools write
+`DLT\x04`; they also read the older `DLT\x03`.
 
 ```
-Header (25 bytes):
-  DLT\x03        4-byte magic
+Header (29 bytes):
+  DLT\x04        4-byte magic
   flags           1 byte (bit 0 = in-place)
-  version_size    uint32 big-endian
+  version_size    uint64
   src_crc         8 bytes (CRC-64/XZ of reference file)
   dst_crc         8 bytes (CRC-64/XZ of version file)
 
 Commands (repeated):
   type 0          END (1 byte)
-  type 1          COPY: src(u32) dst(u32) len(u32)  — 13 bytes
-  type 2          ADD:  dst(u32) len(u32) data       — 9 + len bytes
+  type 1          COPY:    src(u32) dst(u32) len(u32)   — 13 bytes
+  type 2          ADD:     dst(u32) len(u32) data       — 9 + len bytes
+  type 3          BIGCOPY: src(u64) dst(u64) len(u64)   — 25 bytes
+  type 4          BIGADD:  dst(u64) len(u64) data       — 17 + len bytes
+  type 5          MOVE:    src(u32) dst(u32) len(u32)   — 13 bytes
+  type 6          BIGMOVE: src(u64) dst(u64) len(u64)   — 25 bytes
 ```
 
 All multi-byte integers are big-endian.  Commands carry explicit
-source and destination offsets.  The `flags` byte distinguishes
-standard deltas (flag 0x00) from in-place deltas (flag 0x01).
+source and destination offsets.  A command takes the 32-bit form when
+its fields fit and the BIG form otherwise, so a delta of files under
+4 GiB differs from `DLT\x03` only in its header; `--large` forces the
+BIG forms.  MOVE copies bytes of the version already written; the
+decoders accept it, and the encoders here do not produce it.  The
+`flags` byte distinguishes standard deltas (0x00) from in-place deltas
+(0x01).  `DLT\x03` has a 25-byte header with a uint32 `version_size`
+and only END, COPY and ADD.
 
 The two 8-byte CRC-64/XZ checksums are verified on decode: `src_crc`
 is checked against the supplied reference file before reconstruction
@@ -204,6 +224,7 @@ tests/
   correctness.sh          Run all unit + cross-language tests (all 6 implementations)
   kernel-delta-test.sh    Kernel tarball benchmark
   transposition-benchmark.sh  Synthetic permutation benchmark
+bench/                    Raw benchmark output behind the tables in ANALYSIS.md
 pubs/                     Ajtai et al. 2002, Burns et al. 2003 (PDFs)
 ```
 
@@ -223,7 +244,7 @@ R, V (byte arrays)
 [Algorithm]  greedy / onepass / correcting
     │         Karp-Rabin rolling hash (Mersenne prime 2^61-1, base 263)
     │         Hash table or splay tree maps fingerprint → source offset(s)
-    │         Scan V; on match extend backward/forward to find longest copy
+    │         Scan V; on match extend forward (correcting: backward too)
     │
     ▼  Vec<Command>  (Copy {offset, length} | Add {data})
     │
@@ -244,10 +265,11 @@ R, V (byte arrays)
     │                                           │              │
     ▼                                           ▼              │
 [encode_delta]  ←──────────────────────────────┘
-    │         Header: DLT\x03 + flags(1) + version_size(u32 BE)
+    │         Header: DLT\x04 + flags(1) + version_size(u64 BE)
     │                 + src_crc(8) + dst_crc(8)
     │         COPY: 0x01 + src(u32) + dst(u32) + len(u32)
     │         ADD:  0x02 + dst(u32) + len(u32) + payload
+    │         BIGCOPY 0x03, BIGADD 0x04: the same with u64 fields
     │         END:  0x00
     ▼
   binary delta file
@@ -259,21 +281,21 @@ R, V (byte arrays)
 |------|-------------|
 | `Command` | Algorithm output: offset-relative `Copy` or raw `Add` |
 | `PlacedCommand` | Absolute `src`/`dst` offsets — encodable and validatable |
-| `DiffOptions` | `p` (seed length, default 16), `q` (table floor, default 1M+), `max_table`, `verbose`, `use_splay` |
-| `CyclePolicy` | `Localmin` (convert smallest copy in cycle) · `Constant` (convert any) |
+| `DiffOptions` | `p` (seed length, default 16), `q` (table floor, default 1,048,573), `max_table`, `buf_cap`, `verbose`, `use_splay` |
+| `CyclePolicy` | `Localmin` (convert smallest copy in cycle) · `Constant` (convert the lowest-numbered copy remaining) |
 
 **Module responsibilities (Rust names; other languages mirror this)**
 
 | Module | Role |
 |--------|------|
-| `hash` | Karp-Rabin rolling hash; Mersenne modulo; `next_prime` for table sizing |
+| `hash` | Karp-Rabin rolling hash; Mersenne modulo; `next_prime` for table sizing; CRC-64/XZ |
 | `splay` | Sleator-Tarjan self-adjusting BST — optional alternative to hash table |
 | `algorithm/greedy` | $O(n^2)$ optimal: stores every R offset per fingerprint, scans all candidates |
-| `algorithm/onepass` | O(n) linear: concurrent R+V scan, two hash tables, version-based eviction (§4.3) |
-| `algorithm/correcting` | ~O(n): checkpoint filter (§8) limits table entries; lookback buffer corrects missed tail matches |
+| `algorithm/onepass` | O(n) linear: concurrent R+V scan, a table for each, both flushed after every match by a generation counter (§4.1) |
+| `algorithm/correcting` | ~O(n): checkpoint filter (§8) limits table entries; backward extension and a lookback buffer correct what was already encoded (§5) |
 | `apply` | `place_commands`, `apply_placed_to`, `apply_delta_inplace`, bounds validation |
 | `inplace` | CRWI graph construction, Kahn topological sort, cycle-breaking (Burns et al. 2003) |
-| `encoding` | Binary encode/decode; CRC-64/XZ verification of reference and output |
+| `encoding` | Binary encode/decode of `DLT\x03` and `DLT\x04` |
 
 ## References
 

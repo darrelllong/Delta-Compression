@@ -29,8 +29,10 @@ string-to-string correction problem with block move using Karp-Rabin
 fingerprinting (Karp and Rabin 1987) to discover variable-length common
 substrings between R and V in linear time.  A single substring in R may
 be copied to multiple locations in V, and matches need not preserve
-order.  The onepass and correcting algorithms run in $O(n)$ time with $O(1)$
-space — compared to $O(mn)$ for edit-distance dynamic programming.  For
+order.  With a hash table of fixed size, the onepass and correcting
+algorithms run in $O(n)$ time and $O(1)$ space — compared to $O(mn)$ for
+edit-distance dynamic programming.  (The implementations here grow the
+table with the reference by default; see below.)  For
 a 1 MB file with a 1 KB change, Levenshtein requires $\sim 10^{12}$ operations;
 onepass finds the change in a single linear scan.
 
@@ -41,26 +43,34 @@ Section 8) to select which seeds enter the hash table.
 
 Two parameters govern the hash table:
 
-- **$|C|$** = auto-sized table capacity (`next_prime(max(table_size, 2 *
-  num_seeds / p))`).  Each entry is ~16 bytes (fingerprint + position,
-  8 bytes each).  `--table-size` sets the floor.
+- **$|C|$** = auto-sized table capacity (`next_prime(min(max_table,
+  max(table_size, 2 * num_seeds / p)))`).  Each entry is 16 bytes
+  (fingerprint + position, 8 bytes each).  `--table-size` sets the floor
+  and `--max-table` the ceiling.
 - **$|F|$** $\approx 2|R|$ (auto-computed): the footprint modulus.  Set to
   `next_prime(2 * num_seeds)` for good distribution.
 
 The checkpoint stride is $m = \lceil |F|/|C| \rceil$.  A seed is a **checkpoint
 seed** if its footprint $f = \text{fingerprint} \bmod |F|$ satisfies $f \equiv k
-\pmod{m}$ (Section 8.1, Eq. 3), where $k$ is a biased checkpoint class
-chosen from V (p. 348).  Only checkpoint seeds are stored in or
-looked up from the hash table; all others are skipped.  This gives
-$\approx |C|/2$ occupied slots (~50% load factor) regardless of $|R|$ (Section 8.1,
-p. 347: $L \cdot |C|/|F| \approx |C|/2$, hence $|F| \approx 2L$).
+\pmod{m}$ (Section 8.1, Eq. 3), where $k$ is the class of a seed of V.
+The paper takes a random seed of V, which favors the classes that occur
+most often in V (p. 348); the code takes the seed in the middle of V, so
+the output does not depend on a random choice.  Only checkpoint seeds are stored in or
+looked up from the hash table; all others are skipped.  This gives at
+most $\approx |C|/2$ occupied slots (~50% load factor) regardless of $|R|$ (Section 8.1,
+p. 347: $L \cdot |C|/|F| \approx |C|/2$, hence $|F| \approx 2L$); fewer
+when seeds repeat, since a fingerprint is stored once.  A checkpoint seed's
+home slot is $\lfloor f/m \rfloor$; seeds with different fingerprints and
+the same home slot are resolved by linear probing, and of seeds with the
+same fingerprint the first in R is kept.
 
 The checkpoint stride `m` equals the average spacing between checkpoint
 seeds.  Matching substrings shorter than ~m bytes may be missed because
-none of their seeds pass the checkpoint test.  Longer matches are found
-reliably: backward extension (Section 5.1) discovers the true start of
-the match even when it falls between checkpoint positions (Section 8.2,
-p. 349).
+none of their seeds pass the checkpoint test.  A longer match has more
+seeds and so is more likely, though not certain, to contain a checkpoint;
+when it does, backward extension (Section 5.1) discovers the true start
+of the match even when it falls between checkpoint positions (Section
+8.2, p. 349).
 
 With auto-sizing, $m \approx p$ (the seed length), so checkpoint granularity
 roughly matches seed granularity.  When the reference is small enough
@@ -86,26 +96,28 @@ rotations, giving amortized $O(\log n)$ per operation.
 **Onepass:** onepass inserts a seed from R and then looks it up shortly
 after when it scans the corresponding V region.  The splay tree exploits
 this temporal locality in principle, but $O(\log n)$ rotations per access
-outweigh the locality benefit in practice: on 871 MB kernel tarballs the
-splay tree is ~55% slower than the hash table in algorithm time (0.78s
-vs 0.50s).  Total wall time is dominated by I/O (~3.5s reading two 871 MB
-files), so the algorithm-time difference is masked.
+outweigh the locality benefit in practice: on the 871 MB kernel tarballs
+the differencing takes 0.85 s with the splay tree and 0.52 s with the
+hash table, as the tool reports them.  The command as a whole takes 1.9 s
+against 1.6 s, the checksums and I/O being the same for both.
 
 **Why it hurts for correcting:** correcting's R pass inserts millions
 of checkpoint seeds in random order before any V lookups begin.  The
 build phase has no locality benefit, and $O(\log n)$ per insertion is
 slower than $O(1)$ hash table insertion.  Lookups during the V pass also
-lack the recent-access advantage.  On kernel tarballs, correcting+splay
-is ~7.5× slower in algorithm time (44s vs 5.9s).
+lack the recent-access advantage.  On the kernel tarballs, correcting
+with the splay tree takes 38 s of differencing against 6.1 s, 6.2× as
+long.
 
-**Why splay improves correcting ratio:** the hash table indexes seeds by
-`f / m` (where `f = fp % |F|`), so two seeds with the same `f / m`
-collide and only the first is retained.  The splay tree keys on the full
-64-bit fingerprint, making collisions negligible: every checkpoint-passing
-R seed gets its own node.  Splay stores more fingerprints and finds more
-matches, yielding slightly better compression at the cost of $O(\log n)$
-lookups.  On the cross-version kernel pairs below, splay consistently
-beats hash by 0.01–0.02 percentage points on correcting ratio.
+**The delta is the same.**  The correcting hash table is keyed by the
+whole fingerprint and resolves collisions of home slots by linear
+probing, so, like the splay tree, it holds the first seed of R for every
+checkpoint fingerprint, unless it fills.  On every input tried the two
+produce byte-identical correcting deltas (the seven kernel pairs below
+among them).  The onepass table is direct-mapped, and a fingerprint that
+finds its slot taken is not recorded, where the splay tree records it;
+onepass deltas can therefore differ by a few bytes either way, though on
+the kernel pair they are identical.
 
 **Practical access cost:** the $O(\log n)$ characterization is a worst-case
 amortized bound.  A fingerprint appearing $k$ times in R is splayed to the
@@ -113,108 +125,91 @@ root $k$ times during the build phase, so the most common fingerprints are
 near the root by the time the V scan begins.  For a Zipfian frequency
 distribution — which natural language and source code both follow closely
 — the weighted average access cost is $O(\log H)$ where $H$ is the entropy of
-the distribution, substantially less than $O(\log n)$.  On kernel tarballs
-the effect is visible: common boilerplate dominates the fingerprint
-distribution, limiting the practical slowdown to ~7.5× algorithm-only
-rather than what an adversarial access pattern would produce.
+the distribution, substantially less than $O(\log n)$.
 
 ## Binary delta format specification
 
 This section is the normative wire format definition.  All six
 implementations must conform exactly; any deviation is a bug.
 
-### Header (25 bytes, fixed)
+There are two magics.  The tools write `DLT\x04`.  `DLT\x03`, its
+predecessor, is still read, and the libraries can still write it.
+
+### Header
+
+`DLT\x04` (29 bytes):
 
 ```
 Offset  Size  Field          Encoding
 ------  ----  -----          --------
-0       4     magic          bytes 0x44 0x4C 0x54 0x03  ("DLT\x03")
+0       4     magic          bytes 0x44 0x4C 0x54 0x04  ("DLT\x04")
 4       1     flags          u8 bitmask:
                                bit 0 = INPLACE (0x01)
                                bits 1–7 reserved, must be 0 on write,
                                ignored on read
-5       4     version_size   u32 big-endian — byte length of the
+5       8     version_size   u64 big-endian — byte length of the
                                reconstructed version file
-9       8     src_crc        CRC-64/XZ of the reference file, big-endian
-17      8     dst_crc        CRC-64/XZ of the version file, big-endian
+13      8     src_crc        CRC-64/XZ of the reference file, big-endian
+21      8     dst_crc        CRC-64/XZ of the version file, big-endian
 ```
 
-Total header size: 4 + 1 + 4 + 8 + 8 = **25 bytes**.
+`DLT\x03` (25 bytes) is the same with magic byte 0x03 and a u32
+`version_size`, so that `src_crc` is at offset 9 and `dst_crc` at 17.
 
 ### Command stream (immediately follows header)
 
 Commands are emitted in order and terminated by an END record.
 All multi-byte integers are **big-endian**.
 
-**COPY command** (13 bytes total)
+| Type | Name | Fields | Size |
+|-----:|------|--------|-----:|
+| 0x00 | END | none | 1 |
+| 0x01 | COPY | `src` u32, `dst` u32, `length` u32 | 13 |
+| 0x02 | ADD | `dst` u32, `length` u32, `length` bytes of data | 9 + length |
+| 0x03 | BIGCOPY | `src` u64, `dst` u64, `length` u64 | 25 |
+| 0x04 | BIGADD | `dst` u64, `length` u64, `length` bytes of data | 17 + length |
+| 0x05 | MOVE | `src` u32, `dst` u32, `length` u32 | 13 |
+| 0x06 | BIGMOVE | `src` u64, `dst` u64, `length` u64 | 25 |
 
-```
-Offset  Size  Field    Encoding
-------  ----  -----    --------
-0       1     type     u8 = 0x01
-1       4     src      u32 BE — byte offset in reference file
-5       4     dst      u32 BE — byte offset in output buffer
-9       4     length   u32 BE — number of bytes to copy
-```
+- **COPY, BIGCOPY** copy `length` bytes from offset `src` of the reference
+  to offset `dst` of the output.  Constraint: `src + length ≤
+  len(reference)`, `dst + length ≤ version_size`.
+- **ADD, BIGADD** write the literal bytes that follow at offset `dst`.
+  Constraint: `dst + length ≤ version_size`.
+- **MOVE, BIGMOVE** copy `length` bytes of the output already written,
+  from offset `src` to offset `dst`.  Constraint: `src + length ≤ dst`,
+  `dst + length ≤ version_size`.
+- **END** must appear exactly once, as the last record.  Decoders must
+  reject files that lack an END record or contain bytes after it.
 
-Constraint: `src + length ≤ len(reference)`, `dst + length ≤ version_size`.
-All values must fit in u32 (max 4,294,967,295); larger inputs are rejected.
+`DLT\x03` has only END, COPY and ADD; a decoder must reject the other
+four types in a `DLT\x03` file.
 
-**ADD command** (9 + length bytes total)
-
-```
-Offset  Size    Field    Encoding
-------  ------  -----    --------
-0       1       type     u8 = 0x02
-1       4       dst      u32 BE — byte offset in output buffer
-5       4       length   u32 BE — number of literal bytes that follow
-9       length  data     raw bytes to write at dst
-```
-
-Constraint: `dst + length ≤ version_size`.
-
-**END record** (1 byte)
-
-```
-Offset  Size  Field  Encoding
-------  ----  -----  --------
-0       1     type   u8 = 0x00
-```
-
-Must appear exactly once, as the last record.  Decoders must reject
-files that lack an END record or contain records after it.
+An encoder writing `DLT\x04` gives each copy and add the 32-bit form
+when all of its fields fit in 32 bits and the BIG form otherwise.  The
+`--large` flag forces the BIG forms, for testing.  The encoders here do
+not produce MOVE or BIGMOVE; the decoders accept them.
 
 ### In-place vs standard format
 
-The INPLACE flag (bit 0 of `flags`) indicates that copy `src` ranges may
-overlap with `dst` ranges in the same buffer.  Commands are ordered so
-they can be applied sequentially without a separate output buffer.  The
-flag does not change the encoding of any command; only the semantics of
-application differ.
+The INPLACE flag (bit 0 of `flags`) indicates that the delta is applied
+in the buffer that holds the reference: a copy's `src` and `dst` are both
+offsets in that buffer, and `src` ranges may overlap `dst` ranges.
+Commands are ordered so that they can be applied one after another
+without a separate output buffer.  The flag does not change the encoding
+of any command; only the semantics of application differ.
 
-### Constraints summary
+### Sizes
 
-| Field | Max value | Error on violation |
-|-------|----------:|-------------------|
-| `version_size` | 2³²−1 (4 GiB − 1) | encode rejects; decode truncates/errors |
-| `copy.src` | 2³²−1 | encode rejects |
-| `copy.dst` | 2³²−1 | encode rejects |
-| `copy.length` | 2³²−1 | encode rejects |
-| `add.dst` | 2³²−1 | encode rejects |
-| `add.length` (data) | 2³²−1 | encode rejects |
-
-**Rationale for u32:** u32 fields keep the COPY command to 13 bytes and
-the ADD header to 9 bytes.  For a kernel tarball delta with ~200,000
-copy commands, u64 would add ~2.4 MB of header overhead with no benefit
-for the target use cases (OS/firmware updates, software version deltas),
-which fit comfortably within 4 GiB.  Files larger than 4 GiB must be
-split into independently-deltaed segments before encoding.  A future
-`DLT\x04` format with u64 fields remains possible if 64-bit inputs become
-a practical requirement.
+A copy costs 13 bytes and an add 9 bytes plus its data whenever the
+offsets and lengths are below 4 GiB, so for such files `DLT\x04` costs
+four bytes more than `DLT\x03` did, all in the header.  For the kernel
+tarball delta of about 200,000 copies, writing every copy in the BIG
+form would add about 2.4 MB.
 
 **Truncated files:** A decoder that reaches the end of the byte stream
-before encountering an END record must return an error.  Partial COPY
-or ADD records (insufficient bytes remaining for the declared field
+before encountering an END record must return an error.  Partial
+records (insufficient bytes remaining for the declared field
 widths) must also be rejected.
 
 ### Version history
@@ -223,9 +218,11 @@ widths) must also be rejected.
 |-------|--------|
 | `DLT\x01` | Original format (no integrity hashes) |
 | `DLT\x02` | Added 16-byte SHAKE-128 src/dst hashes (header: 41 bytes) |
-| `DLT\x03` | Replaced SHAKE-128 with 8-byte CRC-64/XZ (header: 25 bytes) — current |
+| `DLT\x03` | Replaced SHAKE-128 with 8-byte CRC-64/XZ (header: 25 bytes); still read |
+| `DLT\x04` | u64 `version_size` (header: 29 bytes); BIGCOPY, BIGADD, MOVE, BIGMOVE — current |
 
-Decoders must reject files with unknown magic bytes.
+Decoders must reject files with unknown magic bytes; `DLT\x01` and
+`DLT\x02` are no longer read.
 
 ## Delta integrity verification
 
@@ -240,14 +237,15 @@ reconstructed version).  Decode performs two checks:
   phase.
 
 CRC-64/XZ (ECMA-182 reflected, polynomial `0x42F0E1EBA9EA3693`)
-was chosen for speed: software implementations run at ~12 GB/s, making
-the overhead negligible even on multi-gigabyte kernel tarballs.  The
+was chosen for speed and a small digest.  The
 8-byte output gives a $2^{-64}$ probability of an undetected random error,
 sufficient for accidental-error detection in delta workflows.  All six
-implementations use the same table-driven algorithm (reflected polynomial
+implementations compute the same function (reflected polynomial
 `0xC96C5795D7870F42`, init = xorout = `0xFFFFFFFFFFFFFFFF`), verified
 against the standard check value `crc64_xz(b"123456789") =
-0x995DC9BBDF1939FA`.
+0x995DC9BBDF1939FA`.  C, C++, Rust and Java use eight tables and take
+eight bytes at a step (slicing-by-8); Go uses the standard library's
+`hash/crc64`; Python uses one table and takes a byte at a step.
 
 The `--ignore-hash` decode flag replaces both error exits with stderr
 warnings and continues, providing an escape hatch for partial recovery
@@ -276,53 +274,39 @@ start, and for each copy's read interval a binary search finds the exact
 range of overlapping writes in $O(\log n)$, exploiting the fact that write
 intervals are non-overlapping (each output byte is written exactly once).
 
-### Cycle breaking: Kahn + Tarjan + amortized DFS
+### Cycle breaking: Kahn + Tarjan + depth-first search
 
 A naïve approach — remove vertices one-by-one until the graph is acyclic
 — can convert far more copies than necessary if it ignores the global
-structure.  The correct algorithm combines three ideas:
+structure.  The algorithm combines three ideas:
 
 1. **Global Kahn topological sort** processes all zero-in-degree copies
-   first, in order of increasing length (to minimize the total size of
-   any forced adds).  When a copy is processed, its out-edges are removed
-   and successors whose in-degree drops to zero are added to the queue.
-   This preserves the **cascade effect**: converting one copy to an add
-   globally decrements in-degrees across SCC boundaries, potentially
-   freeing other copies for free.
+   first, in order of increasing length, ties broken by index, so that
+   the order is deterministic.  When a copy is processed, its out-edges
+   are removed and successors whose in-degree drops to zero are added to
+   the queue.  This preserves the **cascade effect**: converting one copy
+   to an add decrements in-degrees across the whole graph, potentially
+   freeing other copies at no further cost.
 
 2. **Tarjan SCC decomposition** identifies the strongly connected
-   components of the CRWI graph before Kahn begins.  SCCs are processed
-   in topological order (sources first); non-trivial SCCs (size > 1)
-   are the only ones that contain cycles and need cycle-breaking attention.
+   components of the CRWI graph, the first time the sort stalls.  A cycle
+   lies within a component of more than one vertex, so only those are
+   searched.
 
-3. **Per-SCC amortized DFS** finds a cycle within one SCC, selects the
-   minimum-length copy in that cycle as the victim, and converts it to
-   an add.  Three amortizations ensure $O(|SCC| + E_{SCC})$ total work per
-   SCC, not $O(|SCC|)$ per stall:
+3. **Depth-first search within one component** finds a cycle when the
+   sort stalls: every copy that remains is waiting on another, so a cycle
+   remains.  Under `localmin` the shortest copy on the cycle found is
+   converted to an add; under `constant` the lowest-numbered copy that
+   remains is converted without a search.
 
-   - **scc_id filter ($O(1)$ per neighbor):** Instead of setting and
-     clearing a `member[]` bitmap for each stall — $O(|SCC|)$ per call —
-     the DFS checks `scc_id[w] != sid || removed[w]` in $O(1)$.
-     The global `scc_id[]` array is precomputed by Tarjan and never
-     modified; the scc_id filter isolates one SCC without any per-call
-     sweep.
-
-   - **color=2 persistence:** DFS colors vertices gray (1) when on the
-     path and black (2) when fully explored.  Black vertices persist
-     across calls within the same SCC.  This is monotone-correct:
-     removing a vertex can only reduce edges, never introduce new cycles,
-     so a vertex with no reachable cycle remains cycle-free after any
-     removal.  Total DFS work per SCC is $O(|SCC| + E_{SCC})$ amortized
-     across all stalls, not $O(|SCC|)$ per stall.
-
-   - **scan_start:** the outer DFS loop resumes from where the last call
-     left off, accumulating $O(|SCC|)$ total outer-loop work per SCC
-     instead of $O(|SCC|)$ per stall.
-
-   On cycle found, only the gray (color=1) vertices on the cycle path
-   are reset to 0; black (color=2) vertices are untouched.  An
-   `scc_active[id]` counter tracks live members, giving $O(1)$ SCC
-   exhaustion checks in the global Kahn loop.
+   The search colors a vertex as on the current path or as done, meaning
+   that no cycle passes through it.  Removing vertices cannot create a
+   cycle, so a vertex once done is never searched again, and the scan for
+   a starting vertex resumes where it stopped.  When a cycle is found,
+   the vertices on the path are uncolored and are walked again by the
+   next search, so the searches are not linear in total: many cycles at
+   the end of one long path cost the path's length each.  Burns et al.
+   give $O(|V|^2)$ as the worst case for the local-minimum policy.
 
 ### Why per-SCC local Kahn is wrong
 
@@ -337,9 +321,10 @@ at 16 MB 100% permutation) and significantly worse compression ratios
 ### Complexity
 
 CRWI graph build: $O(n \log n + E)$.
-Kahn + Tarjan + amortized DFS: $O(n \log n + E)$ (Kahn heap is $O(n \log n)$;
-Tarjan and amortized DFS are $O(n + E)$).
-Total: $O(n \log n + E)$.
+Kahn's sort: $O(n \log n + E)$, the logarithm from its heap.  Tarjan:
+$O(n + E)$.
+Cycle searches under `localmin`: $O(n + E)$ plus the length of the search
+path for each cycle broken; none under `constant`.
 
 ---
 
@@ -403,7 +388,13 @@ of 1.6 to 2.7; the change took 1.9 to 3.3 s off each of their onepass and
 correcting times on both machines and left Go's where they were, so on
 onepass the five are now within 0.6 s of one another on the M4 Pro. On
 correcting the differencing dominates: Rust, Java and C++ are within 17%
-on the M4 Pro, with Go and C well behind.
+on the M4 Pro, with Go and C well behind.  About three quarters of C's
+deficit there is function calls: correcting rolls the fingerprint once
+for each of the 871 million bytes of R, and the C rolling hash is in
+another source file, compiled without link-time optimization, so each
+roll is three calls that the Rust and C++ compilers inline.  Built with
+`-flto`, the C implementation took 8.6 s against 13.1 s without, in the
+same session in which Rust took 7.1 to 7.5 s.
 These are single-run measurements; use `bench_all.sh` for statistically
 rigorous CI. Radar views below are committed SVG charts generated by
 `assets/generate_analysis_radars.py` using the same underlying data
@@ -537,16 +528,17 @@ correcting at 5% and dmz on decode at 8%; on baase they are under 0.5%.
 
 ---
 
-**Rust, default vs `--splay`**
+**Rust, default vs `--splay`** (linux-5.1 → 5.1.1, dyson, 2026-10-03)
 
-| Algorithm | Flags | Time | Delta | Copies | Median copy |
-|-----------|-------|-----:|------:|-------:|------------:|
-| onepass | (default) | 4s | 4.8 MB | 205,030 | 89 B |
-| onepass | `--splay` | 4s | 4.8 MB | 205,030 | 89 B |
-| correcting | (default) | 9s | 6.6 MB | 243,756 | 91 B |
-| correcting | `--splay` | 47s | 6.6 MB | 243,756 | 91 B |
+| Algorithm | Flags | Time | Differencing | Delta | Copies | Median copy |
+|-----------|-------|-----:|-------------:|------:|-------:|------------:|
+| onepass | (default) | 1.6s | 0.52s | 4.8 MB | 205,030 | 89 B |
+| onepass | `--splay` | 1.9s | 0.85s | 4.8 MB | 205,030 | 89 B |
+| correcting | (default) | 7.2s | 6.1s | 6.6 MB | 243,756 | 91 B |
+| correcting | `--splay` | 39.1s | 38.1s | 6.6 MB | 243,756 | 91 B |
 
-The copy-length distribution is heavy-tailed: median is 89–91 bytes
+Time is the whole command; Differencing is what the tool reports for the
+algorithm alone.  The copy-length distribution is heavy-tailed: median is 89–91 bytes
 (barely above the 16-byte seed length), but the mean is 3,600–4,200
 bytes and the maximum reaches 14 MB.  Most copies are short, but most
 *bytes* come from long copies.
@@ -555,44 +547,49 @@ bytes and the maximum reaches 14 MB.  Most copies are short, but most
 
 Every encode and decode call computes two CRC-64/XZ checksums: one over
 the reference file (`src_crc`, pre-checked before reconstruction) and
-one over the version or output file (`dst_crc`, verified after).  At
-~12 GB/s, checksumming an 871 MB kernel tarball takes ~35 ms — ~70 ms
-total overhead per encode or decode, negligible at any algorithm speed.
+one over the version or output file (`dst_crc`, verified after).  The C
+slicing-by-8 routine runs at 2.0 GB/s on the M4 Pro, so checksumming an
+871 MB kernel tarball takes 0.43 s and the pair 0.86 s: about half of a
+onepass encode of the kernel pair (1.4 to 2.0 s) and about a tenth of a
+correcting one.
 
 ### Cross-version kernel benchmark (linux-5.1.x, C++)
 
 All six ordered pairs of linux-5.1.1, 5.1.2, and 5.1.3 (~871 MB each),
-encoded with the C++ implementation (default flags):
+encoded with the C++ implementation (default flags), one run each on
+dyson (M4 Pro), 2026-10-03:
 
 | Ref → Ver | onepass Ratio | onepass Time | correcting Ratio | correcting Time |
 |-----------|-------------:|------------:|-----------------:|----------------:|
-| 5.1.1 → 5.1.2 | 0.54% | 5s | 0.86% | 19s |
-| 5.1.1 → 5.1.3 | 0.55% | 5s | 0.81% | 18s |
-| 5.1.2 → 5.1.1 | 0.53% | 4s | 0.81% | 18s |
-| 5.1.2 → 5.1.3 | 0.47% | 4s | 1.02% | 18s |
-| 5.1.3 → 5.1.1 | 0.54% | 4s | 0.78% | 18s |
-| 5.1.3 → 5.1.2 | 0.47% | 4s | 0.85% | 18s |
+| 5.1.1 → 5.1.2 | 0.54% | 1.6s | 0.85% | 8.5s |
+| 5.1.1 → 5.1.3 | 0.55% | 1.7s | 0.80% | 8.5s |
+| 5.1.2 → 5.1.1 | 0.53% | 1.7s | 0.80% | 8.5s |
+| 5.1.2 → 5.1.3 | 0.47% | 1.6s | 1.00% | 8.6s |
+| 5.1.3 → 5.1.1 | 0.54% | 1.7s | 0.78% | 8.7s |
+| 5.1.3 → 5.1.2 | 0.47% | 1.6s | 0.83% | 8.5s |
 
-Onepass is 4–5× faster than correcting and achieves better ratios on
-every pair.  Correcting times are nearly uniform (~18s) because encoding
+Onepass is about 5× faster than correcting and achieves better ratios on
+every pair.  Correcting times are nearly uniform (~8.5s) because encoding
 is dominated by the build phase over the 871 MB reference.
 
 ### Extended kernel benchmark (linux-5.1.0–5.1.7, Rust)
 
 Three reference modes run with `tests/kernel-delta-test.sh` (Rust, default
-flags).  All tarballs are ~871 MB post-gunzip.
+flags), one run each on dyson (M4 Pro), 2026-10-03.  All tarballs are
+~871 MB post-gunzip.  The script truncates a ratio to two places where the
+tables above round it, so 0.797% is 0.79% here and 0.80% there.
 
 **From base: 5.1.0 → 5.1.{1..7}** — fixed reference, cumulative divergence
 
 | Version | onepass ratio | onepass time | correcting ratio | correcting time |
 |---------|-------------:|------------:|-----------------:|----------------:|
-| 5.1.1 | 0.58% | 3.9s | 0.79% | 9.7s |
-| 5.1.2 | 0.65% | 3.9s | 1.00% | 9.7s |
-| 5.1.3 | 0.66% | 4.0s | 1.02% | 9.7s |
-| 5.1.4 | 0.69% | 4.0s | 1.04% | 9.6s |
-| 5.1.5 | 0.70% | 4.0s | 0.85% | 9.8s |
-| 5.1.6 | 0.73% | 4.0s | 0.99% | 9.8s |
-| 5.1.7 | 0.73% | 3.9s | 0.87% | 10.1s |
+| 5.1.1 | 0.58% | 1.5s | 0.79% | 7.2s |
+| 5.1.2 | 0.65% | 1.6s | 1.00% | 7.3s |
+| 5.1.3 | 0.66% | 1.6s | 1.02% | 7.4s |
+| 5.1.4 | 0.69% | 1.6s | 1.04% | 7.4s |
+| 5.1.5 | 0.70% | 1.6s | 0.85% | 7.4s |
+| 5.1.6 | 0.73% | 1.6s | 0.99% | 7.3s |
+| 5.1.7 | 0.73% | 1.6s | 0.87% | 7.2s |
 
 Onepass ratios climb steadily as versions accumulate changes from the fixed
 5.1.0 base.  Correcting ratios fluctuate: each version's checkpoint bias k
@@ -603,13 +600,13 @@ seeds survive the checkpoint filter and hence how many matches are found.
 
 | Transition | onepass ratio | onepass time | correcting ratio | correcting time |
 |------------|-------------:|------------:|-----------------:|----------------:|
-| 5.1.0→5.1.1 | 0.58% | 4.1s | 0.79% | 9.9s |
-| 5.1.1→5.1.2 | 0.53% | 4.1s | 0.84% | 10.2s |
-| 5.1.2→5.1.3 | 0.47% | 4.1s | 0.99% | 10.2s |
-| 5.1.3→5.1.4 | 0.50% | 4.0s | 0.81% | 10.3s |
-| 5.1.4→5.1.5 | 0.48% | 4.1s | 0.78% | 10.2s |
-| 5.1.5→5.1.6 | 0.49% | 4.0s | 0.77% | 9.9s |
-| 5.1.6→5.1.7 | 0.47% | 4.0s | 0.84% | 10.1s |
+| 5.1.0→5.1.1 | 0.58% | 1.5s | 0.79% | 7.3s |
+| 5.1.1→5.1.2 | 0.53% | 1.6s | 0.84% | 7.3s |
+| 5.1.2→5.1.3 | 0.47% | 1.5s | 0.99% | 7.3s |
+| 5.1.3→5.1.4 | 0.50% | 1.5s | 0.81% | 7.5s |
+| 5.1.4→5.1.5 | 0.48% | 1.5s | 0.78% | 7.3s |
+| 5.1.5→5.1.6 | 0.49% | 1.5s | 0.77% | 7.4s |
+| 5.1.6→5.1.7 | 0.47% | 1.5s | 0.84% | 7.6s |
 
 Successive onepass deltas (0.47–0.58%) are consistently smaller than
 from-base deltas to the same version (0.58–0.73%): each adjacent pair of
@@ -622,12 +619,12 @@ reference size.
 
 | Version | onepass ratio | onepass time | correcting ratio | correcting time |
 |---------|-------------:|------------:|-----------------:|----------------:|
-| 5.1.2 | 0.53% | 4.1s | 0.84% | 10.2s |
-| 5.1.3 | 0.54% | 4.0s | 0.80% | 10.2s |
-| 5.1.4 | 0.58% | 4.1s | 0.95% | 10.3s |
-| 5.1.5 | 0.58% | 4.0s | 0.81% | 10.2s |
-| 5.1.6 | 0.62% | 4.0s | 0.85% | 10.2s |
-| 5.1.7 | 0.62% | 4.1s | 0.81% | 10.2s |
+| 5.1.2 | 0.53% | 1.6s | 0.84% | 7.3s |
+| 5.1.3 | 0.54% | 1.6s | 0.80% | 7.6s |
+| 5.1.4 | 0.58% | 1.6s | 0.95% | 7.4s |
+| 5.1.5 | 0.58% | 1.6s | 0.81% | 7.4s |
+| 5.1.6 | 0.62% | 1.6s | 0.85% | 7.3s |
+| 5.1.7 | 0.62% | 1.6s | 0.81% | 7.3s |
 
 Using 5.1.1 as reference, onepass ratios grow gradually from 0.53% to 0.62%
 as versions diverge further — slower growth than from base 5.1.0, since 5.1.1
@@ -667,8 +664,8 @@ xychart-beta
 xychart-beta
     title "Correcting time (s) from base 5.1.0"
     x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
-    y-axis "seconds" 9.5 --> 10.4
-    line [9.7, 9.7, 9.6, 9.8, 9.8, 10.1]
+    y-axis "seconds" 7.0 --> 7.8
+    line [7.3, 7.4, 7.4, 7.4, 7.3, 7.2]
 ```
 
 ```mermaid
@@ -676,8 +673,8 @@ xychart-beta
 xychart-beta
     title "Correcting time (s) successive chain"
     x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
-    y-axis "seconds" 9.5 --> 10.4
-    line [10.2, 10.2, 10.3, 10.2, 9.9, 10.1]
+    y-axis "seconds" 7.0 --> 7.8
+    line [7.3, 7.3, 7.5, 7.3, 7.4, 7.6]
 ```
 
 ```mermaid
@@ -685,26 +682,26 @@ xychart-beta
 xychart-beta
     title "Correcting time (s) from reference 5.1.1"
     x-axis ["5.1.2", "5.1.3", "5.1.4", "5.1.5", "5.1.6", "5.1.7"]
-    y-axis "seconds" 9.5 --> 10.4
-    line [10.2, 10.2, 10.3, 10.2, 10.2, 10.2]
+    y-axis "seconds" 7.0 --> 7.8
+    line [7.3, 7.6, 7.4, 7.4, 7.3, 7.3]
 ```
 
-### Splay tree: correcting compression ratio
+### Splay tree: correcting on the cross-version pairs
 
-The correcting+splay cross-version kernel results (same six pairs, ~871 MB,
-Rust):
+The same six pairs (~871 MB, Rust, dyson, 2026-10-03), correcting with
+the hash table and with `--splay`:
 
 | Ref → Ver | Ratio (hash) | Ratio (splay) | Time (hash) | Time (splay) |
 |-----------|-------------:|--------------:|------------:|-------------:|
-| 5.1.1 → 5.1.2 | 0.86% | 0.85% | 9s | 47s |
-| 5.1.1 → 5.1.3 | 0.81% | 0.80% | 9s | 47s |
-| 5.1.2 → 5.1.1 | 0.81% | 0.80% | 9s | 47s |
-| 5.1.2 → 5.1.3 | 1.02% | 1.00% | 9s | 47s |
-| 5.1.3 → 5.1.1 | 0.78% | 0.78% | 9s | 47s |
-| 5.1.3 → 5.1.2 | 0.85% | 0.83% | 9s | 47s |
+| 5.1.1 → 5.1.2 | 0.85% | 0.85% | 7.3s | 42.6s |
+| 5.1.1 → 5.1.3 | 0.80% | 0.80% | 7.5s | 43.7s |
+| 5.1.2 → 5.1.1 | 0.80% | 0.80% | 7.5s | 43.4s |
+| 5.1.2 → 5.1.3 | 1.00% | 1.00% | 7.5s | 43.9s |
+| 5.1.3 → 5.1.1 | 0.78% | 0.78% | 7.5s | 44.1s |
+| 5.1.3 → 5.1.2 | 0.83% | 0.83% | 7.5s | 41.5s |
 
-Splay wins on ratio by a small but consistent margin (~0.01–0.02 pp) on
-every pair, at ~5× the wall time (~7.5× algorithm-only).
+The two delta files are byte-identical for every pair, and the splay tree
+takes nearly six times as long.
 
 ### Transposition benchmark
 
@@ -756,12 +753,18 @@ its ratio is 0.9921, nearly the full file size as adds.
 | correcting | 75% | 0.0994 | 7,563,033 | 38,482 | 13.643s |
 | correcting | 100% | 0.1027 | 7,813,315 | 40,253 | 13.897s |
 
-At 1 GB with 128 B blocks (~113 seeds per block), correcting diverges
-from greedy.  The checkpoint filter now misses a measurable fraction of
-blocks — 58K–116K adds per permutation level — because with only ~7
+At 1 GB with 128 B blocks (~113 seeds per block), correcting no longer
+encodes everything as copies.  The checkpoint filter now misses a
+measurable fraction of blocks — 20K–40K adds per permutation level —
+because with only ~7
 checkpoint seeds per block (113 seeds / stride m≈16), some blocks have
 no seed that passes the checkpoint test for the chosen class k.
-correcting is still 6–8× better than onepass at 25–100% permutation and
+At this size the levels are nominal: above 5,000,000 blocks
+`gen_transpositions.py` permutes by random swaps, which displace about
+39%, 63%, 78% and 86% of the blocks at the 25%, 50%, 75% and 100%
+settings, and it takes the reference from the system's random source, so
+another run gives slightly different counts.
+correcting is still 6.6–8.6× better than onepass at 25–100% permutation and
 runs in near-constant time (~10–13 s) regardless of permutation level,
 while onepass time grows with permutation as it emits more adds.
 
@@ -862,8 +865,8 @@ non-overlapping write intervals for exact overlap detection.
 Standard-mode correcting time scales ~2× per doubling (linear in n).
 Inplace time at 100% permutation scales ~2.6× per doubling
 (0.234 → 0.618 → 1.554 → 4.150 → 11.765 s across 16 → 32 → 64 → 128 → 256 MB),
-reflecting the $O(n \log n + E)$ total complexity of the Tarjan + global
-Kahn + amortized DFS cycle-breaking algorithm.  At 256 MB with 512K
+more than the $O(n \log n + E)$ of the graph build and the sort alone:
+the cycle searches account for the rest.  At 256 MB with 512K
 blocks and 164K conversions, the total encode time is still under 12 seconds.
 
 ### Effect of `--max-table` on correcting ratio (1 GB, 128 B blocks)
