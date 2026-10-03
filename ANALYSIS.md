@@ -379,8 +379,9 @@ were as described for the Pilot tables below; the output is in
 | C        | 12.4s | 24.4s |
 
 At this size the onepass differencing itself is under a second (the C
-encoder reports 0.93 s on a comparable machine), and much of the command is
-the CRC-64 of the two 871 MB inputs. All five compiled implementations now
+encoder reports 0.76 s on sequoia, in a command of 1.50 s; see
+[bench/2026-10-03-sequoia](bench/2026-10-03-sequoia/README.md)), and much
+of the rest is the CRC-64 of the two 871 MB inputs. All five compiled implementations now
 compute it eight bytes at a time: Go with the standard library's
 `hash/crc64`, the other four by slicing-by-8 (`efa83c6`). Before that
 change the four used a byte-at-a-time table and Go led onepass by a factor

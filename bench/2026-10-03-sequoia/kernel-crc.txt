@@ -1,0 +1,91 @@
+warm after Rust onepass 115.874406
+warm crc Rust onepass 163.936963
+warm after Rust correcting 73.155354
+warm crc Rust correcting 99.319735
+warm after C onepass 223.136489
+warm crc C onepass 544.153858
+warm after C correcting 71.528580
+warm crc C correcting 88.575614
+warm after Cpp onepass 206.926905
+warm crc Cpp onepass 467.878667
+warm after Cpp correcting 81.335757
+warm crc Cpp correcting 103.442712
+warm after Java onepass 
+warm crc Java onepass 
+warm after Java correcting 62.394393
+warm crc Java correcting 81.248156
+warm after Go onepass 404.025683
+warm crc Go onepass 394.730213
+warm after Go correcting 80.024658
+warm crc Go correcting 79.282085
+warm after Rust onepass 182.433161
+warm crc Rust onepass 359.550707
+warm after Rust correcting 77.933165
+warm crc Rust correcting 98.663346
+warm after C onepass 223.534544
+warm crc C onepass 548.545605
+warm after C correcting 71.314912
+warm crc C correcting 88.360205
+warm after Cpp onepass 207.771254
+warm crc Cpp onepass 461.629408
+warm after Cpp correcting 81.254618
+warm crc Cpp correcting 103.369362
+warm after Java onepass 
+warm crc Java onepass 
+warm after Java correcting 69.165124
+warm crc Java correcting 81.021075
+warm after Go onepass 408.323244
+warm crc Go onepass 399.759152
+warm after Go correcting 80.138376
+warm crc Go correcting 80.096292
+warm after Rust onepass 191.052931
+warm crc Rust onepass 354.469591
+warm after Rust correcting 77.667605
+warm crc Rust correcting 98.971217
+warm after C onepass 223.669853
+warm crc C onepass 524.726109
+warm after C correcting 71.405878
+warm crc C correcting 87.495801
+warm after Cpp onepass 208.449472
+warm crc Cpp onepass 461.828124
+warm after Cpp correcting 81.387697
+warm crc Cpp correcting 103.624242
+warm after Java onepass 
+warm crc Java onepass 
+warm after Java correcting 68.991553
+warm crc Java correcting 81.312079
+warm after Go onepass 403.175433
+warm crc Go onepass 392.164285
+warm after Go correcting 79.816366
+warm crc Go correcting 79.876322
+cold crc Rust onepass 168.583993
+cold crc Rust correcting 75.907356
+cold crc C onepass 218.233700
+cold crc C correcting 70.929794
+cold crc Cpp onepass 203.501350
+cold crc Cpp correcting 80.500356
+cold crc Java onepass 
+cold crc Java correcting 64.678577
+cold crc Go onepass 177.587414
+cold crc Go correcting 63.964581
+c5195ac1b0c5  /mnt/delta/kernel/pilot-C-correcting.delta
+77fe5d0043ae  /mnt/delta/kernel/pilot-C-onepass.delta
+c5195ac1b0c5  /mnt/delta/kernel/pilot-Cpp-correcting.delta
+77fe5d0043ae  /mnt/delta/kernel/pilot-Cpp-onepass.delta
+c5195ac1b0c5  /mnt/delta/kernel/pilot-Go-correcting.delta
+77fe5d0043ae  /mnt/delta/kernel/pilot-Go-onepass.delta
+c5195ac1b0c5  /mnt/delta/kernel/pilot-Java-correcting.delta
+c5195ac1b0c5  /mnt/delta/kernel/pilot-Rust-correcting.delta
+77fe5d0043ae  /mnt/delta/kernel/pilot-Rust-onepass.delta
+c-encoder after onepass differencing 0.752s command 3.729727733s
+c-encoder after onepass differencing 0.760s command 3.723593298s
+c-encoder after onepass differencing 0.758s command 3.732388854s
+c-encoder after correcting differencing 8.669s command 11.641152989s
+c-encoder after correcting differencing 8.664s command 11.638108652s
+c-encoder after correcting differencing 8.659s command 11.631855605s
+c-encoder crc onepass differencing 0.752s command 1.488804155s
+c-encoder crc onepass differencing 0.760s command 1.496413270s
+c-encoder crc onepass differencing 0.761s command 1.504646356s
+c-encoder crc correcting differencing 8.684s command 9.411737959s
+c-encoder crc correcting differencing 8.651s command 9.386508733s
+c-encoder crc correcting differencing 8.666s command 9.427923227s
